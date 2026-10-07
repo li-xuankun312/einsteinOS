@@ -336,63 +336,35 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 
 		log.Printf("claudeweb: stop_reason=%q tools=%d text=%d", stopReason, len(collectedTools), textBuf.Len())
 
-		switch stopReason {
-		case "tool_use":
+		if textBuf.Len() > 0 {
 			st.consecutiveContinues = 0
-			log.Printf("claudeweb: syscall round %d (%d results)", st.rounds, len(toolResults))
-			webReq = &CompletionRequest{
-				Prompt:            "",
-				Model:             m.modelName,
-				Timezone:          "Asia/Shanghai",
-				Locale:            "en-US",
-				Effort:            m.effort,
-				ThinkingMode:      "off",
-				RenderingMode:     "messages",
-				Attachments:       []json.RawMessage{},
-				Files:             []json.RawMessage{},
-				SyncSources:       []json.RawMessage{},
-				Tools:             []WebTool{},
-				ParentMessageUUID: parentMsgUUID,
-				ToolResults:       toolResults,
-			}
-
-		case "end_turn":
+		} else {
 			st.consecutiveContinues++
-			if st.consecutiveContinues >= maxContinues {
-				text := textBuf.String()
-				if text == "" {
-					text = fmt.Sprintf("[continue limit %d reached]", maxContinues)
-				}
-				doExit(exitStarve, text)
-				return
-			}
-			var localDiff strings.Builder
-			localDiff.WriteString("Continue. Note: the following tools were executed on the LOCAL machine (source of truth). If any results differ from your sandbox, use these:\n\n")
-			for _, tr := range toolResults {
-				localDiff.WriteString(fmt.Sprintf("[%s] %s\n\n", tr.ToolUseID, truncate(tr.Content, 500)))
-			}
-			log.Printf("claudeweb: preempted, writeback %d results + Continue (%d/%d)", len(toolResults), st.consecutiveContinues, maxContinues)
-			webReq = &CompletionRequest{
-				Prompt:        localDiff.String(),
-				Model:         m.modelName,
-				Timezone:      "Asia/Shanghai",
-				Locale:        "en-US",
-				Effort:        m.effort,
-				ThinkingMode:  "off",
-				RenderingMode: "messages",
-				Attachments:   []json.RawMessage{},
-				Files:         []json.RawMessage{},
-				SyncSources:   []json.RawMessage{},
-				Tools:         []WebTool{},
-			}
+		}
 
-		default:
-			text := textBuf.String()
-			if text == "" {
-				text = fmt.Sprintf("[stopped: %s]", stopReason)
-			}
-			doExit(exitOOM, text)
+		if st.consecutiveContinues >= maxContinues {
+			doExit(exitStarve, fmt.Sprintf("[%d consecutive silent rounds — stalled]", maxContinues))
 			return
+		}
+
+		var localDiff strings.Builder
+		localDiff.WriteString("Continue. Note: the following tools were executed on the LOCAL machine (source of truth). If any results differ from your sandbox, use these:\n\n")
+		for _, tr := range toolResults {
+			localDiff.WriteString(fmt.Sprintf("[%s] %s\n\n", tr.ToolUseID, truncate(tr.Content, 500)))
+		}
+		log.Printf("claudeweb: writeback %d results + Continue (silent=%d/%d)", len(toolResults), st.consecutiveContinues, maxContinues)
+		webReq = &CompletionRequest{
+			Prompt:        localDiff.String(),
+			Model:         m.modelName,
+			Timezone:      "Asia/Shanghai",
+			Locale:        "en-US",
+			Effort:        m.effort,
+			ThinkingMode:  "off",
+			RenderingMode: "messages",
+			Attachments:   []json.RawMessage{},
+			Files:         []json.RawMessage{},
+			SyncSources:   []json.RawMessage{},
+			Tools:         []WebTool{},
 		}
 	}
 
