@@ -448,6 +448,7 @@ func newConversation(name string) (*claudeweb.Model, *runner.Runner, string) {
 	llm.Shadow = &claudeweb.ShadowExecutor{
 		WorkDir: cfg.workDir,
 		Enabled: true,
+		Log:     claudeweb.NewShadowLog(cfg.workDir),
 	}
 	a, err := llmagent.New(llmagent.Config{
 		Name:        fmt.Sprintf("claude_%s", name),
