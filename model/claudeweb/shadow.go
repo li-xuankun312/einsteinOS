@@ -12,6 +12,7 @@ import (
 type ShadowExecutor struct {
 	WorkDir string
 	Enabled bool
+	Log     *ShadowLog
 }
 
 type toolInput struct {
@@ -90,6 +91,22 @@ func (s *ShadowExecutor) Execute(toolName string, inputJSON string) string {
 	errStr := kernel.GetStderr(childPid)
 
 	log.Printf("[pid %d] exit=%d stdout=%d stderr=%d", childPid, exitCode, len(result), len(errStr))
+
+	if s.Log != nil {
+		filePath := ""
+		if isCreateFile(toolName) || isStrReplace(toolName) {
+			filePath = input.Path
+		}
+		s.Log.Append(ExecRecord{
+			Pid:      childPid,
+			Tool:     toolName,
+			Command:  truncateCmd(command, 200),
+			ExitCode: exitCode,
+			Stdout:   result,
+			Stderr:   errStr,
+			Files:    filePath,
+		})
+	}
 
 	if exitCode != 0 {
 		return fmt.Sprintf("[pid %d exit=%d] %s\nstderr: %s", childPid, exitCode, result, truncateCmd(errStr, 500))

@@ -96,7 +96,15 @@ func (m *Model) GenerateContent(ctx context.Context, req *model.LLMRequest, stre
 	}
 	m.mu.Unlock()
 
-	fullPrompt := localExecPrefix + prompt
+	fullPrompt := localExecPrefix
+	if isNewConv && m.Shadow != nil && m.Shadow.Log != nil {
+		stateSummary := m.Shadow.Log.Summary(50)
+		if stateSummary != "" {
+			fullPrompt += stateSummary + "\n\n"
+		}
+		m.Shadow.Log.SetConv(convID)
+	}
+	fullPrompt += prompt
 
 	webReq := &CompletionRequest{
 		Prompt:        fullPrompt,
