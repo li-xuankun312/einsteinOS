@@ -66,9 +66,12 @@ type HNSW struct {
 	reverseMap  map[uint64]string
 	meta        map[uint64]map[string]interface{}
 	rng         *rand.Rand
-	tombstones  *tombstoneSet
-	metrics     *HNSWMetrics
-	flatCutoff  int
+	tombstones   *tombstoneSet
+	metrics      *HNSWMetrics
+	flatCutoff   int
+	autoEfMin    int64
+	autoEfMax    int64
+	autoEfFactor int64
 }
 
 func NewHNSW(cfg HNSWConfig) *HNSW {
