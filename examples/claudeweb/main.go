@@ -19,6 +19,7 @@ import (
 	"google.golang.org/adk/v2/model/claudeweb"
 	"google.golang.org/adk/v2/runner"
 	"google.golang.org/adk/v2/session"
+	"google.golang.org/adk/v2/vikingdb"
 )
 
 type appConfig struct {
@@ -31,6 +32,8 @@ type appConfig struct {
 }
 
 var cfg *appConfig
+var dbEngine = vikingdb.NewEngine(64)
+var projectDB *vikingdb.ProjectDB
 
 func main() {
 	cfg = &appConfig{
@@ -270,6 +273,83 @@ func main() {
 				}
 			default:
 				fmt.Println("  Usage: /artifact ls | /artifact cat <name>")
+			}
+
+		case strings.HasPrefix(input, "/sync "):
+			parts := strings.Fields(input)
+			if len(parts) < 2 {
+				fmt.Println("  Usage: /sync owner/repo [token]")
+				continue
+			}
+			repoPath := parts[1]
+			rp := strings.SplitN(repoPath, "/", 2)
+			if len(rp) != 2 {
+				fmt.Println("  Usage: /sync owner/repo")
+				continue
+			}
+			token := ""
+			if len(parts) >= 3 {
+				token = parts[2]
+			} else {
+				token = os.Getenv("GITHUB_TOKEN")
+			}
+			if projectDB == nil {
+				projectDB = vikingdb.NewProjectDB(dbEngine)
+				projectDB.AddRoot("li-xuankun312", "20224550109@stu.usc.edu.cn")
+				projectDB.AddRoot("zeng-bin3123", "20210820209@stu.usc.edu.cn")
+			}
+			syncer := vikingdb.NewGitHubSync(token, projectDB)
+			go func() {
+				if err := syncer.SyncRepo(rp[0], rp[1]); err != nil {
+					log.Printf("[vikingdb] sync error: %v", err)
+				}
+			}()
+			fmt.Printf("  syncing %s in background...\n", repoPath)
+
+		case input == "/db" || input == "/db stats":
+			if projectDB == nil {
+				fmt.Println("  no project db yet. use /sync owner/repo first")
+			} else {
+				fmt.Println(dbEngine.Summary())
+			}
+
+		case strings.HasPrefix(input, "/db search "):
+			if projectDB == nil {
+				fmt.Println("  no project db yet. use /sync owner/repo first")
+				continue
+			}
+			query := strings.TrimPrefix(input, "/db search ")
+			results := projectDB.SearchRelated(query, 5)
+			if len(results) == 0 {
+				fmt.Println("  no results")
+			}
+			for i, r := range results {
+				fmt.Printf("  %d. [%.3f] %s\n", i+1, r.Score, r.ID)
+				if goal, ok := r.Data["goal"]; ok {
+					fmt.Printf("     %v\n", goal)
+				}
+			}
+
+		case strings.HasPrefix(input, "/db project "):
+			if projectDB == nil {
+				fmt.Println("  no project db yet")
+				continue
+			}
+			repo := strings.TrimPrefix(input, "/db project ")
+			fmt.Println(projectDB.ProjectSummary(repo))
+
+		case strings.HasPrefix(input, "/db prs "):
+			if projectDB == nil {
+				fmt.Println("  no project db yet")
+				continue
+			}
+			repo := strings.TrimPrefix(input, "/db prs ")
+			prs := projectDB.PendingPRs(repo)
+			if len(prs) == 0 {
+				fmt.Println("  no open PRs")
+			}
+			for _, pr := range prs {
+				fmt.Printf("  %s — %s (by %v)\n", pr.ID, pr.Name, pr.Properties["author"])
 			}
 
 		default:
