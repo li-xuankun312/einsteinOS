@@ -1,6 +1,7 @@
 package vikingdb
 
 import (
+	"fmt"
 	"math"
 	"math/rand"
 	"sync"
@@ -65,6 +66,9 @@ type HNSW struct {
 	reverseMap  map[uint64]string
 	meta        map[uint64]map[string]interface{}
 	rng         *rand.Rand
+	tombstones  *tombstoneSet
+	metrics     *HNSWMetrics
+	flatCutoff  int
 }
 
 func NewHNSW(cfg HNSWConfig) *HNSW {
@@ -91,6 +95,9 @@ func NewHNSW(cfg HNSWConfig) *HNSW {
 		meta:       make(map[uint64]map[string]interface{}),
 		maxLevel:   -1,
 		rng:        rand.New(rand.NewSource(42)),
+		tombstones: newTombstoneSet(),
+		metrics:    NewHNSWMetrics(),
+		flatCutoff: 100,
 	}
 }
 
@@ -326,12 +333,25 @@ func (h *HNSW) SearchByVector(query Vector, topK int, filter func(map[string]int
 		return nil
 	}
 
+	activeCount := int(h.nodeCount) - h.tombstones.Len()
+	if filter != nil && activeCount < h.flatCutoff {
+		return h.flatSearch(query, topK, filter)
+	}
+
+	if h.metrics != nil {
+		h.metrics.TrackHNSWSearch()
+	}
+
 	ef := h.cfg.EfSearch
 	if ef < topK {
 		ef = topK
 	}
 
 	ep := h.entryPoint
+	if h.tombstones.Has(ep) {
+		h.findNewEntryPoint()
+		ep = h.entryPoint
+	}
 
 	for lc := h.maxLevel; lc > 0; lc-- {
 		changed := true
@@ -339,6 +359,9 @@ func (h *HNSW) SearchByVector(query Vector, topK int, filter func(map[string]int
 			changed = false
 			if node, ok := h.nodes[ep]; ok {
 				for _, n := range node.neighborsAtLevel(lc) {
+					if h.tombstones.Has(n) {
+						continue
+					}
 					if nNode, ok := h.nodes[n]; ok {
 						if h.cfg.Dist(query, nNode.vector) < h.cfg.Dist(query, h.nodes[ep].vector) {
 							ep = n
@@ -354,6 +377,9 @@ func (h *HNSW) SearchByVector(query Vector, topK int, filter func(map[string]int
 
 	var results []SearchResult
 	for _, id := range candidateIDs {
+		if h.tombstones.Has(id) {
+			continue
+		}
 		if filter != nil {
 			m := h.meta[id]
 			if !filter(m) {
@@ -481,6 +507,151 @@ func sortScored(items []scored) {
 }
 
 func reverseUint64(s []uint64) {
+	for i, j := 0, len(s)-1; i < j; i, j = i+1, j-1 {
+		s[i], s[j] = s[j], s[i]
+	}
+}
+
+func (h *HNSW) flatSearch(query Vector, topK int, filter func(map[string]interface{}) bool) []SearchResult {
+	if h.metrics != nil {
+		h.metrics.TrackFlatSearch()
+	}
+	results := newMaxPQ(topK)
+	for id, node := range h.nodes {
+		if h.tombstones.Has(id) {
+			continue
+		}
+		if filter != nil {
+			m := h.meta[id]
+			if !filter(m) {
+				continue
+			}
+		}
+		dist := h.cfg.Dist(query, node.vector)
+		if results.Len() < topK || dist < results.Top().dist {
+			results.Push(id, dist)
+			if results.Len() > topK {
+				results.Pop()
+			}
+		}
+	}
+
+	out := make([]SearchResult, 0, results.Len())
+	for results.Len() > 0 {
+		item := results.Pop()
+		score := 1.0 / (1.0 + item.dist)
+		out = append(out, SearchResult{
+			ID:    h.reverseMap[item.id],
+			Score: score,
+			Data:  h.meta[item.id],
+		})
+	}
+	reverseResults(out)
+	return out
+}
+
+func (h *HNSW) InsertBatch(items []struct {
+	ID       string
+	Vector   Vector
+	Metadata map[string]interface{}
+}) []uint64 {
+	ids := make([]uint64, len(items))
+	for i, item := range items {
+		ids[i] = h.Insert(item.ID, item.Vector, item.Metadata)
+	}
+	return ids
+}
+
+func (h *HNSW) SearchByDistance(query Vector, maxDist float32, limit int, filter func(map[string]interface{}) bool) []SearchResult {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	if h.nodeCount == 0 || h.maxLevel == -1 {
+		return nil
+	}
+
+	ef := h.cfg.EfSearch * 2
+	ep := h.entryPoint
+	for lc := h.maxLevel; lc > 0; lc-- {
+		changed := true
+		for changed {
+			changed = false
+			if node, ok := h.nodes[ep]; ok {
+				for _, n := range node.neighborsAtLevel(lc) {
+					if nNode, ok := h.nodes[n]; ok {
+						if h.cfg.Dist(query, nNode.vector) < h.cfg.Dist(query, h.nodes[ep].vector) {
+							ep = n
+							changed = true
+						}
+					}
+				}
+			}
+		}
+	}
+
+	candidateIDs := h.searchLayer(query, ep, ef, 0)
+
+	var results []SearchResult
+	for _, id := range candidateIDs {
+		if h.tombstones.Has(id) {
+			continue
+		}
+		if filter != nil && !filter(h.meta[id]) {
+			continue
+		}
+		node, ok := h.nodes[id]
+		if !ok {
+			continue
+		}
+		dist := h.cfg.Dist(query, node.vector)
+		if dist > maxDist {
+			continue
+		}
+		score := 1.0 / (1.0 + dist)
+		results = append(results, SearchResult{
+			ID:    h.reverseMap[id],
+			Score: score,
+			Data:  h.meta[id],
+		})
+		if limit > 0 && len(results) >= limit {
+			break
+		}
+	}
+	return results
+}
+
+func (h *HNSW) ValidateBeforeInsert(vec Vector) error {
+	if len(vec) == 0 {
+		return fmt.Errorf("empty vector")
+	}
+	if h.nodeCount > 0 {
+		for _, node := range h.nodes {
+			if len(node.vector) != len(vec) {
+				return fmt.Errorf("dimension mismatch: got %d, expected %d", len(vec), len(node.vector))
+			}
+			break
+		}
+	}
+	return nil
+}
+
+func (h *HNSW) GetMetrics() *HNSWMetrics {
+	return h.metrics
+}
+
+func (h *HNSW) SetFlatCutoff(n int) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.flatCutoff = n
+}
+
+func (h *HNSW) SetEfSearch(ef int) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.cfg.EfSearch = ef
+}
+
+func reverseResults(s []SearchResult) {
 	for i, j := 0, len(s)-1; i < j; i, j = i+1, j-1 {
 		s[i], s[j] = s[j], s[i]
 	}
