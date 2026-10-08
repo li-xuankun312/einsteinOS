@@ -98,7 +98,7 @@ func (s *ShadowExecutor) Execute(toolName string, inputJSON string) string {
 			filePath = input.Path
 		}
 		s.DB.Insert(ExecRecord{
-			Pid:      childPid,
+			Pid:      int(childPid),
 			Tool:     toolName,
 			Command:  truncateCmd(command, 200),
 			ExitCode: exitCode,

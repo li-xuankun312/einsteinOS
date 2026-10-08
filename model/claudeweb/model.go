@@ -216,6 +216,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 		toolBlocks := map[int]*toolBlock{}
 		var collectedTools []toolBlock
 		var parentMsgUUID string
+		_ = parentMsgUUID
 		var stopReason string
 
 		for event := range events {
