@@ -97,12 +97,12 @@ func (m *Model) GenerateContent(ctx context.Context, req *model.LLMRequest, stre
 	m.mu.Unlock()
 
 	fullPrompt := localExecPrefix
-	if isNewConv && m.Shadow != nil && m.Shadow.Log != nil {
-		stateSummary := m.Shadow.Log.Summary(50)
+	if isNewConv && m.Shadow != nil && m.Shadow.DB != nil {
+		stateSummary := m.Shadow.DB.Summary(10)
 		if stateSummary != "" {
 			fullPrompt += stateSummary + "\n\n"
 		}
-		m.Shadow.Log.SetConv(convID)
+		m.Shadow.DB.SetConv(convID)
 	}
 	fullPrompt += prompt
 
