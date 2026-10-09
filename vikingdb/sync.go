@@ -41,10 +41,13 @@ func buildHTTPClient() *http.Client {
 	}
 
 	transport := &http.Transport{
-		TLSHandshakeTimeout: 30 * time.Second,
-		DisableKeepAlives:   false,
-		MaxIdleConns:        10,
-		IdleConnTimeout:     90 * time.Second,
+		TLSHandshakeTimeout:   60 * time.Second,
+		ResponseHeaderTimeout: 60 * time.Second,
+		DisableKeepAlives:     false,
+		MaxIdleConns:          20,
+		MaxIdleConnsPerHost:   10,
+		IdleConnTimeout:       120 * time.Second,
+		ForceAttemptHTTP2:     false,
 	}
 
 	if proxyEnv != "" {
@@ -56,7 +59,7 @@ func buildHTTPClient() *http.Client {
 	}
 
 	return &http.Client{
-		Timeout:   60 * time.Second,
+		Timeout:   120 * time.Second,
 		Transport: transport,
 	}
 }
@@ -243,30 +246,60 @@ func (gs *GitHubSync) SyncPRReviews(owner, repo string, prNumber int) error {
 }
 
 func (gs *GitHubSync) get(url string, result interface{}) error {
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
+	maxRetries := 3
+	var lastErr error
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			backoff := time.Duration(attempt*attempt) * 2 * time.Second
+			log.Printf("[vikingdb] retry %d/%d after %v: %s", attempt+1, maxRetries, backoff, truncURL(url))
+			time.Sleep(backoff)
+		}
+
+		req, err := http.NewRequest("GET", url, nil)
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Accept", "application/vnd.github.v3+json")
+		req.Header.Set("Connection", "keep-alive")
+		if gs.token != "" {
+			req.Header.Set("Authorization", "token "+gs.token)
+		}
+
+		resp, err := gs.httpClient.Do(req)
+		if err != nil {
+			lastErr = fmt.Errorf("github api: %w", err)
+			continue
+		}
+
+		if resp.StatusCode == 403 {
+			resp.Body.Close()
+			return fmt.Errorf("github api rate limited (403)")
+		}
+		if resp.StatusCode >= 500 {
+			resp.Body.Close()
+			lastErr = fmt.Errorf("github api %d", resp.StatusCode)
+			continue
+		}
+		if resp.StatusCode != 200 {
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			return fmt.Errorf("github api %d: %s", resp.StatusCode, truncBody(body))
+		}
+
+		err = json.NewDecoder(resp.Body).Decode(result)
+		resp.Body.Close()
 		return err
 	}
-	req.Header.Set("Accept", "application/vnd.github.v3+json")
-	if gs.token != "" {
-		req.Header.Set("Authorization", "token "+gs.token)
-	}
 
-	resp, err := gs.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("github api: %w", err)
-	}
-	defer resp.Body.Close()
+	return lastErr
+}
 
-	if resp.StatusCode == 403 {
-		return fmt.Errorf("github api rate limited (403)")
+func truncURL(u string) string {
+	if len(u) > 80 {
+		return u[:80] + "..."
 	}
-	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("github api %d: %s", resp.StatusCode, truncBody(body))
-	}
-
-	return json.NewDecoder(resp.Body).Decode(result)
+	return u
 }
 
 func truncBody(b []byte) string {
