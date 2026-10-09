@@ -1,11 +1,16 @@
 package vikingdb
 
 import (
+	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
+	"net/url"
+	"os"
 	"strings"
 	"time"
 )
@@ -19,15 +24,106 @@ type GitHubSync struct {
 }
 
 func NewGitHubSync(token string, pdb *ProjectDB) *GitHubSync {
+	client := buildHTTPClient()
 	return &GitHubSync{
-		token:   token,
-		baseURL: "https://api.github.com",
-		pdb:     pdb,
-		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
-		},
-		lastSync: make(map[string]time.Time),
+		token:      token,
+		baseURL:    "https://api.github.com",
+		pdb:        pdb,
+		httpClient: client,
+		lastSync:   make(map[string]time.Time),
 	}
+}
+
+func buildHTTPClient() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSHandshakeTimeout = 15 * time.Second
+
+	proxyURL := os.Getenv("ALL_PROXY")
+	if proxyURL == "" {
+		proxyURL = os.Getenv("https_proxy")
+	}
+	if proxyURL == "" {
+		proxyURL = os.Getenv("HTTPS_PROXY")
+	}
+
+	if proxyURL != "" && strings.HasPrefix(proxyURL, "socks5") {
+		parsed, err := url.Parse(proxyURL)
+		if err == nil {
+			host := parsed.Host
+			transport.DialContext = nil
+			transport.Dial = func(network, addr string) (net.Conn, error) {
+				return socks5Dial(host, addr)
+			}
+			log.Printf("[vikingdb] using SOCKS5 proxy: %s", host)
+		}
+	} else if proxyURL != "" {
+		parsed, _ := url.Parse(proxyURL)
+		if parsed != nil {
+			transport.Proxy = http.ProxyURL(parsed)
+		}
+	}
+
+	return &http.Client{
+		Timeout:   60 * time.Second,
+		Transport: transport,
+	}
+}
+
+func socks5Dial(proxyAddr, targetAddr string) (net.Conn, error) {
+	conn, err := net.DialTimeout("tcp", proxyAddr, 10*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("socks5 connect to proxy: %w", err)
+	}
+
+	conn.Write([]byte{0x05, 0x01, 0x00})
+	resp := make([]byte, 2)
+	if _, err := io.ReadFull(conn, resp); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("socks5 handshake: %w", err)
+	}
+	if resp[0] != 0x05 || resp[1] != 0x00 {
+		conn.Close()
+		return nil, errors.New("socks5 auth failed")
+	}
+
+	host, portStr, err := net.SplitHostPort(targetAddr)
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+	port, _ := net.LookupPort("tcp", portStr)
+
+	req := []byte{0x05, 0x01, 0x00, 0x03}
+	req = append(req, byte(len(host)))
+	req = append(req, []byte(host)...)
+	portBuf := make([]byte, 2)
+	binary.BigEndian.PutUint16(portBuf, uint16(port))
+	req = append(req, portBuf...)
+
+	conn.Write(req)
+
+	reply := make([]byte, 4)
+	if _, err := io.ReadFull(conn, reply); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("socks5 reply: %w", err)
+	}
+	if reply[1] != 0x00 {
+		conn.Close()
+		return nil, fmt.Errorf("socks5 error: code %d", reply[1])
+	}
+
+	switch reply[3] {
+	case 0x01:
+		io.ReadFull(conn, make([]byte, 4+2))
+	case 0x03:
+		lenBuf := make([]byte, 1)
+		io.ReadFull(conn, lenBuf)
+		io.ReadFull(conn, make([]byte, int(lenBuf[0])+2))
+	case 0x04:
+		io.ReadFull(conn, make([]byte, 16+2))
+	}
+
+	return conn, nil
 }
 
 func (gs *GitHubSync) SyncRepo(owner, repo string) error {
