@@ -184,7 +184,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 		if text == "" {
 			text = fmt.Sprintf("[%s]", exitCodeStr(code))
 		}
-		if code == exitError {
+		if code == exitError && strings.Contains(text, "403") {
 			m.mu.Lock()
 			m.convID = ""
 			m.lastSentPrompt = ""
