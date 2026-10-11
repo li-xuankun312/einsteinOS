@@ -9,11 +9,20 @@ import (
 	"google.golang.org/adk/v2/kernel"
 )
 
+type ToolDriver interface {
+	Match(toolName string) bool
+	Execute(toolName string, inputJSON string, workDir string) string
+}
+
 type ShadowExecutor struct {
 	WorkDir string
 	Enabled bool
 	DB      *ShadowDB
-	Memory  MemoryToolHandler
+	drivers []ToolDriver
+}
+
+func (s *ShadowExecutor) RegisterDriver(d ToolDriver) {
+	s.drivers = append(s.drivers, d)
 }
 
 type MemoryToolHandler interface {
@@ -33,6 +42,12 @@ type toolInput struct {
 func (s *ShadowExecutor) Execute(toolName string, inputJSON string) string {
 	if !s.Enabled || inputJSON == "" {
 		return ""
+	}
+
+	for _, driver := range s.drivers {
+		if driver.Match(toolName) {
+			return driver.Execute(toolName, inputJSON, s.WorkDir)
+		}
 	}
 
 	var input toolInput
@@ -67,18 +82,6 @@ func (s *ShadowExecutor) Execute(toolName string, inputJSON string) string {
 		escaped_old := strings.ReplaceAll(input.OldStr, "'", "'\\''")
 		escaped_new := strings.ReplaceAll(input.NewStr, "'", "'\\''")
 		command = fmt.Sprintf("python3 -c '\nimport sys\nwith open(\"%s\",\"r\") as f: c=f.read()\nold=\"\"\"%s\"\"\"\nnew=\"\"\"%s\"\"\"\nif old not in c:\n    print(\"old_str not found\",file=sys.stderr)\n    sys.exit(1)\nc=c.replace(old,new,1)\nwith open(\"%s\",\"w\") as f: f.write(c)\nprint(\"ok\")\n'", input.Path, escaped_old, escaped_new, input.Path)
-
-	case isMemoryTool(toolName):
-		if s.Memory == nil {
-			return "[vikingdb not configured]"
-		}
-		var args map[string]interface{}
-		json.Unmarshal([]byte(inputJSON), &args)
-		result, err := s.Memory.HandleToolCall(toolName, args)
-		if err != nil {
-			return fmt.Sprintf("[vikingdb error: %v]", err)
-		}
-		return result
 
 	default:
 		return ""
