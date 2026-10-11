@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"time"
 )
 
 // ClientConfig configures the claude web API client.
@@ -64,16 +66,43 @@ func (c *Client) Completion(convID string, req *CompletionRequest) (io.ReadClose
 	httpReq.Header.Set("anthropic-client-version", "1.0.0")
 	httpReq.Header.Set("Cookie", c.cookie)
 
-	resp, err := c.httpClient.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("http request: %w", err)
+	maxRetries := 3
+	backoffs := []time.Duration{3 * time.Second, 8 * time.Second, 15 * time.Second}
+	var lastErr error
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			wait := backoffs[attempt-1]
+			log.Printf("claudeweb: retry %d/%d after %v", attempt, maxRetries, wait)
+			time.Sleep(wait)
+			httpReq, _ = http.NewRequest("POST", url, bytes.NewReader(body))
+			httpReq.Header.Set("Accept", "text/event-stream")
+			httpReq.Header.Set("Content-Type", "application/json")
+			httpReq.Header.Set("anthropic-client-platform", "web_claude_ai")
+			httpReq.Header.Set("anthropic-client-version", "1.0.0")
+			httpReq.Header.Set("Cookie", c.cookie)
+		}
+
+		resp, err := c.httpClient.Do(httpReq)
+		if err != nil {
+			lastErr = fmt.Errorf("http request: %w", err)
+			continue
+		}
+
+		if resp.StatusCode >= 500 {
+			resp.Body.Close()
+			lastErr = fmt.Errorf("API returned %d", resp.StatusCode)
+			continue
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			defer resp.Body.Close()
+			errBody, _ := io.ReadAll(resp.Body)
+			return nil, fmt.Errorf("API returned %d: %s", resp.StatusCode, string(errBody))
+		}
+
+		return resp.Body, nil
 	}
 
-	if resp.StatusCode != http.StatusOK {
-		defer resp.Body.Close()
-		errBody, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API returned %d: %s", resp.StatusCode, string(errBody))
-	}
-
-	return resp.Body, nil
+	return nil, lastErr
 }
