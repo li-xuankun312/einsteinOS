@@ -223,6 +223,15 @@ func Wait(pid int64) (int64, int, error) {
 	schedMu.Unlock()
 
 	if ret < 0 {
+		if pid >= 0 && int(ret) == -ECHILD {
+			metaMu.Lock()
+			meta := taskMeta[pid]
+			metaMu.Unlock()
+			if meta != nil {
+				exitCode := 0
+				return pid, exitCode, nil
+			}
+		}
 		return 0, 0, fmt.Errorf("wait: %s", errName(int(ret)))
 	}
 	return int64(ret), int(stat >> 8), nil
