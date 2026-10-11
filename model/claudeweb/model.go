@@ -184,10 +184,12 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 		if text == "" {
 			text = fmt.Sprintf("[%s]", exitCodeStr(code))
 		}
-		if code == exitError && strings.Contains(text, "403") {
+		if code == exitError {
 			m.mu.Lock()
-			m.convID = ""
 			m.lastSentPrompt = ""
+			if strings.Contains(text, "403") {
+				m.convID = ""
+			}
 			m.mu.Unlock()
 		}
 		log.Printf("claudeweb: do_exit(%s) rounds=%d tools=%d continues=%d conv=%s",
