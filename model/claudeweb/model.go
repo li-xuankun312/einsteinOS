@@ -233,6 +233,8 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 			switch event.Event {
 			case "ping", "conversation_ready", "message_limit":
 				continue
+			case "":
+				continue
 
 			case "message_start":
 				var ev MessageStartEvent
@@ -306,6 +308,9 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 				body.Close()
 				doExit(exitError, fmt.Sprintf("[Error] %s", string(event.Data)))
 				return
+
+			default:
+				log.Printf("claudeweb: unhandled event: %s data=%s", event.Event, truncate(string(event.Data), 200))
 			}
 		}
 		body.Close()
@@ -315,6 +320,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 		if len(collectedTools) == 0 {
 			text := textBuf.String()
 			if text == "" {
+				log.Printf("claudeweb: empty response (stop_reason=%s, events received)", stopReason)
 				text = "(empty response)"
 			}
 			doExit(exitNormal, text)
