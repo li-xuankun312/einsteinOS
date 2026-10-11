@@ -525,10 +525,15 @@ func newConversation(name string) (*claudeweb.Model, *runner.Runner, string) {
 		Cookie:  cfg.cookie,
 	})
 	llm := claudeweb.NewModel(client, cfg.modelName, cfg.effort)
+	var memHandler claudeweb.MemoryToolHandler
+	if projectDB != nil {
+		memHandler = vikingdb.NewMemoryService(dbEngine, projectDB)
+	}
 	llm.Shadow = &claudeweb.ShadowExecutor{
 		WorkDir: cfg.workDir,
 		Enabled: true,
 		DB:      claudeweb.NewShadowDB(),
+		Memory:  memHandler,
 	}
 	a, err := llmagent.New(llmagent.Config{
 		Name:        fmt.Sprintf("claude_%s", name),

@@ -13,6 +13,11 @@ type ShadowExecutor struct {
 	WorkDir string
 	Enabled bool
 	DB      *ShadowDB
+	Memory  MemoryToolHandler
+}
+
+type MemoryToolHandler interface {
+	HandleToolCall(toolName string, args map[string]interface{}) (string, error)
 }
 
 type toolInput struct {
@@ -62,6 +67,18 @@ func (s *ShadowExecutor) Execute(toolName string, inputJSON string) string {
 		escaped_old := strings.ReplaceAll(input.OldStr, "'", "'\\''")
 		escaped_new := strings.ReplaceAll(input.NewStr, "'", "'\\''")
 		command = fmt.Sprintf("python3 -c '\nimport sys\nwith open(\"%s\",\"r\") as f: c=f.read()\nold=\"\"\"%s\"\"\"\nnew=\"\"\"%s\"\"\"\nif old not in c:\n    print(\"old_str not found\",file=sys.stderr)\n    sys.exit(1)\nc=c.replace(old,new,1)\nwith open(\"%s\",\"w\") as f: f.write(c)\nprint(\"ok\")\n'", input.Path, escaped_old, escaped_new, input.Path)
+
+	case isMemoryTool(toolName):
+		if s.Memory == nil {
+			return "[vikingdb not configured]"
+		}
+		var args map[string]interface{}
+		json.Unmarshal([]byte(inputJSON), &args)
+		result, err := s.Memory.HandleToolCall(toolName, args)
+		if err != nil {
+			return fmt.Sprintf("[vikingdb error: %v]", err)
+		}
+		return result
 
 	default:
 		return ""
@@ -129,6 +146,11 @@ func isCreateFile(name string) bool {
 func isStrReplace(name string) bool {
 	n := strings.ToLower(name)
 	return n == "str_replace" || n == "str_replace_editor" || n == "edit_file"
+}
+
+func isMemoryTool(name string) bool {
+	n := strings.ToLower(name)
+	return n == "search_project_memory" || n == "project_status" || n == "load_memory"
 }
 
 func truncateCmd(s string, n int) string {
