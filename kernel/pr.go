@@ -29,7 +29,6 @@ type PRProcess struct {
 	Title      string
 	RefRepos   []RefRepo
 	Commits    []PRCommit
-	Theory     []TheoremRef
 	CreateTime time.Time
 	MergeTime  time.Time
 }
@@ -42,13 +41,7 @@ type PRCommit struct {
 	Time    time.Time
 }
 
-type TheoremRef struct {
-	Chapter    int
-	ID         string
-	Statement  string
-	FromRepo   string
-	FromCommit string
-}
+
 
 var (
 	prTable = make(map[int64]*PRProcess)
@@ -106,22 +99,6 @@ func PRAddCommit(pid int64, sha, message string, files []string, diff string) {
 		Files:   files,
 		Diff:    diff,
 		Time:    time.Now(),
-	})
-}
-
-func PRAddTheorem(pid int64, chapter int, id, statement, fromRepo, fromCommit string) {
-	prMu.Lock()
-	defer prMu.Unlock()
-	pr := prTable[pid]
-	if pr == nil {
-		return
-	}
-	pr.Theory = append(pr.Theory, TheoremRef{
-		Chapter:    chapter,
-		ID:         id,
-		Statement:  statement,
-		FromRepo:   fromRepo,
-		FromCommit: fromCommit,
 	})
 }
 
@@ -200,8 +177,8 @@ func PRPs() string {
 	prMu.Lock()
 	defer prMu.Unlock()
 
-	out := fmt.Sprintf("  %-6s %-8s %-10s %-4s %-4s %-30s %s\n",
-		"PID", "COUNTER", "STATE", "C#", "T#", "REPO", "TITLE")
+	out := fmt.Sprintf("  %-6s %-8s %-10s %-4s %-30s %s\n",
+		"PID", "COUNTER", "STATE", "C#", "REPO", "TITLE")
 
 	for i := 1; i < NR_TASKS; i++ {
 		t := Task[i]
@@ -236,9 +213,9 @@ func PRPs() string {
 			repo = repo[:30]
 		}
 
-		out += fmt.Sprintf("  %-6d %-8d %-10s %-4d %-4d %-30s %s\n",
+		out += fmt.Sprintf("  %-6d %-8d %-10s %-4d %-30s %s\n",
 			t.Pid, t.Counter, state,
-			len(pr.Commits), len(pr.Theory),
+			len(pr.Commits),
 			repo, title)
 	}
 	return out
