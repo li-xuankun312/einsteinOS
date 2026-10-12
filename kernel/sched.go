@@ -1,3 +1,4 @@
+
 package kernel
 
 import (
@@ -9,27 +10,17 @@ import (
 
 	. "google.golang.org/adk/v2/include"
 )
-
-func _S(nr int) int32          { return 1 << (nr - 1) }
+func _S(nr int) int32 { return 1 << (nr - 1) }
 
 var _BLOCKABLE int32 = ^(_S(SIGKILL) | _S(SIGSTOP))
-
 func ShowTask(nr int, p *TaskStruct) {
-	stateStr := "?"
-	switch p.State {
-	case TASK_RUNNING:
-		stateStr = "RUNNING"
-	case TASK_INTERRUPTIBLE:
-		stateStr = "INTERRUPTIBLE"
-	case TASK_UNINTERRUPTIBLE:
-		stateStr = "UNINTERRUPTIBLE"
-	case TASK_ZOMBIE:
-		stateStr = "ZOMBIE"
-	case TASK_STOPPED:
-		stateStr = "STOPPED"
+	names := [5]string{"RUNNING", "INTERRUPTIBLE", "UNINTERRUPTIBLE", "ZOMBIE", "STOPPED"}
+	s := "?"
+	if p.State >= 0 && p.State < 5 {
+		s = names[p.State]
 	}
-	fmt.Fprintf(os.Stderr, "%d: pid=%d, state=%s, father=%d\n",
-		nr, p.Pid, stateStr, p.Father)
+	fmt.Fprintf(os.Stderr, "%d: pid=%d state=%s father=%d counter=%d prio=%d\n",
+		nr, p.Pid, s, p.Father, p.Counter, p.Priority)
 }
 
 func ShowStat() {
@@ -39,19 +30,13 @@ func ShowStat() {
 		}
 	}
 }
-
 var schedMu sync.Mutex
-
-var RunCh [NR_TASKS]chan struct{}
 
 func switchTo(n int) {
 	if Task[n] == Current {
 		return
 	}
 	Current = Task[n]
-}
-
-func MathStateRestore() {
 }
 
 func Schedule() {
@@ -64,7 +49,7 @@ func Schedule() {
 			continue
 		}
 		if p.Alarm != 0 && p.Alarm < Jiffies {
-			p.Signal |= 1 << (SIGALRM - 1)
+			p.Signal |= _S(SIGALRM)
 			p.Alarm = 0
 		}
 		if (p.Signal & ^(_BLOCKABLE & p.Blocked)) != 0 &&
@@ -98,7 +83,6 @@ func Schedule() {
 	}
 	switchTo(next)
 }
-
 func SysPause() int {
 	Current.State = TASK_INTERRUPTIBLE
 	Schedule()
@@ -118,7 +102,7 @@ func SleepOn(p **TaskStruct) {
 	Current.State = TASK_UNINTERRUPTIBLE
 	Schedule()
 	if tmp != nil {
-		tmp.State = 0
+		tmp.State = TASK_RUNNING
 	}
 }
 
@@ -136,50 +120,25 @@ repeat:
 	Current.State = TASK_INTERRUPTIBLE
 	Schedule()
 	if *p != nil && *p != Current {
-		(*p).State = 0
+		(*p).State = TASK_RUNNING
 		goto repeat
 	}
 	*p = nil
 	if tmp != nil {
-		tmp.State = 0
+		tmp.State = TASK_RUNNING
 	}
 }
 
 func WakeUp(p **TaskStruct) {
 	if p != nil && *p != nil {
-		(*p).State = 0
+		(*p).State = TASK_RUNNING
 		*p = nil
 	}
 }
-
-var (
-	waitMotor  [4]*TaskStruct
-	monTimer   [4]int32
-	moffTimer  [4]int32
-	currentDOR uint8 = 0x0C
-)
-
-func TicksToFloppyOn(nr uint32) int32 {
-	if nr > 3 {
-		Panic("floppy_on: nr>3")
-	}
-	return 0
-}
-
-func FloppyOn(nr uint32) {
-}
-
-func FloppyOff(nr uint32) {
-	moffTimer[nr] = 3 * HZ
-}
-
-func DoFloppyTimer() {
-}
-
 const TIME_REQUESTS = 64
 
 type timerListEntry struct {
-	jiffies int32
+	jiffies int32 // differential delay from predecessor
 	fn      func()
 	next    *timerListEntry
 }
@@ -212,6 +171,7 @@ func AddTimer(ticks int32, fn func()) {
 	if p == nil {
 		Panic("No more time requests free")
 	}
+
 	p.fn = fn
 	p.jiffies = ticks
 	p.next = nextTimer
@@ -224,7 +184,6 @@ func AddTimer(ticks int32, fn func()) {
 		p = p.next
 	}
 }
-
 func DoTimer(cpl int32) {
 	if cpl != 0 {
 		Current.Utime++
@@ -248,10 +207,6 @@ func DoTimer(cpl int32) {
 	}
 	timerMu.Unlock()
 
-	if currentDOR&0xf0 != 0 {
-		DoFloppyTimer()
-	}
-
 	Current.Counter--
 	if Current.Counter > 0 {
 		return
@@ -262,7 +217,6 @@ func DoTimer(cpl int32) {
 	}
 	Schedule()
 }
-
 func SysAlarm(seconds int32) int32 {
 	old := Current.Alarm
 	if old != 0 {
@@ -275,12 +229,11 @@ func SysAlarm(seconds int32) int32 {
 	}
 	return old
 }
-
-func SysGetpid() int32  { return Current.Pid }
-func SysGetppid() int32 { return Current.Father }
-func SysGetuid() uint16 { return Current.Uid }
+func SysGetpid() int32   { return Current.Pid }
+func SysGetppid() int32  { return Current.Father }
+func SysGetuid() uint16  { return Current.Uid }
 func SysGeteuid() uint16 { return Current.Euid }
-func SysGetgid() uint16 { return Current.Gid }
+func SysGetgid() uint16  { return Current.Gid }
 func SysGetegid() uint16 { return Current.Egid }
 
 func SysNice(increment int32) int {
@@ -289,67 +242,30 @@ func SysNice(increment int32) int {
 	}
 	return 0
 }
-
 func SchedInit() {
-
 	initTask := &TaskStruct{}
-	initTask.State = 0
+	initTask.State = TASK_RUNNING
 	initTask.Counter = 15
 	initTask.Priority = 15
-	initTask.Signal = 0
-	initTask.Blocked = 0
-	initTask.ExitCode = 0
-	initTask.StartCode = 0
-	initTask.EndCode = 0
-	initTask.EndData = 0
-	initTask.Brk = 0
-	initTask.StartStack = 0
 	initTask.Pid = 0
 	initTask.Father = -1
-	initTask.Pgrp = 0
-	initTask.Session = 0
 	initTask.Leader = 1
-	initTask.Uid = 0
-	initTask.Euid = 0
-	initTask.Suid = 0
-	initTask.Gid = 0
-	initTask.Egid = 0
-	initTask.Sgid = 0
-	initTask.Alarm = 0
-	initTask.Utime = 0
-	initTask.Stime = 0
-	initTask.Cutime = 0
-	initTask.Cstime = 0
-	initTask.StartTime = 0
-	initTask.UsedMath = 0
 	initTask.Tty = -1
 	initTask.Umask = 0022
-	initTask.Pwd = nil
-	initTask.Root = nil
-	initTask.Executable = nil
-	initTask.CloseOnExec = 0
-	initTask.Ldt[0] = DescStruct{A: 0, B: 0}
-	initTask.Ldt[1] = DescStruct{A: 0x9f, B: 0xc0fa00}
-	initTask.Ldt[2] = DescStruct{A: 0x9f, B: 0xc0f200}
-	initTask.Tss.Esp0 = PAGE_SIZE
-	initTask.Tss.Ss0 = 0x10
-	initTask.Tss.Cr3 = 0
-	initTask.Tss.Ldt = int32(LDT(0))
-	initTask.Tss.TraceBitmap = 0x80000000
 
 	for i := 1; i < NR_TASKS; i++ {
 		Task[i] = nil
 	}
 	Task[0] = initTask
 	Current = initTask
-	LastTaskUsedMath = nil
 
 	Jiffies = 0
 	StartupTime = int32(time.Now().Unix())
 
 	go timerTicker()
 
-	log.Printf("kernel: sched_init done")
+	log.Printf("kernel: sched_init done, idle priority=%d bound=%d",
+		initTask.Priority, 2*initTask.Priority)
 }
 
 func timerTicker() {
