@@ -34,7 +34,13 @@ type Client struct {
 func NewClient(cfg ClientConfig) *Client {
 	hc := cfg.HTTPClient
 	if hc == nil {
-		hc = &http.Client{}
+		hc = &http.Client{
+			Transport: &http.Transport{
+				TLSHandshakeTimeout:   30 * time.Second,
+				ResponseHeaderTimeout: 60 * time.Second,
+				Proxy:                 http.ProxyFromEnvironment,
+			},
+		}
 	}
 	return &Client{
 		baseURL:    cfg.BaseURL,
@@ -66,8 +72,8 @@ func (c *Client) Completion(convID string, req *CompletionRequest) (io.ReadClose
 	httpReq.Header.Set("anthropic-client-version", "1.0.0")
 	httpReq.Header.Set("Cookie", c.cookie)
 
-	maxRetries := 3
-	backoffs := []time.Duration{3 * time.Second, 8 * time.Second, 15 * time.Second}
+	maxRetries := 5
+	backoffs := []time.Duration{5 * time.Second, 10 * time.Second, 20 * time.Second, 30 * time.Second, 45 * time.Second}
 	var lastErr error
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
