@@ -1,10 +1,14 @@
 package kernel
 
 import (
+	"context"
 	"fmt"
 	"log"
+	"os"
+	"os/exec"
 	"strings"
 	"sync"
+	"time"
 )
 
 type theorem_entry struct {
@@ -30,11 +34,13 @@ func ref_clone(owner, name string) {
 	}
 }
 
+const MAX_REFS = 3
+
 func ref_discover(task string) []RefRepo {
 	prompt := task + "\n" +
-		"what reference repositories on github should be studied " +
-		"before developing this? " +
-		"reply with ONLY owner/name lines, nothing else."
+		"what are the top 3 most relevant reference repositories on github " +
+		"for developing this? " +
+		"reply with ONLY owner/name lines, max 3, nothing else."
 
 	var good []RefRepo
 	var tried int
@@ -50,11 +56,14 @@ func ref_discover(task string) []RefRepo {
 		Wait(pid)
 
 		candidates := parseRefRepos(GetResult(pid))
+		if len(candidates) > MAX_REFS {
+			candidates = candidates[:MAX_REFS]
+		}
 		if len(candidates) == 0 {
 			return good
 		}
 
-		var failed []string
+		var notfound []string
 		for _, r := range candidates {
 			ref_clone(r.Owner, r.Name)
 			refMu.Lock()
@@ -62,22 +71,36 @@ func ref_discover(task string) []RefRepo {
 			refMu.Unlock()
 			if ok {
 				good = append(good, r)
+			} else if ref_clone_is_notfound(r.Owner, r.Name) {
+				notfound = append(notfound, r.Owner+"/"+r.Name)
 			} else {
-				failed = append(failed, r.Owner+"/"+r.Name)
+				log.Printf("ref_discover: %s/%s network error, skip", r.Owner, r.Name)
 			}
 		}
 
-		if len(failed) == 0 {
+		if len(notfound) == 0 {
 			return good
 		}
 
-		log.Printf("ref_discover: %d failed: %v", len(failed), failed)
+		log.Printf("ref_discover: not found: %v", notfound)
 		prompt = fmt.Sprintf(
 			"these repos do not exist on github: %s\n"+
 				"correct the owner/name. reply with ONLY owner/name lines.",
-			strings.Join(failed, ", "))
+			strings.Join(notfound, ", "))
 	}
 	return good
+}
+
+func ref_clone_is_notfound(owner, name string) bool {
+	dir := fmt.Sprintf("/tmp/ref_%s_%s.git", owner, name)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", "ls-remote",
+		fmt.Sprintf("https://github.com/%s/%s.git", owner, name))
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	err := cmd.Run()
+	os.RemoveAll(dir)
+	return err != nil
 }
 
 func ref_theorize(parent int64, owner, name, sha, diff string, nfiles int, msg string) string {
