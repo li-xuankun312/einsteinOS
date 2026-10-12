@@ -1,6 +1,7 @@
 package kernel
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -39,7 +40,9 @@ func RefClone(owner, name, cloneDir string) (*RefRepoState, error) {
 	refMu.Unlock()
 
 	url := fmt.Sprintf("https://github.com/%s/%s.git", owner, name)
-	cmd := exec.Command("git", "clone", "--bare", url, cloneDir)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", "clone", "--bare", "--filter=blob:none", url, cloneDir)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("git clone %s: %v\n%s", url, err, string(out))
