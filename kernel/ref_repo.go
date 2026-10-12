@@ -42,14 +42,22 @@ func RefClone(owner, name, cloneDir string) (*RefRepoState, error) {
 	refMu.Unlock()
 
 	if _, statErr := os.Stat(cloneDir); statErr == nil {
-		log.Printf("ref_clone: reuse %s", cloneDir)
-	} else {
+		verify := exec.Command("git", "--git-dir", cloneDir, "rev-parse", "HEAD")
+		if verify.Run() == nil {
+			log.Printf("ref_clone: reuse %s", cloneDir)
+		} else {
+			log.Printf("ref_clone: invalid %s, removing", cloneDir)
+			os.RemoveAll(cloneDir)
+		}
+	}
+	if _, statErr := os.Stat(cloneDir); statErr != nil {
 		url := fmt.Sprintf("https://github.com/%s/%s.git", owner, name)
 		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 		defer cancel()
 		cmd := exec.CommandContext(ctx, "git", "clone", "--bare", "--filter=blob:none", url, cloneDir)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
+			os.RemoveAll(cloneDir)
 			return nil, fmt.Errorf("git clone %s: %v\n%s", url, err, string(out))
 		}
 	}
