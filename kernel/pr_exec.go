@@ -17,6 +17,7 @@ const (
 	STEP_REF_FIRST
 	STEP_DEV_EXEC
 	STEP_REF_THEORIZE
+	STEP_DEV_WITH_THEORY
 )
 
 type Step struct {
@@ -106,6 +107,18 @@ func PRRunNext(pid int64) (string, error) {
 				step.Owner, step.Repo,
 				commit.SHA, diff,
 				len(commit.Files), commit.Message)
+
+			pr := GetPR(pid)
+			if pr != nil && result != "" {
+				PRPushStep(pid, &Step{
+					Kind:    STEP_DEV_WITH_THEORY,
+					Owner:   step.Owner,
+					Repo:    step.Repo,
+					SHA:     commit.SHA,
+					Command: pr.Title,
+					Result:  result,
+				})
+			}
 		}
 
 	case STEP_REF_READ:
@@ -140,6 +153,27 @@ func PRRunNext(pid int64) (string, error) {
 				step.Owner, step.Repo,
 				step.SHA, diff,
 				len(files), "")
+		}
+
+	case STEP_DEV_WITH_THEORY:
+		theory := step.Result
+		if theory == "" {
+			theory = theorem_get(step.Owner+"/"+step.Repo, step.SHA)
+		}
+		devPrompt := fmt.Sprintf(
+			"[REFERENCE THEORY from %s/%s commit %s]\n%s\n\n"+
+				"[DEVELOPMENT TASK]\n%s\n\n"+
+				"develop code guided by the mathematical theory above. "+
+				"each module must satisfy the invariants and bounds stated.",
+			step.Owner, step.Repo, short_sha(step.SHA),
+			truncDiff(theory, 6000),
+			step.Command)
+		childPid, e := Fork(devPrompt, ".")
+		err = e
+		if err == nil {
+			Wait(childPid)
+			step.ChildPid = childPid
+			result = GetResult(childPid)
 		}
 
 	case STEP_DEV_EXEC:
@@ -240,6 +274,8 @@ func step_name(k StepKind) string {
 		return "ref_first"
 	case STEP_REF_THEORIZE:
 		return "ref_theorize"
+	case STEP_DEV_WITH_THEORY:
+		return "dev_theory"
 	case STEP_DEV_EXEC:
 		return "dev_exec"
 	default:
