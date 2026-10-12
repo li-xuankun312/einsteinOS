@@ -449,7 +449,7 @@ func (m *Model) SingleCompletion(prompt string) string {
 
 	var allText strings.Builder
 
-	for round := 0; round < 10; round++ {
+	for round := 0; round < 20; round++ {
 		body, err := m.client.Completion(convID, req)
 		if err != nil {
 			log.Printf("single_completion: round %d: %v", round, err)

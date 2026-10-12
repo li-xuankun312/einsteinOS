@@ -104,15 +104,18 @@ func ref_clone_is_notfound(owner, name string) bool {
 }
 
 func ref_theorize(parent int64, owner, name, sha, diff string, nfiles int, msg string) string {
-	stdin := fmt.Sprintf("the following is a git diff from %s/%s commit %s (%s), %d files.\n"+
-		"=== BEGIN DIFF ===\n%s\n=== END DIFF ===",
-		owner, name, sha, msg, nfiles, truncDiff(diff, 8000))
-	prompt := stdin + "\n\n" +
-		"analyze the diff above. for each semantic unit (data structure, algorithm, protocol, state machine), " +
-		"write a pure mathematical formalization in LaTeX: definitions (sets, tuples, maps), " +
-		"theorems (invariants, bounds, ordering properties), and proof sketches. " +
-		"use tools to verify LaTeX compiles correctly. " +
-		"no code, no function names, no variable names. only mathematics."
+	dir := fmt.Sprintf("/tmp/ref_%s_%s.git", owner, name)
+	prompt := fmt.Sprintf(
+		"repo %s/%s is cloned at %s (bare repo). commit %s (%s), %d files.\n\n"+
+			"your task:\n"+
+			"1. use git --git-dir %s to read the commit: diff-tree, show, log\n"+
+			"2. read every file in the commit, line by line\n"+
+			"3. for each semantic unit (data structure, algorithm, protocol, state machine), "+
+			"write a pure mathematical formalization in LaTeX\n"+
+			"4. use tools to verify the LaTeX compiles\n"+
+			"5. output ONLY the mathematical content: definitions, theorems, proof sketches\n\n"+
+			"no code, no function names, no variable names. only mathematics.",
+		owner, name, dir, sha, msg, nfiles, dir)
 	child, err := Fork(prompt, ".")
 	if err != nil {
 		return fmt.Sprintf("ref_theorize fork: %v", err)
