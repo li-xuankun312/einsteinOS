@@ -16,7 +16,32 @@ const (
 	STEP_REF_TREE        StepKind = 5
 	STEP_REF_FIRST       StepKind = 6
 	STEP_DEV_EXEC        StepKind = 7
+	STEP_REF_COMPARE     StepKind = 8
 )
+
+// init/main.c lines 182-191:
+//   if (!(pid=fork())) {
+//       close(0);
+//       open("/etc/rc", O_RDONLY, 0);
+//       execve("/bin/sh", argv_rc, envp_rc);
+//   }
+//   while (pid != wait(&i));
+//
+// The parent (main dev conversation) doesn't read /etc/rc itself.
+// It forks a child to do it, waits for the result.
+//
+// STEP_REF_COMPARE does the same thing:
+// 1. Read ref commit diff (already done by STEP_REF_FIRST)
+// 2. Read current codebase listing
+// 3. Fork a CHILD conversation process with both as context
+// 4. Child conversation (Claude) produces the gap analysis
+// 5. Parent receives the result via Wait()
+//
+// This is not a diff tool. The child is a conversation.
+// In user_inputs_only.md the human did this:
+//   "主transport 人家：RDMA 3139行 我们：201行，合理吗你觉得"
+// That was a human reading both codebases and noting the gap.
+// Now a child conversation process does it.
 
 type Step struct {
 	Kind     StepKind
@@ -132,6 +157,51 @@ func PRRunNext(pid int64) (string, error) {
 			result = fmt.Sprintf("%d files", len(files))
 		}
 
+	case STEP_REF_COMPARE:
+		// Read the ref commit result from previous STEP_REF_FIRST
+		var refResult string
+		prStepsMu.Lock()
+		for _, prev := range prSteps[pid] {
+			if prev.Kind == STEP_REF_FIRST &&
+				prev.Owner == step.Owner && prev.Repo == step.Repo &&
+				prev.Result != "" {
+				refResult = prev.Result
+				break
+			}
+		}
+		prStepsMu.Unlock()
+
+		if refResult == "" {
+			err = fmt.Errorf("ref_compare: no ref_first result for %s/%s", step.Owner, step.Repo)
+		} else {
+			// Fork a child conversation process
+			// Like: if (!(pid=fork())) { open("/etc/rc"...); execve("/bin/sh"...); }
+			comparePrompt := fmt.Sprintf(
+				"Reference repo %s/%s first commit:\n%s\n\n"+
+					"Current codebase is at %s.\n"+
+					"What specific subsystems, data structures, and algorithms "+
+					"does the reference have that we are missing? "+
+					"List each gap with the reference's line count.",
+				step.Owner, step.Repo,
+				truncDiff(refResult, 8000),
+				step.Dir)
+
+			childPid, forkErr := Fork(comparePrompt, step.Dir)
+			if forkErr != nil {
+				err = forkErr
+			} else {
+				// while (pid != wait(&i));
+				Wait(childPid)
+				result = GetResult(childPid)
+				if result == "" {
+					// Child conversation hasn't been driven yet.
+					// Store the prompt so the conversation loop can drive it.
+					result = fmt.Sprintf("[child pid=%d] compare ready, prompt=%d chars",
+						childPid, len(comparePrompt))
+				}
+			}
+		}
+
 	case STEP_DEV_EXEC:
 		childPid, e := ForkExec(step.Command, step.Dir)
 		err = e
@@ -233,6 +303,8 @@ func stepKindName(k StepKind) string {
 		return "ref_tree"
 	case STEP_REF_FIRST:
 		return "ref_first"
+	case STEP_REF_COMPARE:
+		return "ref_compare"
 	case STEP_DEV_EXEC:
 		return "dev_exec"
 	default:

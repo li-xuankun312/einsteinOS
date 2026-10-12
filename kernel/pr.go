@@ -95,15 +95,25 @@ func PRFork(repo, branch, title string, refRepos []RefRepo) (int64, error) {
 	// user_inputs_only.md: human said "看mooncake" because there
 	// was no kernel to do it. Here the kernel does it at fork.
 	for _, ref := range refRepos {
+		// mem_init: bind the resource
 		PRPushStep(int64(pid), &Step{
 			Kind:  STEP_REF_CLONE,
 			Owner: ref.Owner,
 			Repo:  ref.Name,
 		})
+		// read first commit: probe the hardware
 		PRPushStep(int64(pid), &Step{
 			Kind:  STEP_REF_FIRST,
 			Owner: ref.Owner,
 			Repo:  ref.Name,
+		})
+		// fork child to compare: init() forks child to run /etc/rc
+		// parent waits, child reads both codebases, produces gap analysis
+		PRPushStep(int64(pid), &Step{
+			Kind:  STEP_REF_COMPARE,
+			Owner: ref.Owner,
+			Repo:  ref.Name,
+			Dir:   ".",
 		})
 	}
 
