@@ -134,43 +134,18 @@ func PRRunNext(pid int64) (string, error) {
 		}
 
 	case STEP_REF_COMPARE:
-		var refResult string
-		prStepsMu.Lock()
-		for _, prev := range prSteps[pid] {
-			if prev.Kind == STEP_REF_FIRST &&
-				prev.Owner == step.Owner && prev.Repo == step.Repo &&
-				prev.Result != "" {
-				refResult = prev.Result
-				break
-			}
-		}
-		prStepsMu.Unlock()
-
+		refResult := findPrevResult(pid, STEP_REF_FIRST, step.Owner, step.Repo)
 		if refResult == "" {
-			err = fmt.Errorf("ref_compare: no ref_first result for %s/%s", step.Owner, step.Repo)
-		} else {
-			comparePrompt := fmt.Sprintf(
-				"Reference repo %s/%s first commit:\n%s\n\n"+
-					"Current codebase is at %s.\n"+
-					"What specific subsystems, data structures, and algorithms "+
-					"does the reference have that we are missing? "+
-					"List each gap with the reference's line count.",
-				step.Owner, step.Repo,
-				truncDiff(refResult, 8000),
-				step.Dir)
-
-			childPid, forkErr := Fork(comparePrompt, step.Dir)
-			if forkErr != nil {
-				err = forkErr
-			} else {
-				Wait(childPid)
-				result = GetResult(childPid)
-				if result == "" {
-					result = fmt.Sprintf("[child pid=%d] compare ready, prompt=%d chars",
-						childPid, len(comparePrompt))
-				}
-			}
+			err = fmt.Errorf("ref_compare: no ref_first for %s/%s", step.Owner, step.Repo)
+			break
 		}
+		childPid, forkErr := Fork(refResult, step.Dir)
+		if forkErr != nil {
+			err = forkErr
+			break
+		}
+		Wait(childPid)
+		result = GetResult(childPid)
 
 	case STEP_DEV_EXEC:
 		childPid, e := ForkExec(step.Command, step.Dir)
@@ -287,6 +262,17 @@ func shortSHA(sha string) string {
 		return sha[:12]
 	}
 	return sha
+}
+
+func findPrevResult(pid int64, kind StepKind, owner, repo string) string {
+	prStepsMu.Lock()
+	defer prStepsMu.Unlock()
+	for _, s := range prSteps[pid] {
+		if s.Kind == kind && s.Owner == owner && s.Repo == repo && s.Result != "" {
+			return s.Result
+		}
+	}
+	return ""
 }
 
 func truncDiff(diff string, max int) string {
