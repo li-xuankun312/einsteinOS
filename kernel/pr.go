@@ -186,11 +186,26 @@ func GetPR(pid int64) *PRProcess {
 }
 
 func parseRefRepos(raw string) []RefRepo {
+	seen := make(map[string]bool)
 	var repos []RefRepo
-	for _, line := range strings.Split(strings.TrimSpace(raw), "\n") {
-		parts := strings.SplitN(strings.TrimSpace(line), "/", 2)
-		if len(parts) == 2 && parts[0] != "" && parts[1] != "" {
-			repos = append(repos, RefRepo{Owner: parts[0], Name: parts[1]})
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(line)
+		line = strings.TrimLeft(line, "0123456789.-*) ")
+		line = strings.TrimPrefix(line, "github.com/")
+		line = strings.TrimPrefix(line, "https://github.com/")
+		if idx := strings.Index(line, " "); idx > 0 {
+			line = line[:idx]
+		}
+		parts := strings.SplitN(line, "/", 3)
+		if len(parts) >= 2 && parts[0] != "" && parts[1] != "" {
+			owner := strings.TrimSpace(parts[0])
+			name := strings.TrimSpace(parts[1])
+			name = strings.TrimRight(name, ".,;:!?")
+			key := owner + "/" + name
+			if !seen[key] && len(owner) > 1 && len(name) > 1 {
+				seen[key] = true
+				repos = append(repos, RefRepo{Owner: owner, Name: name})
+			}
 		}
 	}
 	return repos

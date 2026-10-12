@@ -441,7 +441,7 @@ func (m *Model) SingleCompletion(prompt string) string {
 			Name:                          "",
 			Model:                         m.modelName,
 			IncludeConversationPreferences: true,
-			IsTemporary:                    true,
+			IsTemporary:                    false,
 		},
 	}
 
@@ -449,7 +449,7 @@ func (m *Model) SingleCompletion(prompt string) string {
 
 	body, err := m.client.Completion(convID, req)
 	if err != nil {
-		log.Printf("single_completion: %v", err)
+		log.Printf("single_completion: send failed: %v", err)
 		return ""
 	}
 	defer body.Close()
@@ -463,13 +463,22 @@ func (m *Model) SingleCompletion(prompt string) string {
 				text.WriteString(delta.Delta.Text)
 			}
 		case "message_stop":
-			return text.String()
+			result := text.String()
+			log.Printf("single_completion: conv=%s done, %d bytes: %q",
+				convID[:8], len(result), truncate(result, 200))
+			return result
 		case "error":
 			log.Printf("single_completion: sse error: %s", string(ev.Data))
-			return text.String()
+			result := text.String()
+			log.Printf("single_completion: partial %d bytes: %q",
+				len(result), truncate(result, 200))
+			return result
 		}
 	}
-	return text.String()
+	result := text.String()
+	log.Printf("single_completion: conv=%s stream ended, %d bytes: %q",
+		convID[:8], len(result), truncate(result, 200))
+	return result
 }
 
 func truncate(s string, n int) string {
