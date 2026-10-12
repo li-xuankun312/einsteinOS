@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"fmt"
+	"os"
 	"sync"
 	"time"
 )
@@ -134,12 +135,17 @@ func PRRunNext(pid int64) (string, error) {
 		}
 
 	case STEP_REF_COMPARE:
-		refResult := findPrevResult(pid, STEP_REF_FIRST, step.Owner, step.Repo)
-		if refResult == "" {
-			err = fmt.Errorf("ref_compare: no ref_first for %s/%s", step.Owner, step.Repo)
+		stdin := findPrevResult(pid, STEP_REF_FIRST, step.Owner, step.Repo)
+		if stdin == "" {
+			err = fmt.Errorf("no ref_first for %s/%s", step.Owner, step.Repo)
 			break
 		}
-		childPid, forkErr := Fork(refResult, step.Dir)
+		program, readErr := os.ReadFile(step.Path)
+		if readErr != nil {
+			err = fmt.Errorf("execve %s: %v", step.Path, readErr)
+			break
+		}
+		childPid, forkErr := Fork(string(program)+"\n"+stdin, step.Dir)
 		if forkErr != nil {
 			err = forkErr
 			break

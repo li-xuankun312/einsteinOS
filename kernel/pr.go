@@ -98,6 +98,7 @@ func PRFork(repo, branch, title string, refRepos []RefRepo) (int64, error) {
 			Kind:  STEP_REF_COMPARE,
 			Owner: ref.Owner,
 			Repo:  ref.Name,
+			Path:  "/etc/einstein/ref_compare",
 			Dir:   ".",
 		})
 	}
