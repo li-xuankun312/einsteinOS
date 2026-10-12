@@ -2,6 +2,8 @@ package kernel
 
 import (
 	"fmt"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -47,6 +49,31 @@ var (
 	prTable = make(map[int64]*PRProcess)
 	prMu    sync.Mutex
 )
+
+func PRSetup(task string) []RefRepo {
+	program, err := os.ReadFile("/etc/einstein/setup")
+	if err != nil {
+		return nil
+	}
+	childPid, err := Fork(string(program)+"\n"+task, ".")
+	if err != nil {
+		return nil
+	}
+	Wait(childPid)
+	raw := GetResult(childPid)
+	return parseRefRepos(raw)
+}
+
+func parseRefRepos(raw string) []RefRepo {
+	var repos []RefRepo
+	for _, line := range strings.Split(strings.TrimSpace(raw), "\n") {
+		parts := strings.SplitN(strings.TrimSpace(line), "/", 2)
+		if len(parts) == 2 && parts[0] != "" && parts[1] != "" {
+			repos = append(repos, RefRepo{Owner: parts[0], Name: parts[1]})
+		}
+	}
+	return repos
+}
 
 func PRFork(repo, branch, title string, refRepos []RefRepo) (int64, error) {
 	nr := FindEmptyProcess()
