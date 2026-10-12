@@ -2,7 +2,6 @@ package kernel
 
 import (
 	"fmt"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -50,18 +49,8 @@ var (
 	prMu    sync.Mutex
 )
 
-func PRSetup(task string) []RefRepo {
-	program, err := os.ReadFile("/etc/einstein/setup")
-	if err != nil {
-		return nil
-	}
-	childPid, err := Fork(string(program)+"\n"+task, ".")
-	if err != nil {
-		return nil
-	}
-	Wait(childPid)
-	raw := GetResult(childPid)
-	return parseRefRepos(raw)
+func PRSetup(task string, refs []RefRepo) []RefRepo {
+	return RefInit(task, refs)
 }
 
 func parseRefRepos(raw string) []RefRepo {
@@ -110,24 +99,20 @@ func PRFork(repo, branch, title string, refRepos []RefRepo) (int64, error) {
 	}
 	metaMu.Unlock()
 
-	for _, ref := range refRepos {
+	if len(refRepos) == 0 {
 		PRPushStep(int64(pid), &Step{
-			Kind:  STEP_REF_CLONE,
-			Owner: ref.Owner,
-			Repo:  ref.Name,
+			Kind:    STEP_REF_DISCOVER,
+			Command: title,
 		})
-		PRPushStep(int64(pid), &Step{
-			Kind:  STEP_REF_FIRST,
-			Owner: ref.Owner,
-			Repo:  ref.Name,
-		})
-		PRPushStep(int64(pid), &Step{
-			Kind:  STEP_REF_COMPARE,
-			Owner: ref.Owner,
-			Repo:  ref.Name,
-			Path:  "/etc/einstein/ref_compare",
-			Dir:   ".",
-		})
+	} else {
+		for _, ref := range refRepos {
+			refCloneLocal(ref.Owner, ref.Name)
+			PRPushStep(int64(pid), &Step{
+				Kind:  STEP_REF_FIRST,
+				Owner: ref.Owner,
+				Repo:  ref.Name,
+			})
+		}
 	}
 
 	return int64(pid), nil

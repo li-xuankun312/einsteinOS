@@ -2,7 +2,6 @@ package kernel
 
 import (
 	"fmt"
-	"os"
 	"sync"
 	"time"
 )
@@ -10,14 +9,15 @@ import (
 type StepKind int
 
 const (
-	STEP_REF_CLONE       StepKind = 1
-	STEP_REF_LIST        StepKind = 2
-	STEP_REF_READ_COMMIT StepKind = 3
-	STEP_REF_READ_FILE   StepKind = 4
-	STEP_REF_TREE        StepKind = 5
-	STEP_REF_FIRST       StepKind = 6
-	STEP_DEV_EXEC        StepKind = 7
-	STEP_REF_COMPARE     StepKind = 8
+	STEP_REF_CLONE    StepKind = 1
+	STEP_REF_LIST     StepKind = 2
+	STEP_REF_READ     StepKind = 3
+	STEP_REF_FILE     StepKind = 4
+	STEP_REF_TREE     StepKind = 5
+	STEP_REF_FIRST    StepKind = 6
+	STEP_DEV_EXEC     StepKind = 7
+	STEP_REF_DISCOVER StepKind = 8
+	STEP_REF_THEORIZE StepKind = 9
 )
 
 type Step struct {
@@ -31,6 +31,7 @@ type Step struct {
 	Result   string
 	Files    []string
 	Err      error
+	ChildPid int64
 	Started  time.Time
 	Finished time.Time
 }
@@ -94,24 +95,13 @@ func PRRunNext(pid int64) (string, error) {
 		commits, e := RefListCommits(step.Owner, step.Repo)
 		err = e
 		if err == nil {
-			step.Files = make([]string, 0, len(commits))
-			for _, c := range commits {
-				step.Files = append(step.Files, c.SHA+" "+c.Message)
-			}
 			result = fmt.Sprintf("%d commits", len(commits))
 		}
 
 	case STEP_REF_FIRST:
-		commit, diff, e := RefFirstCommit(step.Owner, step.Repo)
-		err = e
-		if err == nil {
-			step.Files = commit.Files
-			result = fmt.Sprintf("%s %s (%d files)\n%s",
-				commit.SHA[:12], commit.Message,
-				len(commit.Files), truncDiff(diff, 4000))
-		}
+		result = RefReadFirst(pid, step.Owner, step.Repo)
 
-	case STEP_REF_READ_COMMIT:
+	case STEP_REF_READ:
 		diff, files, e := RefReadCommit(step.Owner, step.Repo, step.SHA)
 		err = e
 		if err == nil {
@@ -119,7 +109,7 @@ func PRRunNext(pid int64) (string, error) {
 			result = truncDiff(diff, 4000)
 		}
 
-	case STEP_REF_READ_FILE:
+	case STEP_REF_FILE:
 		content, e := RefFileAt(step.Owner, step.Repo, step.SHA, step.Path)
 		err = e
 		if err == nil {
@@ -134,30 +124,33 @@ func PRRunNext(pid int64) (string, error) {
 			result = fmt.Sprintf("%d files", len(files))
 		}
 
-	case STEP_REF_COMPARE:
-		stdin := findPrevResult(pid, STEP_REF_FIRST, step.Owner, step.Repo)
-		if stdin == "" {
-			err = fmt.Errorf("no ref_first for %s/%s", step.Owner, step.Repo)
-			break
+	case STEP_REF_DISCOVER:
+		refs := refDiscover(step.Command)
+		if len(refs) == 0 {
+			result = "no reference repos found"
+		} else {
+			var names []string
+			for _, r := range refs {
+				names = append(names, r.Owner+"/"+r.Name)
+				refCloneLocal(r.Owner, r.Name)
+				PRPushStep(pid, &Step{
+					Kind:  STEP_REF_FIRST,
+					Owner: r.Owner,
+					Repo:  r.Name,
+				})
+			}
+			result = fmt.Sprintf("discovered: %s", fmt.Sprint(names))
 		}
-		program, readErr := os.ReadFile(step.Path)
-		if readErr != nil {
-			err = fmt.Errorf("execve %s: %v", step.Path, readErr)
-			break
-		}
-		childPid, forkErr := Fork(string(program)+"\n"+stdin, step.Dir)
-		if forkErr != nil {
-			err = forkErr
-			break
-		}
-		Wait(childPid)
-		result = GetResult(childPid)
+
+	case STEP_REF_THEORIZE:
+		result = RefReadCommitTheory(pid, step.Owner, step.Repo, step.SHA)
 
 	case STEP_DEV_EXEC:
 		childPid, e := ForkExec(step.Command, step.Dir)
 		err = e
 		if err == nil {
 			_, code, _ := Wait(childPid)
+			step.ChildPid = childPid
 			result = fmt.Sprintf("exit %d: %s", code, GetResult(childPid))
 		}
 	}
@@ -246,16 +239,18 @@ func stepKindName(k StepKind) string {
 		return "ref_clone"
 	case STEP_REF_LIST:
 		return "ref_list"
-	case STEP_REF_READ_COMMIT:
+	case STEP_REF_READ:
 		return "ref_read"
-	case STEP_REF_READ_FILE:
+	case STEP_REF_FILE:
 		return "ref_file"
 	case STEP_REF_TREE:
 		return "ref_tree"
 	case STEP_REF_FIRST:
 		return "ref_first"
-	case STEP_REF_COMPARE:
-		return "ref_compare"
+	case STEP_REF_DISCOVER:
+		return "ref_discover"
+	case STEP_REF_THEORIZE:
+		return "ref_theorize"
 	case STEP_DEV_EXEC:
 		return "dev_exec"
 	default:
@@ -279,11 +274,4 @@ func findPrevResult(pid int64, kind StepKind, owner, repo string) string {
 		}
 	}
 	return ""
-}
-
-func truncDiff(diff string, max int) string {
-	if len(diff) > max {
-		return diff[:max] + "\n... (truncated)"
-	}
-	return diff
 }
