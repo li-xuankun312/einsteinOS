@@ -55,6 +55,7 @@ func RefClone(owner, name, cloneDir string) (*RefRepoState, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 		defer cancel()
 		cmd := exec.CommandContext(ctx, "git", "clone", "--bare", "--filter=blob:none", url, cloneDir)
+		cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			os.RemoveAll(cloneDir)
