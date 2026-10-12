@@ -111,6 +111,54 @@ func (c *Client) Completion(convID string, req *CompletionRequest) (io.ReadClose
 	return nil, lastErr
 }
 
+func (c *Client) CreateConversation(name, modelName string) (string, error) {
+	url := fmt.Sprintf("%s/api/organizations/%s/chat_conversations",
+		c.baseURL, c.orgID)
+
+	body, err := json.Marshal(map[string]interface{}{
+		"name":  name,
+		"model": modelName,
+	})
+	if err != nil {
+		return "", err
+	}
+
+	req, err := http.NewRequest("POST", url, bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Cookie", c.cookie)
+	req.Header.Set("anthropic-client-platform", "web_claude_ai")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("create conversation: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		return "", fmt.Errorf("create conversation %d: %s", resp.StatusCode, truncBody(respBody))
+	}
+
+	var result struct {
+		UUID string `json:"uuid"`
+		ID   string `json:"id"`
+	}
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return "", fmt.Errorf("parse create response: %w (body: %s)", err, truncBody(respBody))
+	}
+	convID := result.UUID
+	if convID == "" {
+		convID = result.ID
+	}
+	if convID == "" {
+		return "", fmt.Errorf("no conversation id in response: %s", truncBody(respBody))
+	}
+	return convID, nil
+}
+
 func truncBody(b []byte) string {
 	s := string(b)
 	if len(s) > 300 {

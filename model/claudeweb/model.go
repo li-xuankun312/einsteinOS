@@ -426,7 +426,12 @@ func emptyResponse() iter.Seq2[*model.LLMResponse, error] {
 }
 
 func (m *Model) SingleCompletion(prompt string) string {
-	convID := generateUUID()
+	convID, err := m.client.CreateConversation("", m.modelName)
+	if err != nil {
+		log.Printf("single_completion: create conv failed: %v", err)
+		convID = generateUUID()
+	}
+
 	req := &CompletionRequest{
 		Prompt:        prompt,
 		Model:         m.modelName,
@@ -439,12 +444,6 @@ func (m *Model) SingleCompletion(prompt string) string {
 		Files:         []json.RawMessage{},
 		SyncSources:   []json.RawMessage{},
 		Tools:         []WebTool{},
-		CreateConversationParams: &CreateConversationParams{
-			Name:                          "",
-			Model:                         m.modelName,
-			IncludeConversationPreferences: true,
-			IsTemporary:                    false,
-		},
 	}
 
 	log.Printf("single_completion: conv=%s prompt=%q", convID[:8], truncate(prompt, 80))
