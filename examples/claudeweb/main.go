@@ -575,6 +575,12 @@ func newConversation(name string) (*claudeweb.Model, *runner.Runner, string) {
 		Cookie:  cfg.cookie,
 	})
 	llm := claudeweb.NewModel(client, cfg.modelName, cfg.effort)
+
+	kernel.SetConvExec(func(prompt string) string {
+		child := claudeweb.NewModel(client, cfg.modelName, cfg.effort)
+		return child.SingleCompletion(prompt)
+	})
+
 	shadow := &claudeweb.ShadowExecutor{
 		WorkDir: cfg.workDir,
 		Enabled: true,

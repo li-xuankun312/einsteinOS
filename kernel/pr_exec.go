@@ -9,15 +9,14 @@ import (
 type StepKind int
 
 const (
-	STEP_REF_CLONE    StepKind = 1
-	STEP_REF_LIST     StepKind = 2
-	STEP_REF_READ     StepKind = 3
-	STEP_REF_FILE     StepKind = 4
-	STEP_REF_TREE     StepKind = 5
-	STEP_REF_FIRST    StepKind = 6
-	STEP_DEV_EXEC     StepKind = 7
-	STEP_REF_DISCOVER StepKind = 8
-	STEP_REF_THEORIZE StepKind = 9
+	STEP_REF_CLONE StepKind = iota + 1
+	STEP_REF_LIST
+	STEP_REF_READ
+	STEP_REF_FILE
+	STEP_REF_TREE
+	STEP_REF_FIRST
+	STEP_DEV_EXEC
+	STEP_REF_THEORIZE
 )
 
 type Step struct {
@@ -88,7 +87,7 @@ func PRRunNext(pid int64) (string, error) {
 		dir := fmt.Sprintf("/tmp/ref_%s_%s.git", step.Owner, step.Repo)
 		_, err = RefClone(step.Owner, step.Repo, dir)
 		if err == nil {
-			result = fmt.Sprintf("cloned %s/%s -> %s", step.Owner, step.Repo, dir)
+			result = fmt.Sprintf("cloned %s/%s", step.Owner, step.Repo)
 		}
 
 	case STEP_REF_LIST:
@@ -99,7 +98,15 @@ func PRRunNext(pid int64) (string, error) {
 		}
 
 	case STEP_REF_FIRST:
-		result = RefReadFirst(pid, step.Owner, step.Repo)
+		commit, diff, e := RefFirstCommit(step.Owner, step.Repo)
+		err = e
+		if err == nil {
+			step.Files = commit.Files
+			result = ref_theorize(pid,
+				step.Owner, step.Repo,
+				commit.SHA, diff,
+				len(commit.Files), commit.Message)
+		}
 
 	case STEP_REF_READ:
 		diff, files, e := RefReadCommit(step.Owner, step.Repo, step.SHA)
@@ -124,26 +131,16 @@ func PRRunNext(pid int64) (string, error) {
 			result = fmt.Sprintf("%d files", len(files))
 		}
 
-	case STEP_REF_DISCOVER:
-		refs := refDiscover(step.Command)
-		if len(refs) == 0 {
-			result = "no reference repos found"
-		} else {
-			var names []string
-			for _, r := range refs {
-				names = append(names, r.Owner+"/"+r.Name)
-				refCloneLocal(r.Owner, r.Name)
-				PRPushStep(pid, &Step{
-					Kind:  STEP_REF_FIRST,
-					Owner: r.Owner,
-					Repo:  r.Name,
-				})
-			}
-			result = fmt.Sprintf("discovered: %s", fmt.Sprint(names))
-		}
-
 	case STEP_REF_THEORIZE:
-		result = RefReadCommitTheory(pid, step.Owner, step.Repo, step.SHA)
+		diff, files, e := RefReadCommit(step.Owner, step.Repo, step.SHA)
+		err = e
+		if err == nil {
+			step.Files = files
+			result = ref_theorize(pid,
+				step.Owner, step.Repo,
+				step.SHA, diff,
+				len(files), "")
+		}
 
 	case STEP_DEV_EXEC:
 		childPid, e := ForkExec(step.Command, step.Dir)
@@ -161,7 +158,6 @@ func PRRunNext(pid int64) (string, error) {
 
 	PRUnblock(pid)
 	PRAdvance(pid)
-
 	PRTick(pid, int64(step.Finished.Sub(step.Started).Milliseconds()))
 
 	if err != nil {
@@ -183,7 +179,6 @@ func PRRunAll(pid int64) []string {
 			break
 		}
 		results = append(results, result)
-
 		if PRCurrentStep(pid) == nil {
 			break
 		}
@@ -200,15 +195,11 @@ func PRStepLog(pid int64) string {
 
 	out := fmt.Sprintf("  %-4s %-14s %-30s %-8s %s\n",
 		"#", "KIND", "TARGET", "TIME", "STATUS")
-
 	for i, s := range steps {
-		kind := stepKindName(s.Kind)
+		kind := step_name(s.Kind)
 		target := s.Owner + "/" + s.Repo
 		if s.SHA != "" {
-			target += " " + shortSHA(s.SHA)
-		}
-		if s.Path != "" {
-			target += ":" + s.Path
+			target += " " + short_sha(s.SHA)
 		}
 		if len(target) > 30 {
 			target = target[:30]
@@ -233,7 +224,7 @@ func PRStepLog(pid int64) string {
 	return out
 }
 
-func stepKindName(k StepKind) string {
+func step_name(k StepKind) string {
 	switch k {
 	case STEP_REF_CLONE:
 		return "ref_clone"
@@ -247,8 +238,6 @@ func stepKindName(k StepKind) string {
 		return "ref_tree"
 	case STEP_REF_FIRST:
 		return "ref_first"
-	case STEP_REF_DISCOVER:
-		return "ref_discover"
 	case STEP_REF_THEORIZE:
 		return "ref_theorize"
 	case STEP_DEV_EXEC:
@@ -258,7 +247,7 @@ func stepKindName(k StepKind) string {
 	}
 }
 
-func shortSHA(sha string) string {
+func short_sha(sha string) string {
 	if len(sha) > 12 {
 		return sha[:12]
 	}

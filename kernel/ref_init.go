@@ -7,193 +7,114 @@ import (
 	"sync"
 )
 
-type Theorem struct {
-	Repo   string
-	SHA    string
-	Theory string
-	ReadBy int64
+type theorem_entry struct {
+	repo    string
+	sha     string
+	theory  string
+	read_by int64
 }
 
 var (
-	theoremTable [NR_THEOREMS]Theorem
-	theoremCount int
-	theoremMu    sync.Mutex
+	theorem_table [NR_THEOREMS]theorem_entry
+	nr_theorems   int
+	theorem_mu    sync.Mutex
 )
 
 const NR_THEOREMS = 256
 
-func RefInit(task string, refs []RefRepo) []RefRepo {
-	if len(refs) > 0 {
-		for _, ref := range refs {
-			refCloneLocal(ref.Owner, ref.Name)
-		}
-		return refs
-	}
-	refs = refDiscover(task)
-	for _, ref := range refs {
-		refCloneLocal(ref.Owner, ref.Name)
-	}
-	return refs
-}
-
-func refCloneLocal(owner, name string) {
+func ref_clone(owner, name string) {
 	dir := fmt.Sprintf("/tmp/ref_%s_%s.git", owner, name)
 	_, err := RefClone(owner, name, dir)
 	if err != nil {
-		log.Printf("ref_init: clone %s/%s: %v", owner, name, err)
-		return
+		log.Printf("ref_init: %s/%s: %v", owner, name, err)
 	}
-	log.Printf("ref_init: %s/%s -> %s", owner, name, dir)
 }
 
-func refDiscover(task string) []RefRepo {
+func ref_discover(task string) []RefRepo {
 	prompt := task + "\n" +
 		"what reference repositories on github should be studied " +
 		"before developing this? " +
 		"reply with ONLY owner/name lines, nothing else."
-
 	pid, err := Fork(prompt, ".")
 	if err != nil {
 		log.Printf("ref_discover: fork: %v", err)
 		return nil
 	}
-	log.Printf("ref_discover: forked pid %d", pid)
-
+	log.Printf("ref_discover: pid %d", pid)
 	Wait(pid)
-	raw := GetResult(pid)
-	return parseRefRepos(raw)
+	return parseRefRepos(GetResult(pid))
 }
 
-func RefReadFirst(pid int64, owner, name string) string {
-	commit, diff, err := RefFirstCommit(owner, name)
-	if err != nil {
-		return fmt.Sprintf("error: %v", err)
-	}
+func ref_theorize(parent int64, owner, name, sha, diff string, nfiles int, msg string) string {
 	stdin := fmt.Sprintf("repo: %s/%s\ncommit: %s %s\nfiles: %d\n\n%s",
-		owner, name, commit.SHA, commit.Message,
-		len(commit.Files), truncDiff(diff, 8000))
-
-	childPrompt := stdin + "\n" +
+		owner, name, sha, msg, nfiles, truncDiff(diff, 8000))
+	prompt := stdin + "\n" +
 		"read every line above. " +
 		"extract pure mathematical definitions and theorems. " +
 		"no code references, no function names. " +
-		"only math: sets, maps, partial orders, invariants, bounds. " +
-		"each theorem must stand alone without any programming language."
-
-	childPid, err := Fork(childPrompt, ".")
+		"only math: sets, maps, partial orders, invariants, bounds."
+	child, err := Fork(prompt, ".")
 	if err != nil {
-		return fmt.Sprintf("ref_read_first fork: %v", err)
+		return fmt.Sprintf("ref_theorize fork: %v", err)
 	}
-	log.Printf("ref_theorize: pid %d forked child %d for %s/%s first commit",
-		pid, childPid, owner, name)
-
-	Wait(childPid)
-	theory := GetResult(childPid)
-
-	theoremStore(owner+"/"+name, commit.SHA, theory, childPid)
-
-	log.Printf("ref_theorize: %s/%s first commit -> %d bytes",
-		owner, name, len(theory))
+	log.Printf("ref_theorize: parent=%d child=%d %s/%s %s",
+		parent, child, owner, name, sha[:12])
+	Wait(child)
+	theory := GetResult(child)
+	theorem_store(owner+"/"+name, sha, theory, child)
 	return theory
 }
 
-func RefReadCommitTheory(pid int64, owner, name, sha string) string {
-	diff, files, err := RefReadCommit(owner, name, sha)
-	if err != nil {
-		return fmt.Sprintf("error: %v", err)
-	}
-	stdin := fmt.Sprintf("repo: %s/%s\ncommit: %s\nfiles: %s\n\n%s",
-		owner, name, sha,
-		strings.Join(files, ", "),
-		truncDiff(diff, 8000))
-
-	childPrompt := stdin + "\n" +
-		"read every line. " +
-		"extract pure mathematical theory: " +
-		"definitions, theorems, invariants, cost bounds. " +
-		"no code, no function names, only math."
-
-	childPid, err := Fork(childPrompt, ".")
-	if err != nil {
-		return fmt.Sprintf("ref_read_commit fork: %v", err)
-	}
-	log.Printf("ref_theorize: pid %d forked child %d for %s",
-		pid, childPid, sha[:12])
-
-	Wait(childPid)
-	theory := GetResult(childPid)
-
-	theoremStore(owner+"/"+name, sha, theory, childPid)
-	return theory
-}
-
-func theoremStore(repo, sha, theory string, childPid int64) {
-	theoremMu.Lock()
-	defer theoremMu.Unlock()
-	if theoremCount < NR_THEOREMS {
-		theoremTable[theoremCount] = Theorem{
-			Repo:   repo,
-			SHA:    sha,
-			Theory: theory,
-			ReadBy: childPid,
+func theorem_store(repo, sha, theory string, child int64) {
+	theorem_mu.Lock()
+	defer theorem_mu.Unlock()
+	if nr_theorems < NR_THEOREMS {
+		theorem_table[nr_theorems] = theorem_entry{
+			repo: repo, sha: sha, theory: theory, read_by: child,
 		}
-		theoremCount++
+		nr_theorems++
 	}
 }
 
-func GetTheorem(repo, sha string) string {
-	theoremMu.Lock()
-	defer theoremMu.Unlock()
-	for i := 0; i < theoremCount; i++ {
-		t := theoremTable[i]
-		if t.Repo == repo && (sha == "" || strings.HasPrefix(t.SHA, sha)) {
-			return t.Theory
+func theorem_get(repo, sha string) string {
+	theorem_mu.Lock()
+	defer theorem_mu.Unlock()
+	for i := 0; i < nr_theorems; i++ {
+		t := theorem_table[i]
+		if t.repo == repo && (sha == "" || strings.HasPrefix(t.sha, sha)) {
+			return t.theory
 		}
 	}
 	return ""
 }
 
-func GetAllTheorems(repo string) []Theorem {
-	theoremMu.Lock()
-	defer theoremMu.Unlock()
-	var out []Theorem
-	for i := 0; i < theoremCount; i++ {
-		if theoremTable[i].Repo == repo || repo == "" {
-			out = append(out, theoremTable[i])
-		}
+func theorem_list() string {
+	theorem_mu.Lock()
+	defer theorem_mu.Unlock()
+	if nr_theorems == 0 {
+		return "no theorems"
 	}
-	return out
-}
-
-func TheoremList() string {
-	theoremMu.Lock()
-	defer theoremMu.Unlock()
-	if theoremCount == 0 {
-		return "no theorems extracted"
-	}
-	out := fmt.Sprintf("  %-30s %-14s %-8s %s\n",
-		"REPO", "SHA", "BYTES", "CHILD")
-	for i := 0; i < theoremCount; i++ {
-		t := theoremTable[i]
-		sha := t.SHA
+	out := fmt.Sprintf("  %-30s %-14s %-8s %s\n", "REPO", "SHA", "BYTES", "PID")
+	for i := 0; i < nr_theorems; i++ {
+		t := theorem_table[i]
+		sha := t.sha
 		if len(sha) > 12 {
 			sha = sha[:12]
 		}
-		out += fmt.Sprintf("  %-30s %-14s %-8d pid=%d\n",
-			t.Repo, sha, len(t.Theory), t.ReadBy)
+		out += fmt.Sprintf("  %-30s %-14s %-8d %d\n",
+			t.repo, sha, len(t.theory), t.read_by)
 	}
 	return out
 }
 
 func RefInitSummary() string {
-	theoremMu.Lock()
-	defer theoremMu.Unlock()
+	theorem_mu.Lock()
+	defer theorem_mu.Unlock()
 	refMu.Lock()
 	defer refMu.Unlock()
-
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("ref repos: %d  theorems: %d/%d\n",
-		len(refRepos), theoremCount, NR_THEOREMS))
+	sb.WriteString(fmt.Sprintf("refs: %d  theorems: %d/%d\n",
+		len(refRepos), nr_theorems, NR_THEOREMS))
 	for key, r := range refRepos {
 		sb.WriteString(fmt.Sprintf("  %s: %d commits\n", key, len(r.Commits)))
 	}

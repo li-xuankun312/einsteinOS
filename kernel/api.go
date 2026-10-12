@@ -59,6 +59,12 @@ func Init() {
 	taskMeta[0] = &TaskMeta{Pwd: "."}
 }
 
+var convExecFn func(prompt string) string
+
+func SetConvExec(fn func(string) string) {
+	convExecFn = fn
+}
+
 func Fork(prompt string, pwd string) (int64, error) {
 	nr := FindEmptyProcess()
 	if nr < 0 {
@@ -83,15 +89,39 @@ func Fork(prompt string, pwd string) (int64, error) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	metaMu.Lock()
-	taskMeta[int64(pid)] = &TaskMeta{
+	meta := &TaskMeta{
 		Prompt: prompt,
 		Pwd:    pwd,
 		Ctx:    ctx,
 		Cancel: cancel,
 		Done:   make(chan struct{}),
 	}
+	metaMu.Lock()
+	taskMeta[int64(pid)] = meta
 	metaMu.Unlock()
+
+	if convExecFn != nil {
+		go func() {
+			result := convExecFn(prompt)
+
+			metaMu.Lock()
+			meta.Result = result
+			metaMu.Unlock()
+
+			schedMu.Lock()
+			for i := 1; i < NR_TASKS; i++ {
+				if Task[i] != nil && int64(Task[i].Pid) == int64(pid) {
+					Task[i].State = TASK_ZOMBIE
+					Task[i].ExitCode = 0
+					TellFather(Task[i].Father)
+					break
+				}
+			}
+			schedMu.Unlock()
+
+			close(meta.Done)
+		}()
+	}
 
 	return int64(pid), nil
 }

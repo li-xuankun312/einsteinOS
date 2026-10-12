@@ -423,6 +423,57 @@ func emptyResponse() iter.Seq2[*model.LLMResponse, error] {
 	}
 }
 
+func (m *Model) SingleCompletion(prompt string) string {
+	convID := generateUUID()
+	req := &CompletionRequest{
+		Prompt:        prompt,
+		Model:         m.modelName,
+		Timezone:      "Asia/Shanghai",
+		Locale:        "en-US",
+		Effort:        m.effort,
+		ThinkingMode:  "off",
+		RenderingMode: "messages",
+		Attachments:   []json.RawMessage{},
+		Files:         []json.RawMessage{},
+		SyncSources:   []json.RawMessage{},
+		Tools:         []WebTool{},
+		CreateConversationParams: &CreateConversationParams{
+			Name:                          "",
+			Model:                         m.modelName,
+			IncludeConversationPreferences: true,
+			IsTemporary:                   true,
+		},
+	}
+
+	log.Printf("single_completion: conv=%s prompt=%q", convID[:8], truncate(prompt, 80))
+
+	body, _, err := m.client.SendCompletion(convID, "", req)
+	if err != nil {
+		log.Printf("single_completion: send: %v", err)
+		return ""
+	}
+	defer body.Close()
+
+	var text strings.Builder
+	scanner := NewSSEScanner(body)
+	for scanner.Next() {
+		event := scanner.Event()
+		switch event.Event {
+		case "content_block_delta":
+			var ev ContentBlockDeltaEvent
+			if json.Unmarshal(event.Data, &ev) == nil && ev.Delta.Type == "text_delta" {
+				text.WriteString(ev.Delta.Text)
+			}
+		case "message_stop":
+			return text.String()
+		case "error":
+			log.Printf("single_completion: error: %s", string(event.Data))
+			return text.String()
+		}
+	}
+	return text.String()
+}
+
 func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s

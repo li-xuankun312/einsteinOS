@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -10,11 +11,11 @@ import (
 )
 
 const (
-	PR_DRAFT    = TASK_RUNNING
-	PR_WORKING  = TASK_INTERRUPTIBLE
-	PR_BLOCKED  = TASK_UNINTERRUPTIBLE
-	PR_CLOSED   = TASK_ZOMBIE
-	PR_MERGED   = TASK_STOPPED
+	PR_DRAFT   = TASK_RUNNING
+	PR_WORKING = TASK_INTERRUPTIBLE
+	PR_BLOCKED = TASK_UNINTERRUPTIBLE
+	PR_CLOSED  = TASK_ZOMBIE
+	PR_MERGED  = TASK_STOPPED
 )
 
 type RefRepo struct {
@@ -42,37 +43,28 @@ type PRCommit struct {
 	Time    time.Time
 }
 
-
-
 var (
 	prTable = make(map[int64]*PRProcess)
 	prMu    sync.Mutex
 )
 
-func PRSetup(task string, refs []RefRepo) []RefRepo {
-	return RefInit(task, refs)
-}
-
-func parseRefRepos(raw string) []RefRepo {
-	var repos []RefRepo
-	for _, line := range strings.Split(strings.TrimSpace(raw), "\n") {
-		parts := strings.SplitN(strings.TrimSpace(line), "/", 2)
-		if len(parts) == 2 && parts[0] != "" && parts[1] != "" {
-			repos = append(repos, RefRepo{Owner: parts[0], Name: parts[1]})
-		}
+func PRSetup(task string) []RefRepo {
+	refs := ref_discover(task)
+	for _, r := range refs {
+		ref_clone(r.Owner, r.Name)
 	}
-	return repos
+	log.Printf("pr_setup: %d refs", len(refs))
+	return refs
 }
 
-func PRFork(repo, branch, title string, refRepos []RefRepo) (int64, error) {
+func PRFork(repo, branch, title string, refs []RefRepo) (int64, error) {
 	nr := FindEmptyProcess()
 	if nr < 0 {
-		return 0, fmt.Errorf("pr_fork: task table full (%d slots)", NR_TASKS)
+		return 0, fmt.Errorf("pr_fork: table full")
 	}
-
 	pid := CopyProcess(nr, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
 	if pid < 0 {
-		return 0, fmt.Errorf("pr_fork: copy_process failed (%d)", pid)
+		return 0, fmt.Errorf("pr_fork: copy_process %d", pid)
 	}
 
 	SetTokenBudget(int64(pid), DEFAULT_TOKEN_BUDGET)
@@ -83,7 +75,7 @@ func PRFork(repo, branch, title string, refRepos []RefRepo) (int64, error) {
 		Repo:       repo,
 		Branch:     branch,
 		Title:      title,
-		RefRepos:   refRepos,
+		RefRepos:   refs,
 		CreateTime: time.Now(),
 	}
 
@@ -99,23 +91,19 @@ func PRFork(repo, branch, title string, refRepos []RefRepo) (int64, error) {
 	}
 	metaMu.Unlock()
 
-	if len(refRepos) == 0 {
-		PRPushStep(int64(pid), &Step{
-			Kind:    STEP_REF_DISCOVER,
-			Command: title,
+	for _, ref := range refs {
+		pr_push_step(int64(pid), &Step{
+			Kind:  STEP_REF_FIRST,
+			Owner: ref.Owner,
+			Repo:  ref.Name,
 		})
-	} else {
-		for _, ref := range refRepos {
-			refCloneLocal(ref.Owner, ref.Name)
-			PRPushStep(int64(pid), &Step{
-				Kind:  STEP_REF_FIRST,
-				Owner: ref.Owner,
-				Repo:  ref.Name,
-			})
-		}
 	}
 
 	return int64(pid), nil
+}
+
+func pr_push_step(pid int64, s *Step) {
+	PRPushStep(pid, s)
 }
 
 func PRAddCommit(pid int64, sha, message string, files []string, diff string) {
@@ -126,11 +114,7 @@ func PRAddCommit(pid int64, sha, message string, files []string, diff string) {
 		return
 	}
 	pr.Commits = append(pr.Commits, PRCommit{
-		SHA:     sha,
-		Message: message,
-		Files:   files,
-		Diff:    diff,
-		Time:    time.Now(),
+		SHA: sha, Message: message, Files: files, Diff: diff, Time: time.Now(),
 	})
 }
 
@@ -142,13 +126,11 @@ func PRMerge(pid int64) error {
 			t.State = PR_MERGED
 			t.ExitCode = 0
 			schedMu.Unlock()
-
 			prMu.Lock()
 			if pr := prTable[pid]; pr != nil {
 				pr.MergeTime = time.Now()
 			}
 			prMu.Unlock()
-
 			TellFather(t.Father)
 			return nil
 		}
@@ -203,6 +185,17 @@ func GetPR(pid int64) *PRProcess {
 	return prTable[pid]
 }
 
+func parseRefRepos(raw string) []RefRepo {
+	var repos []RefRepo
+	for _, line := range strings.Split(strings.TrimSpace(raw), "\n") {
+		parts := strings.SplitN(strings.TrimSpace(line), "/", 2)
+		if len(parts) == 2 && parts[0] != "" && parts[1] != "" {
+			repos = append(repos, RefRepo{Owner: parts[0], Name: parts[1]})
+		}
+	}
+	return repos
+}
+
 func PRPs() string {
 	schedMu.Lock()
 	defer schedMu.Unlock()
@@ -246,9 +239,7 @@ func PRPs() string {
 		}
 
 		out += fmt.Sprintf("  %-6d %-8d %-10s %-4d %-30s %s\n",
-			t.Pid, t.Counter, state,
-			len(pr.Commits),
-			repo, title)
+			t.Pid, t.Counter, state, len(pr.Commits), repo, title)
 	}
 	return out
 }
