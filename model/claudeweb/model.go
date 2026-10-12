@@ -1,9 +1,11 @@
 package claudeweb
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"iter"
 	"log"
 	"strings"
@@ -454,8 +456,11 @@ func (m *Model) SingleCompletion(prompt string) string {
 	}
 	defer body.Close()
 
+	var rawBuf bytes.Buffer
+	tee := io.TeeReader(body, &rawBuf)
+
 	var text strings.Builder
-	for ev := range ParseSSEStream(body) {
+	for ev := range ParseSSEStream(tee) {
 		switch ev.Event {
 		case "content_block_delta":
 			var delta ContentBlockDeltaEvent
@@ -476,8 +481,12 @@ func (m *Model) SingleCompletion(prompt string) string {
 		}
 	}
 	result := text.String()
-	log.Printf("single_completion: conv=%s stream ended, %d bytes: %q",
-		convID[:8], len(result), truncate(result, 200))
+	raw := rawBuf.String()
+	log.Printf("single_completion: conv=%s stream ended, text=%d raw=%d",
+		convID[:8], len(result), len(raw))
+	if len(result) == 0 && len(raw) > 0 {
+		log.Printf("single_completion: raw response: %q", truncate(raw, 500))
+	}
 	return result
 }
 
