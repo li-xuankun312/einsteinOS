@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -160,14 +161,15 @@ func PRRunNext(pid int64) (string, error) {
 		if theory == "" {
 			theory = theorem_get(step.Owner+"/"+step.Repo, step.SHA)
 		}
+		task := strip_credentials(step.Command)
 		devPrompt := fmt.Sprintf(
 			"[REFERENCE THEORY from %s/%s commit %s]\n%s\n\n"+
 				"[DEVELOPMENT TASK]\n%s\n\n"+
-				"develop code guided by the mathematical theory above. "+
-				"each module must satisfy the invariants and bounds stated.",
+				"based on the mathematical theory above, write code that satisfies "+
+				"the stated invariants and bounds. output ONLY code and brief comments.",
 			step.Owner, step.Repo, short_sha(step.SHA),
 			truncDiff(theory, 6000),
-			step.Command)
+			task)
 		childPid, e := Fork(devPrompt, ".")
 		err = e
 		if err == nil {
@@ -288,6 +290,20 @@ func short_sha(sha string) string {
 		return sha[:12]
 	}
 	return sha
+}
+
+func strip_credentials(s string) string {
+	var lines []string
+	for _, line := range strings.Split(s, "\n") {
+		if strings.Contains(line, "ghp_") ||
+			strings.Contains(line, "@stu.") ||
+			strings.Contains(line, "token") ||
+			strings.Contains(line, "password") {
+			continue
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func findPrevResult(pid int64, kind StepKind, owner, repo string) string {

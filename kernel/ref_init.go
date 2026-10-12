@@ -104,13 +104,16 @@ func ref_clone_is_notfound(owner, name string) bool {
 }
 
 func ref_theorize(parent int64, owner, name, sha, diff string, nfiles int, msg string) string {
-	stdin := fmt.Sprintf("repo: %s/%s\ncommit: %s %s\nfiles: %d\n\n%s",
+	stdin := fmt.Sprintf("the following is a git diff from %s/%s commit %s (%s), %d files.\n"+
+		"the COMPLETE diff is provided below between the markers. do NOT attempt to read any repository or use any tools.\n"+
+		"=== BEGIN DIFF ===\n%s\n=== END DIFF ===",
 		owner, name, sha, msg, nfiles, truncDiff(diff, 8000))
-	prompt := stdin + "\n" +
-		"read every line above. " +
-		"extract pure mathematical definitions and theorems. " +
-		"no code references, no function names. " +
-		"only math: sets, maps, partial orders, invariants, bounds."
+	prompt := stdin + "\n\n" +
+		"analyze the diff above. for each semantic unit (data structure, algorithm, protocol, state machine), " +
+		"write a pure mathematical formalization: definitions (sets, tuples, maps), " +
+		"theorems (invariants, bounds, ordering properties), and proofs sketches. " +
+		"no code, no function names, no variable names. only mathematics. " +
+		"output ONLY the mathematical content, no preamble, no narration."
 	child, err := Fork(prompt, ".")
 	if err != nil {
 		return fmt.Sprintf("ref_theorize fork: %v", err)
