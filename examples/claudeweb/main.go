@@ -275,6 +275,56 @@ func main() {
 				fmt.Println("  Usage: /artifact ls | /artifact cat <name>")
 			}
 
+		case strings.HasPrefix(input, "/pr "):
+			task := strings.TrimSpace(strings.TrimPrefix(input, "/pr "))
+			if task == "" {
+				fmt.Println("  Usage: /pr <development task>")
+				continue
+			}
+			refRepos := kernel.PRSetup(task)
+			fmt.Printf("  setup: %d reference repos discovered\n", len(refRepos))
+			for _, r := range refRepos {
+				fmt.Printf("    %s/%s\n", r.Owner, r.Name)
+			}
+			pid, err := kernel.PRFork(".", "dev", task, refRepos)
+			if err != nil {
+				fmt.Printf("  pr_fork failed: %v\n", err)
+				continue
+			}
+			total, _ := kernel.PRStepCount(pid)
+			fmt.Printf("  PR pid=%d, %d steps queued\n", pid, total)
+			go func(p int64) {
+				for {
+					next := kernel.PRSchedule()
+					if next != p {
+						break
+					}
+					result, err := kernel.PRRunNext(p)
+					if err != nil {
+						log.Printf("[PR %d] step error: %v", p, err)
+						break
+					}
+					_, done := kernel.PRStepCount(p)
+					log.Printf("[PR %d] step %d done: %s", p, done, truncLog(result, 200))
+					if kernel.PRCurrentStep(p) == nil {
+						break
+					}
+				}
+				log.Printf("[PR %d] all steps complete", p)
+			}(pid)
+			fmt.Printf("  running in background — /pr_status %d to check\n\n", pid)
+
+		case strings.HasPrefix(input, "/pr_status"):
+			args := strings.TrimSpace(strings.TrimPrefix(input, "/pr_status"))
+			if args == "" {
+				fmt.Print(kernel.PRPs())
+			} else {
+				pid, _ := strconv.ParseInt(args, 10, 64)
+				fmt.Print(kernel.PRStepLog(pid))
+				fmt.Print(kernel.PRScheduleInfo())
+			}
+			fmt.Println()
+
 		case strings.HasPrefix(input, "/sync "):
 			parts := strings.Fields(input)
 			if len(parts) < 2 {
@@ -580,6 +630,14 @@ func envRequired(key string) string {
 func mustGetwd() string {
 	d, _ := os.Getwd()
 	return d
+}
+
+func truncLog(s string, n int) string {
+	s = strings.TrimSpace(s)
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
 }
 
 func artifactTypeName(t int) string {
