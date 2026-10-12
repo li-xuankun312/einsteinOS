@@ -447,37 +447,90 @@ func (m *Model) SingleCompletion(prompt string) string {
 
 	log.Printf("single_completion: conv=%s prompt=%q", convID[:8], truncate(prompt, 80))
 
-	body, err := m.client.Completion(convID, req)
-	if err != nil {
-		log.Printf("single_completion: send failed: %v", err)
-		return ""
-	}
-	defer body.Close()
+	var allText strings.Builder
 
-	var text strings.Builder
-	for ev := range ParseSSEStream(body) {
-		switch ev.Event {
-		case "content_block_delta":
-			var delta ContentBlockDeltaEvent
-			if json.Unmarshal(ev.Data, &delta) == nil && delta.Delta.Type == "text_delta" {
-				text.WriteString(delta.Delta.Text)
+	for round := 0; round < 10; round++ {
+		body, err := m.client.Completion(convID, req)
+		if err != nil {
+			log.Printf("single_completion: round %d: %v", round, err)
+			break
+		}
+
+		var textBuf strings.Builder
+		tbs := map[int]*toolBlock{}
+		var tools []toolBlock
+
+		for event := range ParseSSEStream(body) {
+			switch event.Event {
+			case "content_block_start":
+				var ev ContentBlockStartEvent
+				if json.Unmarshal(event.Data, &ev) == nil && ev.ContentBlock.Type == "tool_use" {
+					tbs[ev.Index] = &toolBlock{id: ev.ContentBlock.ID, name: ev.ContentBlock.Name}
+				}
+			case "content_block_delta":
+				var ev ContentBlockDeltaEvent
+				if json.Unmarshal(event.Data, &ev) == nil {
+					if ev.Delta.Type == "text_delta" {
+						textBuf.WriteString(ev.Delta.Text)
+					} else if ev.Delta.Type == "input_json_delta" {
+						if tb, ok := tbs[ev.Index]; ok {
+							tb.inputJSON.WriteString(ev.Delta.PartialJSON)
+						}
+					}
+				}
+			case "content_block_stop":
+				var ev ContentBlockStopEvent
+				if json.Unmarshal(event.Data, &ev) == nil {
+					if tb, ok := tbs[ev.Index]; ok {
+						tools = append(tools, *tb)
+						delete(tbs, ev.Index)
+					}
+				}
+			case "message_stop", "error":
+				body.Close()
+				goto roundDone
 			}
-		case "message_stop":
-			result := text.String()
-			log.Printf("single_completion: conv=%s done, %d bytes: %q",
-				convID[:8], len(result), truncate(result, 200))
-			return result
-		case "error":
-			log.Printf("single_completion: sse error: %s", string(ev.Data))
-			result := text.String()
-			log.Printf("single_completion: partial %d bytes: %q",
-				len(result), truncate(result, 200))
-			return result
+		}
+		body.Close()
+
+	roundDone:
+		allText.WriteString(textBuf.String())
+
+		if len(tools) == 0 || m.Shadow == nil {
+			break
+		}
+
+		log.Printf("single_completion: round %d, %d tools", round, len(tools))
+		var results []ToolResult
+		for _, tb := range tools {
+			out := m.Shadow.Execute(tb.name, tb.inputJSON.String())
+			results = append(results, ToolResult{ToolUseID: tb.id, Content: out})
+			log.Printf("single_completion: %s -> %s", tb.name, truncate(out, 80))
+		}
+
+		var cont strings.Builder
+		cont.WriteString("Continue.\n\n")
+		for _, tr := range results {
+			cont.WriteString(fmt.Sprintf("[%s] %s\n\n", tr.ToolUseID, truncate(tr.Content, 500)))
+		}
+
+		req = &CompletionRequest{
+			Prompt:        cont.String(),
+			Model:         m.modelName,
+			Timezone:      "Asia/Shanghai",
+			Locale:        "en-US",
+			Effort:        m.effort,
+			ThinkingMode:  "off",
+			RenderingMode: "messages",
+			Attachments:   []json.RawMessage{},
+			Files:         []json.RawMessage{},
+			SyncSources:   []json.RawMessage{},
+			Tools:         []WebTool{},
 		}
 	}
-	result := text.String()
-	log.Printf("single_completion: conv=%s done, %d bytes",
-		convID[:8], len(result))
+
+	result := allText.String()
+	log.Printf("single_completion: conv=%s done, %d bytes", convID[:8], len(result))
 	return result
 }
 
