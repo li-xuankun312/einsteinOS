@@ -35,14 +35,49 @@ func ref_discover(task string) []RefRepo {
 		"what reference repositories on github should be studied " +
 		"before developing this? " +
 		"reply with ONLY owner/name lines, nothing else."
-	pid, err := Fork(prompt, ".")
-	if err != nil {
-		log.Printf("ref_discover: fork: %v", err)
-		return nil
+
+	var good []RefRepo
+	var tried int
+
+	for tried < 3 {
+		tried++
+		pid, err := Fork(prompt, ".")
+		if err != nil {
+			log.Printf("ref_discover: fork: %v", err)
+			return good
+		}
+		log.Printf("ref_discover: attempt %d pid %d", tried, pid)
+		Wait(pid)
+
+		candidates := parseRefRepos(GetResult(pid))
+		if len(candidates) == 0 {
+			return good
+		}
+
+		var failed []string
+		for _, r := range candidates {
+			ref_clone(r.Owner, r.Name)
+			refMu.Lock()
+			_, ok := refRepos[r.Owner+"/"+r.Name]
+			refMu.Unlock()
+			if ok {
+				good = append(good, r)
+			} else {
+				failed = append(failed, r.Owner+"/"+r.Name)
+			}
+		}
+
+		if len(failed) == 0 {
+			return good
+		}
+
+		log.Printf("ref_discover: %d failed: %v", len(failed), failed)
+		prompt = fmt.Sprintf(
+			"these repos do not exist on github: %s\n"+
+				"correct the owner/name. reply with ONLY owner/name lines.",
+			strings.Join(failed, ", "))
 	}
-	log.Printf("ref_discover: pid %d", pid)
-	Wait(pid)
-	return parseRefRepos(GetResult(pid))
+	return good
 }
 
 func ref_theorize(parent int64, owner, name, sha, diff string, nfiles int, msg string) string {

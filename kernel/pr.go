@@ -50,9 +50,6 @@ var (
 
 func PRSetup(task string) []RefRepo {
 	refs := ref_discover(task)
-	for _, r := range refs {
-		ref_clone(r.Owner, r.Name)
-	}
 	log.Printf("pr_setup: %d refs", len(refs))
 	return refs
 }
