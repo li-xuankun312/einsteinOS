@@ -83,32 +83,17 @@ func PRFork(repo, branch, title string, refRepos []RefRepo) (int64, error) {
 	}
 	metaMu.Unlock()
 
-	// Theorem 9.8 (Boot as Monotone Binding):
-	// ref repos are hardware. Bind them BEFORE userspace runs.
-	// Like main.c: mem_init() before move_to_user_mode().
-	//
-	// The PR process never "decides" to search for reference repos.
-	// The kernel pushes ref reading steps into the step queue
-	// at fork time. When the scheduler runs this PR, it hits
-	// ref steps first, dev steps second. Init order, not prompting.
-	//
-	// user_inputs_only.md: human said "看mooncake" because there
-	// was no kernel to do it. Here the kernel does it at fork.
 	for _, ref := range refRepos {
-		// mem_init: bind the resource
 		PRPushStep(int64(pid), &Step{
 			Kind:  STEP_REF_CLONE,
 			Owner: ref.Owner,
 			Repo:  ref.Name,
 		})
-		// read first commit: probe the hardware
 		PRPushStep(int64(pid), &Step{
 			Kind:  STEP_REF_FIRST,
 			Owner: ref.Owner,
 			Repo:  ref.Name,
 		})
-		// fork child to compare: init() forks child to run /etc/rc
-		// parent waits, child reads both codebases, produces gap analysis
 		PRPushStep(int64(pid), &Step{
 			Kind:  STEP_REF_COMPARE,
 			Owner: ref.Owner,
