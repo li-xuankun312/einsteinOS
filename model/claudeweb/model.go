@@ -441,33 +441,31 @@ func (m *Model) SingleCompletion(prompt string) string {
 			Name:                          "",
 			Model:                         m.modelName,
 			IncludeConversationPreferences: true,
-			IsTemporary:                   true,
+			IsTemporary:                    true,
 		},
 	}
 
 	log.Printf("single_completion: conv=%s prompt=%q", convID[:8], truncate(prompt, 80))
 
-	body, _, err := m.client.SendCompletion(convID, "", req)
+	body, err := m.client.Completion(convID, req)
 	if err != nil {
-		log.Printf("single_completion: send: %v", err)
+		log.Printf("single_completion: %v", err)
 		return ""
 	}
 	defer body.Close()
 
 	var text strings.Builder
-	scanner := NewSSEScanner(body)
-	for scanner.Next() {
-		event := scanner.Event()
-		switch event.Event {
+	for ev := range ParseSSEStream(body) {
+		switch ev.Event {
 		case "content_block_delta":
-			var ev ContentBlockDeltaEvent
-			if json.Unmarshal(event.Data, &ev) == nil && ev.Delta.Type == "text_delta" {
-				text.WriteString(ev.Delta.Text)
+			var delta ContentBlockDeltaEvent
+			if json.Unmarshal(ev.Data, &delta) == nil && delta.Delta.Type == "text_delta" {
+				text.WriteString(delta.Delta.Text)
 			}
 		case "message_stop":
 			return text.String()
 		case "error":
-			log.Printf("single_completion: error: %s", string(event.Data))
+			log.Printf("single_completion: sse error: %s", string(ev.Data))
 			return text.String()
 		}
 	}
