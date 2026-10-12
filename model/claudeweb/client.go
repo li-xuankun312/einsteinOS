@@ -86,23 +86,35 @@ func (c *Client) Completion(convID string, req *CompletionRequest) (io.ReadClose
 		resp, err := c.httpClient.Do(httpReq)
 		if err != nil {
 			lastErr = fmt.Errorf("http request: %w", err)
+			log.Printf("claudeweb: attempt %d http error: %v", attempt, err)
 			continue
 		}
 
 		if resp.StatusCode >= 500 {
+			errBody, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
-			lastErr = fmt.Errorf("API returned %d", resp.StatusCode)
+			lastErr = fmt.Errorf("API %d: %s", resp.StatusCode, truncBody(errBody))
+			log.Printf("claudeweb: attempt %d status %d: %s", attempt, resp.StatusCode, truncBody(errBody))
 			continue
 		}
 
 		if resp.StatusCode != http.StatusOK {
-			defer resp.Body.Close()
 			errBody, _ := io.ReadAll(resp.Body)
-			return nil, fmt.Errorf("API returned %d: %s", resp.StatusCode, string(errBody))
+			resp.Body.Close()
+			log.Printf("claudeweb: attempt %d status %d: %s", attempt, resp.StatusCode, truncBody(errBody))
+			return nil, fmt.Errorf("API %d: %s", resp.StatusCode, truncBody(errBody))
 		}
 
 		return resp.Body, nil
 	}
 
 	return nil, lastErr
+}
+
+func truncBody(b []byte) string {
+	s := string(b)
+	if len(s) > 300 {
+		return s[:300] + "..."
+	}
+	return s
 }
