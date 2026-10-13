@@ -174,11 +174,7 @@ func PRRunNext(pid int64) (string, error) {
 		}
 		task := strip_credentials(step.Command)
 		repo := step.Owner + "/" + step.Repo
-		feedback := pr_feedback(pid, map[string]string{
-			"repo":   repo,
-			"task":   task,
-			"commit": short_sha(step.SHA),
-		})
+		feedback := pr_feedback(pid)
 		devPrompt := fmt.Sprintf(
 			"[REFERENCE THEORY from %s commit %s]\n%s\n\n"+
 				"[DEVELOPMENT TASK]\n%s",
@@ -324,12 +320,7 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 	prompt.WriteString("\n[TASK]\n")
 	prompt.WriteString(task)
 
-	feedback := pr_feedback(pid, map[string]string{
-		"repo":  repo,
-		"task":  task,
-		"files": fmt.Sprintf("%d", len(files)),
-		"lines": fmt.Sprintf("%d", read),
-	})
+	feedback := pr_feedback(pid)
 	if feedback != "" {
 		prompt.WriteString(fmt.Sprintf("\n\n[DEVELOPMENT DISCIPLINE from prior review]\n%s", feedback))
 	}
@@ -472,7 +463,60 @@ func StepName(k StepKind) string {
 	return step_name(k)
 }
 
-func pr_feedback(pid int64, ctx map[string]string) string {
+func pr_collect_ctx(pid int64) map[string][]string {
+	ctx := map[string][]string{}
+	seen := map[string]bool{}
+
+	add := func(key, val string) {
+		if val == "" {
+			return
+		}
+		k := key + ":" + val
+		if seen[k] {
+			return
+		}
+		seen[k] = true
+		ctx[key] = append(ctx[key], val)
+	}
+
+	prMu.Lock()
+	pr := prTable[pid]
+	if pr != nil {
+		add("branch", pr.Branch)
+		add("target", pr.Repo)
+		for _, ref := range pr.RefRepos {
+			add("repo", ref.Owner+"/"+ref.Name)
+		}
+		for _, c := range pr.Commits {
+			add("commit", c.SHA)
+			for _, f := range c.Files {
+				add("file", f)
+			}
+		}
+	}
+	prMu.Unlock()
+
+	prStepsMu.Lock()
+	for _, s := range prSteps[pid] {
+		if s.Owner != "" && s.Repo != "" {
+			add("repo", s.Owner+"/"+s.Repo)
+		}
+		if s.SHA != "" {
+			add("commit", short_sha(s.SHA))
+		}
+		if s.Path != "" {
+			add("path", s.Path)
+		}
+		for _, f := range s.Files {
+			add("file", f)
+		}
+	}
+	prStepsMu.Unlock()
+
+	return ctx
+}
+
+func pr_feedback(pid int64) string {
 	prMu.Lock()
 	pr := prTable[pid]
 	if pr == nil || len(pr.Feedback) == 0 {
@@ -483,11 +527,13 @@ func pr_feedback(pid int64, ctx map[string]string) string {
 	copy(rules, pr.Feedback)
 	prMu.Unlock()
 
+	ctx := pr_collect_ctx(pid)
+
 	var sb strings.Builder
 	for _, rule := range rules {
 		line := rule
-		for k, v := range ctx {
-			line = strings.ReplaceAll(line, "{"+k+"}", v)
+		for k, vals := range ctx {
+			line = strings.ReplaceAll(line, "{"+k+"}", strings.Join(vals, ", "))
 		}
 		sb.WriteString(line)
 		sb.WriteString("\n")
@@ -516,11 +562,7 @@ func ref_diff(pid int64, step *Step) (string, error) {
 		task = strip_credentials(pr.Title)
 	}
 
-	feedback := pr_feedback(pid, map[string]string{
-		"repo": step.Owner + "/" + step.Repo,
-		"task": task,
-		"path": step.Path,
-	})
+	feedback := pr_feedback(pid)
 
 	var prompt strings.Builder
 	prompt.WriteString(fmt.Sprintf("[REFERENCE FILE from %s/%s commit %s]\n=== %s ===\n",
