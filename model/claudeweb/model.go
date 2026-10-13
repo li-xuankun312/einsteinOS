@@ -342,11 +342,16 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 				text = "(empty response)"
 			}
 
-			if stream && st.rounds > 0 && !st.decidedOnce && kernel.GetConvExec() != nil {
+			if st.rounds > 0 && !st.decidedOnce {
 				st.decidedOnce = true
-				next := m.decideNext(text)
+				var next string
+				if stream && kernel.GetConvExec() != nil {
+					next = m.decideNext(text)
+				} else {
+					next = m.decideNextLocal(text)
+				}
 				if next != "" {
-					log.Printf("claudeweb: end_turn -> child decided: %s", truncate(next, 120))
+					log.Printf("claudeweb: end_turn -> continue: %s", truncate(next, 120))
 					st.consecutiveContinues = 0
 					webReq.Prompt = next
 					webReq.CreateConversationParams = nil
@@ -483,6 +488,21 @@ func emptyResponse() iter.Seq2[*model.LLMResponse, error] {
 			FinishReason: genai.FinishReasonStop,
 		}, nil)
 	}
+}
+
+func (m *Model) decideNextLocal(lastOutput string) string {
+	lower := strings.ToLower(lastOutput)
+	if strings.Contains(lower, "error") ||
+		strings.Contains(lower, "failed") ||
+		strings.Contains(lower, "not found") {
+		return "the previous step had errors. fix them and continue."
+	}
+	if strings.Contains(lower, "which direction") ||
+		strings.Contains(lower, "want me to") ||
+		strings.Contains(lower, "should i") {
+		return "continue with the most relevant next step."
+	}
+	return ""
 }
 
 func (m *Model) decideNext(lastOutput string) string {
