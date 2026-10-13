@@ -268,3 +268,49 @@ func PRPs() string {
 	}
 	return out
 }
+
+func PRBuildContext(task string, refs []RefRepo) string {
+	var ctx strings.Builder
+
+	ctx.WriteString("[TASK]\n")
+	ctx.WriteString(strip_credentials(task))
+	ctx.WriteString("\n\n")
+
+	for _, ref := range refs {
+		commit, _, err := RefFirstCommit(ref.Owner, ref.Name)
+		if err != nil {
+			log.Printf("pr_context: %s/%s: %v", ref.Owner, ref.Name, err)
+			continue
+		}
+
+		files, _ := RefTreeAt(ref.Owner, ref.Name, commit.SHA)
+		read := 0
+		var src strings.Builder
+		for _, f := range files {
+			content, e := RefFileAt(ref.Owner, ref.Name, commit.SHA, f)
+			if e != nil {
+				continue
+			}
+			lines := strings.Count(content, "\n") + 1
+			src.WriteString(fmt.Sprintf("=== %s (%d lines) ===\n", f, lines))
+			src.WriteString(content)
+			src.WriteString("\n\n")
+			read += lines
+		}
+
+		ctx.WriteString(fmt.Sprintf("[REFERENCE: %s/%s first commit %s — %d files, %d lines]\n",
+			ref.Owner, ref.Name, commit.SHA[:12], len(files), read))
+		ctx.WriteString(src.String())
+		ctx.WriteString("\n")
+
+		theory := theorem_get(ref.Owner+"/"+ref.Name, "")
+		if theory != "" {
+			ctx.WriteString(fmt.Sprintf("[THEORY from %s/%s]\n%s\n\n", ref.Owner, ref.Name, theory))
+		}
+
+		log.Printf("pr_context: %s/%s %d files %d lines",
+			ref.Owner, ref.Name, len(files), read)
+	}
+
+	return ctx.String()
+}

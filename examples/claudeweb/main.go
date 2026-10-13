@@ -281,38 +281,19 @@ func main() {
 				fmt.Println("  Usage: /pr <development task>")
 				continue
 			}
+			fmt.Println("  discovering reference repos...")
 			refRepos := kernel.PRSetup(task)
-			fmt.Printf("  setup: %d reference repos discovered\n", len(refRepos))
+			fmt.Printf("  %d refs:", len(refRepos))
 			for _, r := range refRepos {
-				fmt.Printf("    %s/%s\n", r.Owner, r.Name)
+				fmt.Printf(" %s/%s", r.Owner, r.Name)
 			}
-			pid, err := kernel.PRFork(".", "dev", task, refRepos)
-			if err != nil {
-				fmt.Printf("  pr_fork failed: %v\n", err)
-				continue
-			}
-			total, _ := kernel.PRStepCount(pid)
-			fmt.Printf("  PR pid=%d, %d steps queued\n", pid, total)
-			go func(p int64) {
-				for {
-					next := kernel.PRSchedule()
-					if next != p {
-						break
-					}
-					result, err := kernel.PRRunNext(p)
-					if err != nil {
-						log.Printf("[PR %d] step error: %v", p, err)
-						break
-					}
-					_, done := kernel.PRStepCount(p)
-					log.Printf("[PR %d] step %d done: %s", p, done, truncLog(result, 200))
-					if kernel.PRCurrentStep(p) == nil {
-						break
-					}
-				}
-				log.Printf("[PR %d] all steps complete", p)
-			}(pid)
-			fmt.Printf("  running in background — /pr_status %d to check\n\n", pid)
+			fmt.Println()
+
+			fmt.Println("  reading first commit source...")
+			prContext := kernel.PRBuildContext(task, refRepos)
+			fmt.Printf("  context: %d bytes, sending to main conversation...\n\n", len(prContext))
+			osRunPrompt(mainLLM, mainRunner, mainSessID, prContext)
+			fmt.Println()
 
 		case strings.HasPrefix(input, "/pr_status"):
 			args := strings.TrimSpace(strings.TrimPrefix(input, "/pr_status"))
