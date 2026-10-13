@@ -295,24 +295,42 @@ func main() {
 			fmt.Printf("  PR pid=%d, %d steps queued\n", pid, total)
 			go func(p int64) {
 				for {
+					step := kernel.PRCurrentStep(p)
+					if step == nil {
+						break
+					}
 					next := kernel.PRSchedule()
 					if next != p {
 						break
 					}
+
 					result, err := kernel.PRRunNext(p)
-					if err != nil {
-						log.Printf("[PR %d] step error: %v", p, err)
-						break
-					}
 					_, done := kernel.PRStepCount(p)
-					log.Printf("[PR %d] step %d done: %s", p, done, truncLog(result, 200))
-					if kernel.PRCurrentStep(p) == nil {
-						break
+					if err != nil {
+						log.Printf("[PR %d] step %d error: %v", p, done, err)
+					} else {
+						log.Printf("[PR %d] step %d done: %s", p, done, truncLog(result, 200))
 					}
+
+					stderr := ""
+					if step.ChildPid > 0 {
+						stderr = kernel.GetStderr(step.ChildPid)
+					}
+
+					feedback := fmt.Sprintf(
+						"[PR step %d/%d: %s %s/%s result]\n%s",
+						done, total,
+						kernel.StepName(step.Kind), step.Owner, step.Repo,
+						truncLog(result, 4000))
+					if stderr != "" {
+						feedback += fmt.Sprintf("\n[tool outputs]\n%s", truncLog(stderr, 4000))
+					}
+
+					osRunPrompt(mainLLM, mainRunner, mainSessID, feedback)
 				}
 				log.Printf("[PR %d] all steps complete", p)
 			}(pid)
-			fmt.Printf("  running in background — /pr_status %d to check\n\n", pid)
+			fmt.Printf("  pipeline started — results feed back to main conversation\n\n")
 
 		case strings.HasPrefix(input, "/pr_status"):
 			args := strings.TrimSpace(strings.TrimPrefix(input, "/pr_status"))

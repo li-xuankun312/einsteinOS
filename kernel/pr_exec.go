@@ -445,3 +445,7 @@ func findPrevResult(pid int64, kind StepKind, owner, repo string) string {
 	}
 	return ""
 }
+
+func StepName(k StepKind) string {
+	return step_name(k)
+}
