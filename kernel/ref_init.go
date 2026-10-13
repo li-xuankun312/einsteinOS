@@ -18,6 +18,41 @@ type theorem_entry struct {
 	read_by int64
 }
 
+const theorize_instruction = `for each function / struct / method in the code above, produce TWO layers:
+
+[LAYER 1 — MATH]
+formal specification: types, preconditions, postconditions, invariants.
+use LaTeX. example:
+  \text{SetPosition}: \mathcal{S} \times \mathbb{Z}_{\geq 0} \to \{\top, \bot\},
+  \quad s.\text{pos} \leftarrow p \iff s.\text{handle} \neq \text{null}
+
+[LAYER 2 — FORM TEMPLATE]
+rewrite every identifier with its structural role:
+  - project namespace  → prjname
+  - adjective prefix   → adj
+  - object class       → Obj
+  - type alias         → typenameType
+  - member handle      → objtype
+  - local result var   → argname
+  - callback/closure   → cbname
+  - index/counter      → idx
+preserve the code structure, braces, control flow, operators exactly.
+example — before:
+  bool LocalFileStream::SetPosition(musik::core::sdk::PositionType position) {
+      if (!this->file) return false;
+      return fseek(this->file, (long)position, SEEK_SET) == 0;
+  }
+after:
+  bool adjObjStream::SetPosition(prjname::core::sdk::typenameType position) {
+      if (!this->objtype) return false;
+      return fseek(this->objtype, (long)position, SEEK_SET) == 0;
+  }
+
+both layers are required for every semantic unit. do not skip either layer.
+the form template is not regex — you must understand each identifier's ROLE
+(handle vs argument vs return value vs namespace) to assign the right tag.
+`
+
 var (
 	theorem_table [NR_THEOREMS]theorem_entry
 	nr_theorems   int
@@ -139,13 +174,13 @@ func extractRepoMentions(text string) []RefRepo {
 			idx := strings.Index(line, prefix)
 			for idx >= 0 {
 				rest := line[idx+len(prefix):]
-				if sp := strings.IndexAny(rest, " \t,;:!?)>\"'"); sp > 0 {
+				if sp := strings.IndexAny(rest, " \t,;:!?)>\"'\u3002\uff0c\u3001\uff1b\uff1a\uff01\uff1f"); sp > 0 {
 					rest = rest[:sp]
 				}
 				parts := strings.SplitN(rest, "/", 3)
 				if len(parts) >= 2 && parts[0] != "" && parts[1] != "" {
 					owner := parts[0]
-					name := strings.TrimRight(parts[1], ".,;:!?")
+					name := strings.TrimRight(parts[1], ".,;:!?\u3002\uff0c\u3001\uff1b\uff1a\uff01\uff1f")
 					if !skip[name] {
 						key := owner + "/" + name
 						if !seen[key] && len(owner) > 1 && len(name) > 1 {
@@ -231,9 +266,7 @@ func ref_theorize_leaf(parent int64, owner, name, sha string, files []string, ta
 	log.Printf("ref_theorize: %s/%s %s: %d files, %d lines fed",
 		owner, name, sha[:12], len(files), read)
 
-	prompt := src.String() +
-		"for each semantic unit write pure LaTeX mathematics.\n" +
-		"no code, no function names, no variable names. only math.\n" +
+	prompt := src.String() + theorize_instruction +
 		"the repo is at " + dir + " if you need git."
 
 	child, err := Fork(prompt, ".")

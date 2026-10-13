@@ -99,12 +99,10 @@ func ref_split_fork(parent_pid int64, owner, repo, sha string, files []string, t
 		src_text = src_text[:100000]
 	}
 
-	prompt := src_text +
-		"for each semantic unit in these files write pure LaTeX mathematics.\n" +
-		"no code, no function names, no variable names. only math.\n" +
+	prompt := src_text + theorize_instruction +
 		"the repo is at " + dir + " if you need git.\n" +
 		"if any single file is too large to fully analyze, " +
-		"list its functions and write math for the most important ones."
+		"list its functions and produce both layers for the most important ones."
 
 	pid, err := Fork(prompt, ".")
 	if err != nil {
@@ -145,9 +143,7 @@ func ref_split_leaf(parent_pid int64, owner, repo, sha string, files []string, t
 		src_text = src_text[:120000]
 	}
 
-	prompt := src_text +
-		"for each semantic unit write pure LaTeX mathematics.\n" +
-		"no code, no function names, no variable names. only math.\n" +
+	prompt := src_text + theorize_instruction +
 		"the repo is at " + dir + " if you need git."
 
 	pid, err := Fork(prompt, ".")
