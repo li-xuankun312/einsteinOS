@@ -189,14 +189,16 @@ type loopState struct {
 	consecutiveContinues int
 	usedServices         bool
 	decidedOnce          bool
+	isChild              bool
 	convID               string
 }
 
-func (m *Model) completionLoop(ctx context.Context, convID string, webReq *CompletionRequest, stream bool, yield func(*model.LLMResponse, error) bool) {
+func (m *Model) completionLoop(ctx context.Context, convID string, webReq *CompletionRequest, stream bool, yield func(*model.LLMResponse, error) bool, opts ...bool) {
 	const maxContinues = 8
 	const maxRounds = 20
 
-	st := &loopState{convID: convID}
+	isChild := len(opts) > 0 && opts[0]
+	st := &loopState{convID: convID, isChild: isChild}
 
 	doExit := func(code int, text string) {
 		if text == "" {
@@ -318,7 +320,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 					collectedTools = append(collectedTools, *tb)
 					delete(toolBlocks, ev.Index)
 				}
-				if len(collectedTools)+st.totalTools >= 30 && !st.usedServices {
+				if len(collectedTools)+st.totalTools >= 30 && !st.usedServices && !st.isChild {
 					log.Printf("claudeweb: tool count %d mid-stream, stopping response",
 						len(collectedTools)+st.totalTools)
 					m.client.StopResponse(st.convID)
@@ -387,7 +389,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 
 		st.totalTools += len(collectedTools)
 
-		if st.totalTools >= 30 && !st.usedServices {
+		if st.totalTools >= 30 && !st.usedServices && !st.isChild {
 			for _, tb := range collectedTools {
 				if tb.name == "pr_setup" || tb.name == "pr_step" || tb.name == "sync_repo" {
 					st.usedServices = true
@@ -624,7 +626,7 @@ func (m *Model) RunConversation(prompt string) (string, string) {
 			}
 		}
 		return true
-	})
+	}, true)
 
 	stdout := result.String()
 	stderr := m.toolLog.String()

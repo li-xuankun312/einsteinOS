@@ -48,23 +48,23 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 	node := split_alloc(parent_pid, depth, owner, repo, sha, files)
 
 	var child_pids []int64
+	var results []string
 	for i, chunk := range chunks {
 		child_pid := ref_split_fork(parent_pid, owner, repo, sha, chunk, task, depth+1, i, len(chunks))
-		if child_pid > 0 {
-			child_pids = append(child_pids, child_pid)
+		if child_pid <= 0 {
+			continue
 		}
+		child_pids = append(child_pids, child_pid)
+		Wait(child_pid)
+		results = append(results, GetResult(child_pid))
+		log.Printf("ref_split: %s/%s@%s chunk %d/%d done",
+			owner, repo, short_sha(sha), i+1, len(chunks))
 	}
 
 	if node >= 0 {
 		split_mu.Lock()
 		split_table[node].Children = child_pids
 		split_mu.Unlock()
-	}
-
-	var results []string
-	for _, cpid := range child_pids {
-		Wait(cpid)
-		results = append(results, GetResult(cpid))
 	}
 
 	merged := strings.Join(results, "\n\n")

@@ -565,6 +565,7 @@ func newConversation(name string) (*claudeweb.Model, *runner.Runner, string) {
 			"li-xuankun312": "20224550109@stu.usc.edu.cn",
 			"zeng-bin3123":  "20210820209@stu.usc.edu.cn",
 		},
+		RegisterDevRepo: kernel.RegisterDevRepo,
 	})
 	if projectDB != nil {
 		shadow.RegisterDriver(vikingdb.NewVikingDBDriver(dbEngine, projectDB))

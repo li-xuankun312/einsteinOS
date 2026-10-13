@@ -8,8 +8,9 @@ import (
 )
 
 type SyncDriver struct {
-	Engine    *Engine
-	ProjectDB **ProjectDB
+	Engine          *Engine
+	ProjectDB       **ProjectDB
+	RegisterDevRepo func(string, string)
 	Token     string
 	Roots     map[string]string
 }
@@ -50,6 +51,10 @@ func (d *SyncDriver) Execute(name string, inputJSON string, workDir string) stri
 	err := syncer.SyncRepo(parts[0], parts[1])
 	if err != nil {
 		return fmt.Sprintf("sync %s failed: %v", input.Repo, err)
+	}
+
+	if d.RegisterDevRepo != nil {
+		d.RegisterDevRepo(parts[0], parts[1])
 	}
 
 	summary := (*d.ProjectDB).ProjectSummary(input.Repo)

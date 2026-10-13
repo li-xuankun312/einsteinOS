@@ -75,11 +75,33 @@ func ref_clone(owner, name string) {
 
 const MAX_REFS = 3
 
+var (
+	dev_repos    = make(map[string]bool)
+	dev_repos_mu sync.Mutex
+)
+
+func RegisterDevRepo(owner, name string) {
+	dev_repos_mu.Lock()
+	dev_repos[owner+"/"+name] = true
+	dev_repos_mu.Unlock()
+	log.Printf("ref_init: registered dev repo %s/%s", owner, name)
+}
+
+func is_dev_repo(owner, name string) bool {
+	dev_repos_mu.Lock()
+	defer dev_repos_mu.Unlock()
+	return dev_repos[owner+"/"+name]
+}
+
 func ref_discover(task string) []RefRepo {
 	var good []RefRepo
 
 	direct := extractRepoMentions(task)
 	for _, r := range direct {
+		if is_dev_repo(r.Owner, r.Name) {
+			log.Printf("ref_discover: skip dev repo %s/%s", r.Owner, r.Name)
+			continue
+		}
 		ref_clone(r.Owner, r.Name)
 		refMu.Lock()
 		_, ok := refRepos[r.Owner+"/"+r.Name]
