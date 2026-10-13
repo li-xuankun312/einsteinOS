@@ -26,7 +26,9 @@ var (
 
 const NR_THEOREMS = 256
 
-var TheoremStoreHook func(repo, sha, theory string)
+var theorem_writeback func(repo, sha, theory string)
+
+func SetTheoremWriteback(fn func(string, string, string)) { theorem_writeback = fn }
 
 func ref_clone(owner, name string) {
 	dir := fmt.Sprintf("/tmp/ref_%s_%s.git", owner, name)
@@ -129,12 +131,12 @@ func ref_theorize(parent int64, owner, name, sha, diff string, nfiles int, msg s
 		src.WriteString("\n\n")
 	}
 
-	sourceText := src.String()
-	if len(sourceText) > 120000 {
-		sourceText = sourceText[:120000]
+	src_text := src.String()
+	if len(src_text) > 120000 {
+		src_text = src_text[:120000]
 	}
 
-	prompt := sourceText + "\n" +
+	prompt := src_text + "\n" +
 		"above is every file in commit " + sha[:12] + " of " + owner + "/" + name + ".\n" +
 		"for each semantic unit write pure LaTeX mathematics: " +
 		"definitions, theorems, lemmas, proof sketches.\n" +
@@ -162,8 +164,8 @@ func theorem_store(repo, sha, theory string, child int64) {
 		}
 		nr_theorems++
 	}
-	if TheoremStoreHook != nil {
-		go TheoremStoreHook(repo, sha, theory)
+	if theorem_writeback != nil {
+		go theorem_writeback(repo, sha, theory)
 	}
 }
 

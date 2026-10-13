@@ -90,7 +90,7 @@ func PRRunNext(pid int64) (string, error) {
 
 	switch step.Kind {
 	case STEP_HW_PROBE:
-		result, err = run_hw_probe(pid)
+		result, err = hw_init(pid)
 
 	case STEP_REF_CLONE:
 		dir := fmt.Sprintf("/tmp/ref_%s_%s.git", step.Owner, step.Repo)
@@ -130,7 +130,7 @@ func PRRunNext(pid int64) (string, error) {
 		}
 
 	case STEP_REF_THEORIZE_ALL:
-		result, err = run_theorize_all(pid, step.Owner, step.Repo)
+		result, err = ref_bind(pid, step.Owner, step.Repo)
 
 	case STEP_REF_READ:
 		diff, files, e := RefReadCommit(step.Owner, step.Repo, step.SHA)
@@ -189,7 +189,7 @@ func PRRunNext(pid int64) (string, error) {
 		}
 
 	case STEP_DEV_FROM_THEOREMS:
-		result, err = run_dev_from_theorems(pid, step)
+		result, err = dev_from_theorems(pid, step)
 
 	case STEP_DEV_EXEC:
 		childPid, e := ForkExec(step.Command, step.Dir)
@@ -215,7 +215,7 @@ func PRRunNext(pid int64) (string, error) {
 	return result, nil
 }
 
-func run_hw_probe(pid int64) (string, error) {
+func hw_init(pid int64) (string, error) {
 	commands := []string{
 		"cat /proc/cpuinfo | head -30",
 		"free -h",
@@ -243,25 +243,25 @@ func run_hw_probe(pid int64) (string, error) {
 		}
 	}
 
-	hwInfo := strings.Join(results, "\n---\n")
-	log.Printf("hw_probe: pid=%d %d bytes", pid, len(hwInfo))
+	hw_info := strings.Join(results, "\n---\n")
+	log.Printf("hw_init: pid=%d %d bytes", pid, len(hw_info))
 
 	prMu.Lock()
 	pr := prTable[pid]
 	prMu.Unlock()
 	if pr != nil {
-		pr.HWInfo = hwInfo
+		pr.HWInfo = hw_info
 	}
 
-	return hwInfo, nil
+	return hw_info, nil
 }
 
-func run_theorize_all(pid int64, owner, repo string) (string, error) {
+func ref_bind(pid int64, owner, repo string) (string, error) {
 	commits, err := RefListCommits(owner, repo)
 	if err != nil {
 		return "", err
 	}
-	log.Printf("ref_theorize_all: %s/%s %d commits", owner, repo, len(commits))
+	log.Printf("ref_bind: %s/%s %d commits", owner, repo, len(commits))
 
 	done := 0
 	for i, c := range commits {
@@ -272,7 +272,7 @@ func run_theorize_all(pid int64, owner, repo string) (string, error) {
 
 		diff, files, e := RefReadCommit(owner, repo, c.SHA)
 		if e != nil {
-			log.Printf("ref_theorize_all: skip %s: %v", c.SHA[:12], e)
+			log.Printf("ref_bind: skip %s: %v", c.SHA[:12], e)
 			continue
 		}
 
@@ -280,36 +280,36 @@ func run_theorize_all(pid int64, owner, repo string) (string, error) {
 		done++
 
 		if (i+1)%10 == 0 {
-			log.Printf("ref_theorize_all: %s/%s %d/%d commits", owner, repo, done, len(commits))
+			log.Printf("ref_bind: %s/%s %d/%d", owner, repo, done, len(commits))
 		}
 	}
 
 	count := theorem_count(owner + "/" + repo)
-	result := fmt.Sprintf("%s/%s: %d commits → %d theorems", owner, repo, len(commits), count)
-	log.Printf("ref_theorize_all: %s", result)
+	result := fmt.Sprintf("%s/%s: %d commits %d theorems", owner, repo, len(commits), count)
+	log.Printf("ref_bind: %s", result)
 	return result, nil
 }
 
-func run_dev_from_theorems(pid int64, step *Step) (string, error) {
+func dev_from_theorems(pid int64, step *Step) (string, error) {
 	repo := step.Owner + "/" + step.Repo
-	allTheorems := theorem_get_all(repo)
+	all_theorems := theorem_get_all(repo)
 
 	pr := GetPR(pid)
 	task := ""
-	hwInfo := ""
+	hw_info := ""
 	if pr != nil {
 		task = strip_credentials(pr.Title)
-		hwInfo = pr.HWInfo
+		hw_info = pr.HWInfo
 	}
 
 	var prompt strings.Builder
-	if hwInfo != "" {
+	if hw_info != "" {
 		prompt.WriteString("[HARDWARE]\n")
-		prompt.WriteString(truncDiff(hwInfo, 2000))
+		prompt.WriteString(truncDiff(hw_info, 2000))
 		prompt.WriteString("\n\n")
 	}
 	prompt.WriteString(fmt.Sprintf("[THEOREMS from %s — %d entries]\n", repo, theorem_count(repo)))
-	prompt.WriteString(truncDiff(allTheorems, 80000))
+	prompt.WriteString(truncDiff(all_theorems, 80000))
 	prompt.WriteString("\n\n[TASK]\n")
 	prompt.WriteString(task)
 	prompt.WriteString("\n\nbased on the accumulated mathematical theory, write code. output ONLY code.")
@@ -398,11 +398,11 @@ func step_name(k StepKind) string {
 	case STEP_REF_THEORIZE:
 		return "ref_theorize"
 	case STEP_REF_THEORIZE_ALL:
-		return "ref_all"
+		return "ref_bind"
 	case STEP_DEV_WITH_THEORY:
 		return "dev_theory"
 	case STEP_DEV_FROM_THEOREMS:
-		return "dev_theorems"
+		return "dev_thms"
 	case STEP_DEV_EXEC:
 		return "dev_exec"
 	case STEP_HW_PROBE:
