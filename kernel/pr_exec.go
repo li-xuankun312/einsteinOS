@@ -195,6 +195,7 @@ func PRRunNext(pid int64) (string, error) {
 	PRUnblock(pid)
 	PRAdvance(pid)
 	PRTick(pid, int64(step.Finished.Sub(step.Started).Milliseconds()))
+	PRSave(pid)
 
 	if err != nil {
 		return "", err

@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -101,6 +102,19 @@ func (c *Client) Completion(convID string, req *CompletionRequest) (io.ReadClose
 			resp.Body.Close()
 			lastErr = fmt.Errorf("API %d: %s", resp.StatusCode, truncBody(errBody))
 			log.Printf("claudeweb: attempt %d status %d: %s", attempt, resp.StatusCode, truncBody(errBody))
+			continue
+		}
+
+		if resp.StatusCode == 429 || (resp.StatusCode >= 500 && resp.StatusCode < 600) {
+			errBody, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			errStr := string(errBody)
+			log.Printf("claudeweb: attempt %d status %d: %s", attempt, resp.StatusCode, truncBody(errBody))
+			if strings.Contains(errStr, "使用次数已达到限制") || strings.Contains(errStr, "请稍后再试") {
+				lastErr = fmt.Errorf("RATE_LIMIT: %s", truncBody(errBody))
+				continue
+			}
+			lastErr = fmt.Errorf("API %d: %s", resp.StatusCode, truncBody(errBody))
 			continue
 		}
 
