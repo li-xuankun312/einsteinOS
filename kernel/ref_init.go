@@ -317,7 +317,16 @@ func ref_theorize_leaf(parent int64, owner, name, sha string, files []string, ta
 	log.Printf("ref_theorize: %s/%s %s: %d files (%d binary skipped), %d lines fed",
 		owner, name, sha[:12], len(files), skipped, read)
 
-	prompt := src.String() + theorize_instruction +
+	var extra string
+	if read < 50 {
+		extra = fmt.Sprintf(
+			"\nNOTE: only %d lines of source were included above (binary/doc files skipped). "+
+				"use git at %s to read the actual source files for this commit: "+
+				"git ls-tree -r --name-only %s | head -50, then git show %s:<path>.\n",
+			read, dir, sha[:12], sha[:12])
+	}
+
+	prompt := src.String() + extra + theorize_instruction +
 		"the repo is at " + dir + " if you need git."
 
 	child, err := Fork(prompt, ".")
@@ -409,6 +418,26 @@ func truncDiff(s string, n int) string {
 		return s
 	}
 	return s[:n]
+}
+
+func isDocOnlyFile(path string) bool {
+	lower := strings.ToLower(path)
+	base := lower
+	if idx := strings.LastIndex(lower, "/"); idx >= 0 {
+		base = lower[idx+1:]
+	}
+	for _, name := range []string{
+		"readme.md", "readme.rst", "readme.txt", "readme",
+		"license", "license.md", "license.txt",
+		"changelog.md", "changelog.txt", "changes.md",
+		"contributing.md", "code_of_conduct.md",
+		".gitignore", ".gitattributes", ".editorconfig",
+	} {
+		if base == name {
+			return true
+		}
+	}
+	return false
 }
 
 func isBinaryFile(path string) bool {

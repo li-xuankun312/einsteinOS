@@ -265,18 +265,42 @@ func ref_bind(pid int64, owner, repo string) (string, error) {
 		return "", fmt.Errorf("ref_bind: %s/%s no commits", owner, repo)
 	}
 
-	first := commits[0]
-	first_files, _ := RefTreeAt(owner, repo, first.SHA)
-
-	log.Printf("ref_bind: %s/%s %d commits, first=%s %d files",
-		owner, repo, len(commits), short_sha(first.SHA), len(first_files))
-
 	task := ref_theorize_task(pid)
 
-	if len(first_files) > SPLIT_CHUNK {
-		ref_split(pid, owner, repo, first.SHA, first_files, task, 0)
+	var theoryCommit *RefCommit
+	var theoryFiles []string
+	for i := 0; i < len(commits) && i < 20; i++ {
+		c := commits[i]
+		files, _ := RefTreeAt(owner, repo, c.SHA)
+		src_count := 0
+		for _, f := range files {
+			if !isBinaryFile(f) && !isDocOnlyFile(f) {
+				src_count++
+			}
+		}
+		log.Printf("ref_bind: %s/%s %s: %d files (%d source)",
+			owner, repo, short_sha(c.SHA), len(files), src_count)
+		if src_count >= 2 {
+			theoryCommit = &commits[i]
+			theoryFiles = files
+			break
+		}
+	}
+
+	if theoryCommit == nil {
+		theoryCommit = &commits[0]
+		theoryFiles, _ = RefTreeAt(owner, repo, theoryCommit.SHA)
+		log.Printf("ref_bind: %s/%s no source-heavy commit in first 20, using first",
+			owner, repo)
+	}
+
+	log.Printf("ref_bind: %s/%s %d commits, theorize=%s %d files",
+		owner, repo, len(commits), short_sha(theoryCommit.SHA), len(theoryFiles))
+
+	if len(theoryFiles) > SPLIT_CHUNK {
+		ref_split(pid, owner, repo, theoryCommit.SHA, theoryFiles, task, 0)
 	} else {
-		ref_theorize(pid, owner, repo, first.SHA, "", len(first_files), first.Message)
+		ref_theorize(pid, owner, repo, theoryCommit.SHA, "", len(theoryFiles), theoryCommit.Message)
 	}
 
 	var diffLog strings.Builder
