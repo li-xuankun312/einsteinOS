@@ -23,6 +23,7 @@ const (
 	STEP_HW_PROBE
 	STEP_REF_BIND
 	STEP_DEV_FROM_THEOREMS
+	STEP_REF_DIFF
 )
 
 type Step struct {
@@ -197,6 +198,9 @@ func PRRunNext(pid int64) (string, error) {
 
 	case STEP_DEV_FROM_THEOREMS:
 		result, err = dev_from_theorems(pid, step)
+
+	case STEP_REF_DIFF:
+		result, err = ref_diff(pid, step)
 
 	case STEP_DEV_EXEC:
 		childPid, e := ForkExec(step.Command, step.Dir)
@@ -425,6 +429,8 @@ func step_name(k StepKind) string {
 		return "dev_exec"
 	case STEP_HW_PROBE:
 		return "hw_probe"
+	case STEP_REF_DIFF:
+		return "ref_diff"
 	default:
 		return "?"
 	}
@@ -495,4 +501,55 @@ func PRFeedbackAdd(pid int64, rule string) {
 	if pr := prTable[pid]; pr != nil {
 		pr.Feedback = append(pr.Feedback, rule)
 	}
+}
+
+func ref_diff(pid int64, step *Step) (string, error) {
+	refContent, err := RefFileAt(step.Owner, step.Repo, step.SHA, step.Path)
+	if err != nil {
+		return "", fmt.Errorf("ref %s/%s@%s %s: %w",
+			step.Owner, step.Repo, short_sha(step.SHA), step.Path, err)
+	}
+
+	pr := GetPR(pid)
+	task := ""
+	if pr != nil {
+		task = strip_credentials(pr.Title)
+	}
+
+	feedback := pr_feedback(pid, map[string]string{
+		"repo": step.Owner + "/" + step.Repo,
+		"task": task,
+		"path": step.Path,
+	})
+
+	var prompt strings.Builder
+	prompt.WriteString(fmt.Sprintf("[REFERENCE FILE from %s/%s commit %s]\n=== %s ===\n",
+		step.Owner, step.Repo, short_sha(step.SHA), step.Path))
+	prompt.WriteString(refContent)
+	prompt.WriteString("\n\n[OUR CODE]\nread the corresponding file in our working directory.\n")
+	prompt.WriteString("compare the two from the whole-function perspective.\n")
+	prompt.WriteString("output concrete feedback: what our code is missing, what patterns differ, what to change.\n")
+	prompt.WriteString(fmt.Sprintf("context: %s\n", task))
+	if feedback != "" {
+		prompt.WriteString(fmt.Sprintf("\n[PRIOR REVIEW FEEDBACK]\n%s", feedback))
+	}
+
+	child, err := Fork(prompt.String(), step.Dir)
+	if err != nil {
+		return "", err
+	}
+	Wait(child)
+	step.ChildPid = child
+
+	result := GetResult(child)
+
+	lines := strings.Split(result, "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" && (strings.HasPrefix(trimmed, "- ") || strings.HasPrefix(trimmed, "* ")) {
+			PRFeedbackAdd(pid, trimmed[2:])
+		}
+	}
+
+	return result, nil
 }
