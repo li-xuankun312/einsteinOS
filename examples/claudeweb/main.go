@@ -281,56 +281,9 @@ func main() {
 				fmt.Println("  Usage: /pr <development task>")
 				continue
 			}
-			refRepos := kernel.PRSetup(task)
-			fmt.Printf("  setup: %d reference repos discovered\n", len(refRepos))
-			for _, r := range refRepos {
-				fmt.Printf("    %s/%s\n", r.Owner, r.Name)
-			}
-			pid, err := kernel.PRFork(".", "dev", task, refRepos)
-			if err != nil {
-				fmt.Printf("  pr_fork failed: %v\n", err)
-				continue
-			}
-			total, _ := kernel.PRStepCount(pid)
-			fmt.Printf("  PR pid=%d, %d steps queued\n", pid, total)
-			go func(p int64) {
-				for {
-					step := kernel.PRCurrentStep(p)
-					if step == nil {
-						break
-					}
-					next := kernel.PRSchedule()
-					if next != p {
-						break
-					}
-
-					result, err := kernel.PRRunNext(p)
-					_, done := kernel.PRStepCount(p)
-					if err != nil {
-						log.Printf("[PR %d] step %d error: %v", p, done, err)
-					} else {
-						log.Printf("[PR %d] step %d done: %s", p, done, truncLog(result, 200))
-					}
-
-					stderr := ""
-					if step.ChildPid > 0 {
-						stderr = kernel.GetStderr(step.ChildPid)
-					}
-
-					feedback := fmt.Sprintf(
-						"[PR step %d/%d: %s %s/%s result]\n%s",
-						done, total,
-						kernel.StepName(step.Kind), step.Owner, step.Repo,
-						truncLog(result, 4000))
-					if stderr != "" {
-						feedback += fmt.Sprintf("\n[tool outputs]\n%s", truncLog(stderr, 4000))
-					}
-
-					osRunPrompt(mainLLM, mainRunner, mainSessID, feedback)
-				}
-				log.Printf("[PR %d] all steps complete", p)
-			}(pid)
-			fmt.Printf("  pipeline started — results feed back to main conversation\n\n")
+			fmt.Println()
+			osRunPrompt(mainLLM, mainRunner, mainSessID, task)
+			fmt.Println()
 
 		case strings.HasPrefix(input, "/pr_status"):
 			args := strings.TrimSpace(strings.TrimPrefix(input, "/pr_status"))
@@ -603,6 +556,7 @@ func newConversation(name string) (*claudeweb.Model, *runner.Runner, string) {
 		Enabled: true,
 		DB:      claudeweb.NewShadowDB(),
 	}
+	shadow.RegisterDriver(&kernel.PRDriver{})
 	if projectDB != nil {
 		shadow.RegisterDriver(vikingdb.NewVikingDBDriver(dbEngine, projectDB))
 	}
