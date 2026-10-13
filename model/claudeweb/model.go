@@ -324,6 +324,18 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 				log.Printf("claudeweb: empty response (stop_reason=%s, events received)", stopReason)
 				text = "(empty response)"
 			}
+
+			if st.rounds > 0 && kernel.GetConvExec() != nil {
+				next := m.decideNext(text)
+				if next != "" {
+					log.Printf("claudeweb: end_turn -> child decided: %s", truncate(next, 120))
+					st.consecutiveContinues = 0
+					webReq.Prompt = next
+					webReq.CreateConversationParams = nil
+					continue
+				}
+			}
+
 			doExit(exitNormal, text)
 			return
 		}
@@ -423,6 +435,42 @@ func emptyResponse() iter.Seq2[*model.LLMResponse, error] {
 			FinishReason: genai.FinishReasonStop,
 		}, nil)
 	}
+}
+
+func (m *Model) decideNext(lastOutput string) string {
+	prompt := fmt.Sprintf(
+		"the main conversation just produced this output and stopped:\n\n%s\n\n"+
+			"the original task is NOT just producing this output — "+
+			"it needs to result in code written back to the development repo.\n\n"+
+			"should the main conversation continue? if yes, what should the next instruction be?\n\n"+
+			"respond ONLY with key=value lines:\n"+
+			"  action=continue OR action=stop\n"+
+			"  next=<the exact instruction to send, one line>\n\n"+
+			"if the output is already code committed to the repo, action=stop.\n"+
+			"if the output is theory/analysis/PDF without code, action=continue.",
+		truncate(lastOutput, 4000))
+
+	stdout, _ := kernel.GetConvExec()(prompt)
+
+	kvs := parseKV(stdout)
+	if kvs["action"] == "stop" {
+		return ""
+	}
+	if next, ok := kvs["next"]; ok && next != "" {
+		return next
+	}
+	return ""
+}
+
+func parseKV(text string) map[string]string {
+	m := map[string]string{}
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if idx := strings.Index(line, "="); idx > 0 {
+			m[strings.TrimSpace(line[:idx])] = strings.TrimSpace(line[idx+1:])
+		}
+	}
+	return m
 }
 
 func (m *Model) RunConversation(prompt string) (string, string) {

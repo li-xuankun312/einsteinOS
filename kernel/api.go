@@ -65,6 +65,10 @@ func SetConvExec(fn func(string) (string, string)) {
 	convExecFn = fn
 }
 
+func GetConvExec() func(string) (string, string) {
+	return convExecFn
+}
+
 func Fork(prompt string, pwd string) (int64, error) {
 	nr := FindEmptyProcess()
 	if nr < 0 {
