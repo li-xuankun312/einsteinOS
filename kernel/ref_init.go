@@ -26,6 +26,8 @@ var (
 
 const NR_THEOREMS = 256
 
+var TheoremStoreHook func(repo, sha, theory string)
+
 func ref_clone(owner, name string) {
 	dir := fmt.Sprintf("/tmp/ref_%s_%s.git", owner, name)
 	_, err := RefClone(owner, name, dir)
@@ -105,23 +107,46 @@ func ref_clone_is_notfound(owner, name string) bool {
 
 func ref_theorize(parent int64, owner, name, sha, diff string, nfiles int, msg string) string {
 	dir := fmt.Sprintf("/tmp/ref_%s_%s.git", owner, name)
-	prompt := fmt.Sprintf(
-		"repo %s/%s is cloned at %s (bare repo). commit %s (%s), %d files.\n\n"+
-			"your task:\n"+
-			"1. use git --git-dir %s to read the commit: diff-tree, show, log\n"+
-			"2. read every file in the commit, line by line\n"+
-			"3. for each semantic unit (data structure, algorithm, protocol, state machine), "+
-			"write a pure mathematical formalization in LaTeX\n"+
-			"4. use tools to verify the LaTeX compiles\n"+
-			"5. output ONLY the mathematical content: definitions, theorems, proof sketches\n\n"+
-			"no code, no function names, no variable names. only mathematics.",
-		owner, name, dir, sha, msg, nfiles, dir)
+
+	files, err := RefTreeAt(owner, name, sha)
+	if err != nil {
+		files = nil
+	}
+
+	var src strings.Builder
+	src.WriteString(fmt.Sprintf("commit %s: %s\n%d files\n\n", sha[:12], msg, nfiles))
+
+	for _, f := range files {
+		content, e := RefFileAt(owner, name, sha, f)
+		if e != nil {
+			continue
+		}
+		if len(content) > 50000 {
+			content = content[:50000]
+		}
+		src.WriteString(fmt.Sprintf("=== %s (%d lines) ===\n", f, strings.Count(content, "\n")+1))
+		src.WriteString(content)
+		src.WriteString("\n\n")
+	}
+
+	sourceText := src.String()
+	if len(sourceText) > 120000 {
+		sourceText = sourceText[:120000]
+	}
+
+	prompt := sourceText + "\n" +
+		"above is every file in commit " + sha[:12] + " of " + owner + "/" + name + ".\n" +
+		"for each semantic unit write pure LaTeX mathematics: " +
+		"definitions, theorems, lemmas, proof sketches.\n" +
+		"no code, no function names, no variable names. only math.\n" +
+		"the repo is also at " + dir + " if you need git for anything else."
+
 	child, err := Fork(prompt, ".")
 	if err != nil {
 		return fmt.Sprintf("ref_theorize fork: %v", err)
 	}
-	log.Printf("ref_theorize: parent=%d child=%d %s/%s %s",
-		parent, child, owner, name, sha[:12])
+	log.Printf("ref_theorize: parent=%d child=%d %s/%s %s (%d files fed)",
+		parent, child, owner, name, sha[:12], len(files))
 	Wait(child)
 	theory := GetResult(child)
 	theorem_store(owner+"/"+name, sha, theory, child)
@@ -137,6 +162,9 @@ func theorem_store(repo, sha, theory string, child int64) {
 		}
 		nr_theorems++
 	}
+	if TheoremStoreHook != nil {
+		go TheoremStoreHook(repo, sha, theory)
+	}
 }
 
 func theorem_get(repo, sha string) string {
@@ -149,6 +177,33 @@ func theorem_get(repo, sha string) string {
 		}
 	}
 	return ""
+}
+
+func theorem_get_all(repo string) string {
+	theorem_mu.Lock()
+	defer theorem_mu.Unlock()
+	var sb strings.Builder
+	for i := 0; i < nr_theorems; i++ {
+		t := theorem_table[i]
+		if t.repo == repo && t.theory != "" {
+			sb.WriteString(fmt.Sprintf("\n%% === commit %s ===\n", short_sha(t.sha)))
+			sb.WriteString(t.theory)
+			sb.WriteString("\n")
+		}
+	}
+	return sb.String()
+}
+
+func theorem_count(repo string) int {
+	theorem_mu.Lock()
+	defer theorem_mu.Unlock()
+	n := 0
+	for i := 0; i < nr_theorems; i++ {
+		if theorem_table[i].repo == repo {
+			n++
+		}
+	}
+	return n
 }
 
 func theorem_list() string {

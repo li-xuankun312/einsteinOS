@@ -31,6 +31,7 @@ type PRProcess struct {
 	Title      string
 	RefRepos   []RefRepo
 	Commits    []PRCommit
+	HWInfo     string
 	CreateTime time.Time
 	MergeTime  time.Time
 }
@@ -88,9 +89,21 @@ func PRFork(repo, branch, title string, refs []RefRepo) (int64, error) {
 	}
 	metaMu.Unlock()
 
+	pr_push_step(int64(pid), &Step{
+		Kind: STEP_HW_PROBE,
+	})
+
 	for _, ref := range refs {
 		pr_push_step(int64(pid), &Step{
-			Kind:  STEP_REF_FIRST,
+			Kind:  STEP_REF_THEORIZE_ALL,
+			Owner: ref.Owner,
+			Repo:  ref.Name,
+		})
+	}
+
+	for _, ref := range refs {
+		pr_push_step(int64(pid), &Step{
+			Kind:  STEP_DEV_FROM_THEOREMS,
 			Owner: ref.Owner,
 			Repo:  ref.Name,
 		})

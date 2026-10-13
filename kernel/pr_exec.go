@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +20,9 @@ const (
 	STEP_DEV_EXEC
 	STEP_REF_THEORIZE
 	STEP_DEV_WITH_THEORY
+	STEP_HW_PROBE
+	STEP_REF_THEORIZE_ALL
+	STEP_DEV_FROM_THEOREMS
 )
 
 type Step struct {
@@ -85,6 +89,9 @@ func PRRunNext(pid int64) (string, error) {
 	var err error
 
 	switch step.Kind {
+	case STEP_HW_PROBE:
+		result, err = run_hw_probe(pid)
+
 	case STEP_REF_CLONE:
 		dir := fmt.Sprintf("/tmp/ref_%s_%s.git", step.Owner, step.Repo)
 		_, err = RefClone(step.Owner, step.Repo, dir)
@@ -121,6 +128,9 @@ func PRRunNext(pid int64) (string, error) {
 				})
 			}
 		}
+
+	case STEP_REF_THEORIZE_ALL:
+		result, err = run_theorize_all(pid, step.Owner, step.Repo)
 
 	case STEP_REF_READ:
 		diff, files, e := RefReadCommit(step.Owner, step.Repo, step.SHA)
@@ -178,6 +188,9 @@ func PRRunNext(pid int64) (string, error) {
 			result = GetResult(childPid)
 		}
 
+	case STEP_DEV_FROM_THEOREMS:
+		result, err = run_dev_from_theorems(pid, step)
+
 	case STEP_DEV_EXEC:
 		childPid, e := ForkExec(step.Command, step.Dir)
 		err = e
@@ -200,6 +213,114 @@ func PRRunNext(pid int64) (string, error) {
 		return "", err
 	}
 	return result, nil
+}
+
+func run_hw_probe(pid int64) (string, error) {
+	commands := []string{
+		"cat /proc/cpuinfo | head -30",
+		"free -h",
+		"lspci | grep -i -E 'vga|3d|display|gpu' 2>/dev/null || echo 'no lspci'",
+		"nvidia-smi 2>/dev/null || ixsmi 2>/dev/null || echo 'no gpu tool'",
+		"uname -a",
+		"cat /etc/os-release 2>/dev/null | head -5",
+	}
+
+	var results []string
+	for _, cmd := range commands {
+		childPid, err := ForkExec(cmd, ".")
+		if err != nil {
+			results = append(results, fmt.Sprintf("%s: %v", cmd, err))
+			continue
+		}
+		Wait(childPid)
+		out := GetResult(childPid)
+		stderr := GetStderr(childPid)
+		if out != "" {
+			results = append(results, out)
+		}
+		if stderr != "" {
+			results = append(results, stderr)
+		}
+	}
+
+	hwInfo := strings.Join(results, "\n---\n")
+	log.Printf("hw_probe: pid=%d %d bytes", pid, len(hwInfo))
+
+	prMu.Lock()
+	pr := prTable[pid]
+	prMu.Unlock()
+	if pr != nil {
+		pr.HWInfo = hwInfo
+	}
+
+	return hwInfo, nil
+}
+
+func run_theorize_all(pid int64, owner, repo string) (string, error) {
+	commits, err := RefListCommits(owner, repo)
+	if err != nil {
+		return "", err
+	}
+	log.Printf("ref_theorize_all: %s/%s %d commits", owner, repo, len(commits))
+
+	done := 0
+	for i, c := range commits {
+		if theorem_get(owner+"/"+repo, c.SHA) != "" {
+			done++
+			continue
+		}
+
+		diff, files, e := RefReadCommit(owner, repo, c.SHA)
+		if e != nil {
+			log.Printf("ref_theorize_all: skip %s: %v", c.SHA[:12], e)
+			continue
+		}
+
+		ref_theorize(pid, owner, repo, c.SHA, diff, len(files), c.Message)
+		done++
+
+		if (i+1)%10 == 0 {
+			log.Printf("ref_theorize_all: %s/%s %d/%d commits", owner, repo, done, len(commits))
+		}
+	}
+
+	count := theorem_count(owner + "/" + repo)
+	result := fmt.Sprintf("%s/%s: %d commits → %d theorems", owner, repo, len(commits), count)
+	log.Printf("ref_theorize_all: %s", result)
+	return result, nil
+}
+
+func run_dev_from_theorems(pid int64, step *Step) (string, error) {
+	repo := step.Owner + "/" + step.Repo
+	allTheorems := theorem_get_all(repo)
+
+	pr := GetPR(pid)
+	task := ""
+	hwInfo := ""
+	if pr != nil {
+		task = strip_credentials(pr.Title)
+		hwInfo = pr.HWInfo
+	}
+
+	var prompt strings.Builder
+	if hwInfo != "" {
+		prompt.WriteString("[HARDWARE]\n")
+		prompt.WriteString(truncDiff(hwInfo, 2000))
+		prompt.WriteString("\n\n")
+	}
+	prompt.WriteString(fmt.Sprintf("[THEOREMS from %s — %d entries]\n", repo, theorem_count(repo)))
+	prompt.WriteString(truncDiff(allTheorems, 80000))
+	prompt.WriteString("\n\n[TASK]\n")
+	prompt.WriteString(task)
+	prompt.WriteString("\n\nbased on the accumulated mathematical theory, write code. output ONLY code.")
+
+	childPid, err := Fork(prompt.String(), ".")
+	if err != nil {
+		return "", err
+	}
+	Wait(childPid)
+	step.ChildPid = childPid
+	return GetResult(childPid), nil
 }
 
 func PRRunAll(pid int64) []string {
@@ -276,10 +397,16 @@ func step_name(k StepKind) string {
 		return "ref_first"
 	case STEP_REF_THEORIZE:
 		return "ref_theorize"
+	case STEP_REF_THEORIZE_ALL:
+		return "ref_all"
 	case STEP_DEV_WITH_THEORY:
 		return "dev_theory"
+	case STEP_DEV_FROM_THEOREMS:
+		return "dev_theorems"
 	case STEP_DEV_EXEC:
 		return "dev_exec"
+	case STEP_HW_PROBE:
+		return "hw_probe"
 	default:
 		return "?"
 	}
