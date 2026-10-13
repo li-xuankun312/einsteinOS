@@ -342,7 +342,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 				text = "(empty response)"
 			}
 
-			if st.rounds > 0 && !st.decidedOnce && kernel.GetConvExec() != nil {
+			if stream && st.rounds > 0 && !st.decidedOnce && kernel.GetConvExec() != nil {
 				st.decidedOnce = true
 				next := m.decideNext(text)
 				if next != "" {
@@ -365,13 +365,13 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 
 		st.totalTools += len(collectedTools)
 
-		if st.totalTools > 30 && !st.usedServices {
+		if st.totalTools >= 30 && !st.usedServices {
 			for _, tb := range collectedTools {
 				if tb.name == "pr_setup" || tb.name == "pr_step" || tb.name == "sync_repo" {
 					st.usedServices = true
 				}
 			}
-			if !st.usedServices && st.totalTools > 30 {
+			if !st.usedServices && st.totalTools >= 30 {
 				log.Printf("claudeweb: %d tools without registered services, stopping and running pr_setup", st.totalTools)
 				m.client.StopResponse(st.convID)
 				st.usedServices = true
