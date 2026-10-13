@@ -257,20 +257,53 @@ func hw_init(pid int64) (string, error) {
 }
 
 func ref_bind(pid int64, owner, repo string) (string, error) {
-	commit, diff, err := RefFirstCommit(owner, repo)
+	commit, _, err := RefFirstCommit(owner, repo)
 	if err != nil {
 		return "", err
 	}
-	log.Printf("ref_bind: %s/%s first commit %s (%d files)",
-		owner, repo, commit.SHA[:12], len(commit.Files))
 
-	theory := ref_theorize(pid, owner, repo,
-		commit.SHA, diff, len(commit.Files), commit.Message)
+	files, _ := RefTreeAt(owner, repo, commit.SHA)
+	dir := fmt.Sprintf("/tmp/ref_%s_%s.git", owner, repo)
 
-	result := fmt.Sprintf("%s/%s: first commit %s -> %d bytes theory",
-		owner, repo, commit.SHA[:12], len(theory))
-	log.Printf("ref_bind: %s", result)
-	return result, nil
+	var listing strings.Builder
+	for _, f := range files {
+		listing.WriteString(f)
+		listing.WriteString("\n")
+	}
+
+	prompt := fmt.Sprintf(
+		"repo %s/%s first commit %s: %d files.\n"+
+			"bare repo at %s, read with: git --git-dir %s show %s:<path>\n\n"+
+			"file list:\n%s\n"+
+			"read ALL %d files. you decide the order and grouping.\n"+
+			"if there are too many to read in one pass, use bash to read batches, "+
+			"or focus on the most important directories first.\n"+
+			"for each file, output key=value:\n"+
+			"  file=<path>\n  lines=<number>\n  role=<one phrase>\n\n"+
+			"after reading all files, output a THEORY section with pure LaTeX "+
+			"mathematical formalizations for each semantic unit.\n"+
+			"verify LaTeX compiles with pdflatex.",
+		owner, repo, commit.SHA[:12], len(files),
+		dir, dir, commit.SHA,
+		listing.String(), len(files))
+
+	log.Printf("ref_bind: %s/%s %s %d files, child decides reading strategy",
+		owner, repo, commit.SHA[:12], len(files))
+
+	child, err := Fork(prompt, ".")
+	if err != nil {
+		return "", err
+	}
+	Wait(child)
+
+	stdout := GetResult(child)
+	stderr := GetStderr(child)
+
+	theorem_store(owner+"/"+repo, commit.SHA, stdout, child)
+
+	log.Printf("ref_bind: %s/%s done, stdout=%d stderr=%d",
+		owner, repo, len(stdout), len(stderr))
+	return stdout, nil
 }
 
 func dev_from_theorems(pid int64, step *Step) (string, error) {
