@@ -231,25 +231,9 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 				log.Printf("claudeweb: rate limit on effort=%s, escalating to high+thinking", m.effort)
 				m.mu.Lock()
 				m.effort = "high"
-				m.convID = ""
 				m.mu.Unlock()
 				webReq.Effort = "high"
 				webReq.ThinkingMode = "extended"
-				webReq.Model = m.modelName
-				newConvID, cerr := m.client.CreateConversation("", m.modelName)
-				if cerr != nil {
-					doExit(exitError, fmt.Sprintf("[rate limit + create conv failed] %v", cerr))
-					return
-				}
-				convID = newConvID
-				st.convID = newConvID
-				m.mu.Lock()
-				m.convID = newConvID
-				m.mu.Unlock()
-				log.Printf("claudeweb: escalated to high+thinking, new conv %s", convID[:8])
-				if webReq.CreateConversationParams != nil {
-					webReq.CreateConversationParams = nil
-				}
 				continue
 			}
 			doExit(exitError, fmt.Sprintf("[API Error] %v", err))
