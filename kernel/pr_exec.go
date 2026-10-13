@@ -463,117 +463,46 @@ func StepName(k StepKind) string {
 	return step_name(k)
 }
 
-func pr_collect_ctx(pid int64) map[string][]string {
-	ctx := map[string][]string{}
-	seen := map[string]bool{}
-
-	add := func(key, val string) {
-		if val == "" {
-			return
-		}
-		k := key + ":" + val
-		if seen[k] {
-			return
-		}
-		seen[k] = true
-		ctx[key] = append(ctx[key], val)
-	}
-
-	prMu.Lock()
-	pr := prTable[pid]
-	if pr != nil {
-		add("branch", pr.Branch)
-		add("target", pr.Repo)
-		for _, ref := range pr.RefRepos {
-			add("repo", ref.Owner+"/"+ref.Name)
-		}
-		for _, c := range pr.Commits {
-			add("commit", c.SHA)
-			for _, f := range c.Files {
-				add("file", f)
-			}
-		}
-	}
-	prMu.Unlock()
-
-	prStepsMu.Lock()
-	for _, s := range prSteps[pid] {
-		if s.Owner != "" && s.Repo != "" {
-			add("repo", s.Owner+"/"+s.Repo)
-		}
-		if s.SHA != "" {
-			add("commit", short_sha(s.SHA))
-		}
-		if s.Path != "" {
-			add("path", s.Path)
-		}
-		for _, f := range s.Files {
-			add("file", f)
-		}
-	}
-	prStepsMu.Unlock()
-
-	return ctx
-}
-
 func pr_feedback(pid int64) string {
 	prMu.Lock()
+	defer prMu.Unlock()
 	pr := prTable[pid]
 	if pr == nil || len(pr.Feedback) == 0 {
-		prMu.Unlock()
 		return ""
 	}
-	rules := make([]string, len(pr.Feedback))
-	copy(rules, pr.Feedback)
-	prMu.Unlock()
-
-	ctx := pr_collect_ctx(pid)
-
-	var sb strings.Builder
-	for _, rule := range rules {
-		line := rule
-		for k, vals := range ctx {
-			line = strings.ReplaceAll(line, "{"+k+"}", strings.Join(vals, ", "))
-		}
-		sb.WriteString(line)
-		sb.WriteString("\n")
-	}
-	return sb.String()
+	return strings.Join(pr.Feedback, "\n")
 }
 
-func PRFeedbackAdd(pid int64, rule string) {
+func PRFeedbackAdd(pid int64, line string) {
 	prMu.Lock()
 	defer prMu.Unlock()
 	if pr := prTable[pid]; pr != nil {
-		pr.Feedback = append(pr.Feedback, rule)
+		pr.Feedback = append(pr.Feedback, line)
 	}
 }
 
 func ref_diff(pid int64, step *Step) (string, error) {
-	refContent, err := RefFileAt(step.Owner, step.Repo, step.SHA, step.Path)
+	ref_content, err := RefFileAt(step.Owner, step.Repo, step.SHA, step.Path)
 	if err != nil {
 		return "", fmt.Errorf("ref %s/%s@%s %s: %w",
 			step.Owner, step.Repo, short_sha(step.SHA), step.Path, err)
 	}
 
-	pr := GetPR(pid)
-	task := ""
-	if pr != nil {
-		task = strip_credentials(pr.Title)
-	}
-
-	feedback := pr_feedback(pid)
+	lines := strings.Count(ref_content, "\n") + 1
+	prior := pr_feedback(pid)
 
 	var prompt strings.Builder
-	prompt.WriteString(fmt.Sprintf("[REFERENCE FILE from %s/%s commit %s]\n=== %s ===\n",
-		step.Owner, step.Repo, short_sha(step.SHA), step.Path))
-	prompt.WriteString(refContent)
-	prompt.WriteString("\n\n[OUR CODE]\nread the corresponding file in our working directory.\n")
-	prompt.WriteString("compare the two from the whole-function perspective.\n")
-	prompt.WriteString("output concrete feedback: what our code is missing, what patterns differ, what to change.\n")
-	prompt.WriteString(fmt.Sprintf("context: %s\n", task))
-	if feedback != "" {
-		prompt.WriteString(fmt.Sprintf("\n[PRIOR REVIEW FEEDBACK]\n%s", feedback))
+	prompt.WriteString(fmt.Sprintf("[REFERENCE: %s/%s commit %s — %s (%d lines)]\n",
+		step.Owner, step.Repo, short_sha(step.SHA), step.Path, lines))
+	prompt.WriteString(ref_content)
+	prompt.WriteString("\n\n")
+	prompt.WriteString("you have read every line of the reference file above.\n")
+	prompt.WriteString("now read the corresponding file in our working directory.\n")
+	prompt.WriteString("compare from the whole-function perspective.\n")
+	prompt.WriteString("output ONLY concrete feedback lines, one per line, each starting with '- '.\n")
+	prompt.WriteString("each line must name specific files, functions, line counts — no placeholders.\n")
+	if prior != "" {
+		prompt.WriteString(fmt.Sprintf("\n[PRIOR FEEDBACK]\n%s\n", prior))
 	}
 
 	child, err := Fork(prompt.String(), step.Dir)
@@ -583,15 +512,19 @@ func ref_diff(pid int64, step *Step) (string, error) {
 	Wait(child)
 	step.ChildPid = child
 
-	result := GetResult(child)
+	stdout := GetResult(child)
+	stderr := GetStderr(child)
 
-	lines := strings.Split(result, "\n")
-	for _, line := range lines {
+	for _, line := range strings.Split(stdout, "\n") {
 		trimmed := strings.TrimSpace(line)
-		if trimmed != "" && (strings.HasPrefix(trimmed, "- ") || strings.HasPrefix(trimmed, "* ")) {
-			PRFeedbackAdd(pid, trimmed[2:])
+		if strings.HasPrefix(trimmed, "- ") && len(trimmed) > 10 {
+			PRFeedbackAdd(pid, trimmed)
 		}
 	}
 
-	return result, nil
+	log.Printf("ref_diff: %s/%s %s -> stdout=%d stderr=%d feedback=%d",
+		step.Owner, step.Repo, step.Path,
+		len(stdout), len(stderr), len(GetPR(pid).Feedback))
+
+	return stdout, nil
 }
