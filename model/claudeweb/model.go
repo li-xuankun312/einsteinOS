@@ -354,6 +354,18 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 
 	streamDone:
 
+		if stopReason == "" && st.rounds > 0 {
+			st.consecutiveContinues++
+			if st.consecutiveContinues <= 3 {
+				log.Printf("claudeweb: empty stop_reason round %d, sending Continue (%d/3)",
+					st.rounds, st.consecutiveContinues)
+				webReq.Prompt = "Continue"
+				webReq.CreateConversationParams = nil
+				continue
+			}
+			log.Printf("claudeweb: empty stop_reason %d times, giving up", st.consecutiveContinues)
+		}
+
 		if len(collectedTools) == 0 {
 			text := textBuf.String()
 			if text == "" {
