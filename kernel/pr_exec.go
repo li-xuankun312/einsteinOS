@@ -279,20 +279,23 @@ func ref_bind(pid int64, owner, repo string) (string, error) {
 		ref_theorize(pid, owner, repo, first.SHA, "", len(first_files), first.Message)
 	}
 
+	var diffLog strings.Builder
 	for i := 1; i < len(commits); i++ {
 		c := commits[i]
-		if theorem_get(owner+"/"+repo, c.SHA) != "" {
-			continue
-		}
 		_, changed, _ := RefReadCommit(owner, repo, c.SHA)
 		if len(changed) == 0 {
 			continue
 		}
-		ref_theorize(pid, owner, repo, c.SHA, "", len(changed), c.Message)
-
-		if (i+1)%50 == 0 {
-			log.Printf("ref_bind: %s/%s %d/%d commits", owner, repo, i+1, len(commits))
+		diffLog.WriteString(fmt.Sprintf("%s %d files: %s\n",
+			short_sha(c.SHA), len(changed), c.Message))
+		if (i+1)%500 == 0 {
+			log.Printf("ref_bind: %s/%s scanned %d/%d commits",
+				owner, repo, i+1, len(commits))
 		}
+	}
+	if diffLog.Len() > 0 {
+		theorem_store(owner+"/"+repo, "changelog",
+			fmt.Sprintf("[%d subsequent commits]\n%s", len(commits)-1, diffLog.String()), 0)
 	}
 
 	count := theorem_count(owner + "/" + repo)
@@ -313,6 +316,9 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 	var src strings.Builder
 	read := 0
 	for _, f := range files {
+		if isBinaryFile(f) {
+			continue
+		}
 		content, e := RefFileAt(step.Owner, step.Repo, commit.SHA, f)
 		if e != nil {
 			continue

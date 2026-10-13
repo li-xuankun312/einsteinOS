@@ -251,7 +251,12 @@ func ref_theorize_leaf(parent int64, owner, name, sha string, files []string, ta
 		owner, name, sha[:12], len(files)))
 
 	read := 0
+	skipped := 0
 	for _, f := range files {
+		if isBinaryFile(f) {
+			skipped++
+			continue
+		}
 		content, e := RefFileAt(owner, name, sha, f)
 		if e != nil {
 			continue
@@ -263,8 +268,8 @@ func ref_theorize_leaf(parent int64, owner, name, sha string, files []string, ta
 		read += lines
 	}
 
-	log.Printf("ref_theorize: %s/%s %s: %d files, %d lines fed",
-		owner, name, sha[:12], len(files), read)
+	log.Printf("ref_theorize: %s/%s %s: %d files (%d binary skipped), %d lines fed",
+		owner, name, sha[:12], len(files), skipped, read)
 
 	prompt := src.String() + theorize_instruction +
 		"the repo is at " + dir + " if you need git."
@@ -358,6 +363,24 @@ func truncDiff(s string, n int) string {
 		return s
 	}
 	return s[:n]
+}
+
+func isBinaryFile(path string) bool {
+	lower := strings.ToLower(path)
+	for _, ext := range []string{
+		".pdf", ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".svg",
+		".zip", ".tar", ".gz", ".bz2", ".xz", ".zst",
+		".bin", ".exe", ".so", ".dylib", ".dll", ".a", ".o", ".obj",
+		".woff", ".woff2", ".ttf", ".otf", ".eot",
+		".mp3", ".mp4", ".wav", ".avi", ".mkv", ".mov",
+		".pyc", ".pyo", ".class", ".wasm",
+		".pb", ".onnx", ".pt", ".pth", ".safetensors",
+	} {
+		if strings.HasSuffix(lower, ext) {
+			return true
+		}
+	}
+	return false
 }
 
 func RefInitSummary() string {

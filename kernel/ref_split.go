@@ -82,6 +82,9 @@ func ref_split_fork(parent_pid int64, owner, repo, sha string, files []string, t
 	src.WriteString(fmt.Sprintf("[CHUNK %d/%d] %d files (depth %d)\n\n", chunk_idx+1, chunk_total, len(files), depth))
 
 	for _, f := range files {
+		if isBinaryFile(f) {
+			continue
+		}
 		content, err := RefFileAt(owner, repo, sha, f)
 		if err != nil {
 			continue
@@ -126,6 +129,9 @@ func ref_split_leaf(parent_pid int64, owner, repo, sha string, files []string, t
 	src.WriteString(fmt.Sprintf("[LEAF] %d files (depth %d)\n\n", len(files), depth))
 
 	for _, f := range files {
+		if isBinaryFile(f) {
+			continue
+		}
 		content, err := RefFileAt(owner, repo, sha, f)
 		if err != nil {
 			continue

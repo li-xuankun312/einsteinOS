@@ -3,9 +3,11 @@ package kernel
 import (
 	"context"
 	"fmt"
+	"log"
 	"os/exec"
 	"strings"
 	"sync"
+	"time"
 
 	. "google.golang.org/adk/v2/include"
 )
@@ -69,7 +71,40 @@ func GetConvExec() func(string) (string, string) {
 	return convExecFn
 }
 
+const (
+	forkWindowSize = 8
+	forkWindowDur  = 10 * time.Minute
+)
+
+var (
+	forkTimes [forkWindowSize]time.Time
+	forkIdx   int
+	forkMu    sync.Mutex
+)
+
+func forkThrottle() {
+	forkMu.Lock()
+	defer forkMu.Unlock()
+
+	oldest := forkTimes[forkIdx%forkWindowSize]
+	if !oldest.IsZero() {
+		elapsed := time.Since(oldest)
+		if elapsed < forkWindowDur {
+			wait := forkWindowDur - elapsed
+			log.Printf("fork_throttle: %d forks in %v, sleeping %v",
+				forkWindowSize, elapsed.Truncate(time.Second), wait.Truncate(time.Second))
+			forkMu.Unlock()
+			time.Sleep(wait)
+			forkMu.Lock()
+		}
+	}
+	forkTimes[forkIdx%forkWindowSize] = time.Now()
+	forkIdx++
+}
+
 func Fork(prompt string, pwd string) (int64, error) {
+	forkThrottle()
+
 	nr := FindEmptyProcess()
 	if nr < 0 {
 		return 0, fmt.Errorf("fork: no free task slots")
