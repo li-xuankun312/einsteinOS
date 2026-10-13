@@ -100,3 +100,7 @@ func pr_driver_status(pid int64) string {
 	}
 	return PRStepLog(pid) + PRScheduleInfo()
 }
+
+func PRDriverSetup(task string) string {
+	return pr_driver_setup(task)
+}

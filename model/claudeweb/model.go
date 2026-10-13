@@ -188,6 +188,7 @@ type loopState struct {
 	totalTools           int
 	consecutiveContinues int
 	usedServices         bool
+	decidedOnce          bool
 	convID               string
 }
 
@@ -341,7 +342,8 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 				text = "(empty response)"
 			}
 
-			if st.rounds > 0 && kernel.GetConvExec() != nil {
+			if st.rounds > 0 && !st.decidedOnce && kernel.GetConvExec() != nil {
+				st.decidedOnce = true
 				next := m.decideNext(text)
 				if next != "" {
 					log.Printf("claudeweb: end_turn -> child decided: %s", truncate(next, 120))
@@ -370,12 +372,23 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 				}
 			}
 			if !st.usedServices && st.totalTools > 30 {
-				log.Printf("claudeweb: %d tools without registered services, stopping", st.totalTools)
+				log.Printf("claudeweb: %d tools without registered services, stopping and running pr_setup", st.totalTools)
 				m.client.StopResponse(st.convID)
-				webReq.Prompt = "[SYSTEM] you have used " + fmt.Sprintf("%d", st.totalTools) +
-					" tool calls reading code directly. STOP reading and use pr_setup/pr_step " +
-					"to fork child conversations with fresh context for heavy reading. " +
-					"your context is degrading. call pr_setup now."
+				st.usedServices = true
+
+				task := webReq.Prompt
+				if len(task) > 500 {
+					task = task[:500]
+				}
+				setupResult := kernel.PRDriverSetup(task)
+				log.Printf("claudeweb: pr_setup result: %s", truncate(setupResult, 200))
+
+				webReq.Prompt = fmt.Sprintf(
+					"[SYSTEM] context degradation detected after %d tool calls. "+
+						"pr_setup has been executed automatically:\n\n%s\n\n"+
+						"use pr_step {pid:N} to continue work through child processes "+
+						"with fresh context. do NOT read more code yourself.",
+					st.totalTools, setupResult)
 				webReq.CreateConversationParams = nil
 				continue
 			}
