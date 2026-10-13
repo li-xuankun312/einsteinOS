@@ -445,6 +445,7 @@ func (m *Model) SingleCompletion(prompt string) string {
 		},
 	}
 
+	log.Printf("single_completion: %s/chat/%s", m.client.baseURL, convID)
 	log.Printf("single_completion: conv=%s prompt=%q", convID[:8], truncate(prompt, 80))
 
 	var allText strings.Builder
