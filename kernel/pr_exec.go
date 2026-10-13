@@ -268,10 +268,28 @@ func ref_bind(pid int64, owner, repo string) (string, error) {
 
 func dev_from_theorems(pid int64, step *Step) (string, error) {
 	repo := step.Owner + "/" + step.Repo
-	theory := theorem_get(repo, "")
-	if theory == "" {
-		return "", fmt.Errorf("no theorems for %s", repo)
+
+	commit, _, err := RefFirstCommit(step.Owner, step.Repo)
+	if err != nil {
+		return "", err
 	}
+
+	files, _ := RefTreeAt(step.Owner, step.Repo, commit.SHA)
+	var src strings.Builder
+	read := 0
+	for _, f := range files {
+		content, e := RefFileAt(step.Owner, step.Repo, commit.SHA, f)
+		if e != nil {
+			continue
+		}
+		lines := strings.Count(content, "\n") + 1
+		src.WriteString(fmt.Sprintf("=== %s (%d lines) ===\n", f, lines))
+		src.WriteString(content)
+		src.WriteString("\n\n")
+		read += lines
+	}
+
+	theory := theorem_get(repo, "")
 
 	pr := GetPR(pid)
 	task := ""
@@ -284,13 +302,19 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 	var prompt strings.Builder
 	if hw_info != "" {
 		prompt.WriteString("[HARDWARE]\n")
-		prompt.WriteString(truncDiff(hw_info, 2000))
+		prompt.WriteString(hw_info)
 		prompt.WriteString("\n\n")
 	}
-	prompt.WriteString(fmt.Sprintf("[THEORY from %s first commit]\n", repo))
-	prompt.WriteString(truncDiff(theory, 12000))
-	prompt.WriteString("\n\n[TASK]\n")
+	prompt.WriteString(fmt.Sprintf("[REFERENCE SOURCE from %s first commit — %d files, %d lines, read in full]\n", repo, len(files), read))
+	prompt.WriteString(src.String())
+	if theory != "" {
+		prompt.WriteString(fmt.Sprintf("\n[THEORY extracted from above]\n%s\n", theory))
+	}
+	prompt.WriteString("\n[TASK]\n")
 	prompt.WriteString(task)
+	prompt.WriteString("\n\nwrite code in the SAME style as the reference source above.")
+
+	log.Printf("dev_from_theorems: %s %d files %d lines fed", repo, len(files), read)
 
 	child, err := Fork(prompt.String(), ".")
 	if err != nil {

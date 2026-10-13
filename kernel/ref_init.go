@@ -118,26 +118,25 @@ func ref_theorize(parent int64, owner, name, sha, diff string, nfiles int, msg s
 	var src strings.Builder
 	src.WriteString(fmt.Sprintf("commit %s: %s\n%d files\n\n", sha[:12], msg, nfiles))
 
+	read := 0
 	for _, f := range files {
 		content, e := RefFileAt(owner, name, sha, f)
 		if e != nil {
 			continue
 		}
-		if len(content) > 50000 {
-			content = content[:50000]
-		}
-		src.WriteString(fmt.Sprintf("=== %s (%d lines) ===\n", f, strings.Count(content, "\n")+1))
+		lines := strings.Count(content, "\n") + 1
+		src.WriteString(fmt.Sprintf("=== %s (%d lines) ===\n", f, lines))
 		src.WriteString(content)
 		src.WriteString("\n\n")
+		read += lines
 	}
 
-	src_text := src.String()
-	if len(src_text) > 120000 {
-		src_text = src_text[:120000]
-	}
+	log.Printf("ref_theorize: %s/%s %s: %d files, %d lines, %d bytes fed",
+		owner, name, sha[:12], len(files), read, src.Len())
 
-	prompt := src_text + "\n" +
-		"above is every file in commit " + sha[:12] + " of " + owner + "/" + name + ".\n" +
+	prompt := src.String() + "\n" +
+		"above is EVERY line of EVERY file in commit " + sha[:12] + " of " + owner + "/" + name + ".\n" +
+		"you have read all " + fmt.Sprintf("%d", read) + " lines. nothing is truncated.\n" +
 		"for each semantic unit write pure LaTeX mathematics: " +
 		"definitions, theorems, lemmas, proof sketches.\n" +
 		"no code, no function names, no variable names. only math.\n" +
