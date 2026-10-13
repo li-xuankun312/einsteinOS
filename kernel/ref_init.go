@@ -93,7 +93,31 @@ func is_dev_repo(owner, name string) bool {
 	return dev_repos[owner+"/"+name]
 }
 
+func detect_dev_repos(task string) {
+	markers := []string{
+		"项目在", "项目是", "项目：", "项目:",
+		"project at", "project in", "project is",
+		"我们的仓库", "我们的项目", "our repo",
+		"要开发的", "需要开发",
+	}
+	for _, marker := range markers {
+		idx := strings.Index(task, marker)
+		if idx < 0 {
+			continue
+		}
+		after := task[idx+len(marker):]
+		repos := extractRepoMentions(after)
+		if len(repos) > 0 {
+			r := repos[0]
+			RegisterDevRepo(r.Owner, r.Name)
+			return
+		}
+	}
+}
+
 func ref_discover(task string) []RefRepo {
+	detect_dev_repos(task)
+
 	var good []RefRepo
 
 	direct := extractRepoMentions(task)
