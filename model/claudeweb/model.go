@@ -309,6 +309,14 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 					collectedTools = append(collectedTools, *tb)
 					delete(toolBlocks, ev.Index)
 				}
+				if len(collectedTools)+st.totalTools >= 30 && !st.usedServices {
+					log.Printf("claudeweb: tool count %d mid-stream, stopping response",
+						len(collectedTools)+st.totalTools)
+					m.client.StopResponse(st.convID)
+					body.Close()
+					stopReason = "end_turn"
+					goto streamDone
+				}
 
 			case "message_delta":
 				var ev MessageDeltaEvent
