@@ -265,56 +265,40 @@ func ref_bind(pid int64, owner, repo string) (string, error) {
 		return "", fmt.Errorf("ref_bind: %s/%s no commits", owner, repo)
 	}
 
-	dir := fmt.Sprintf("/tmp/ref_%s_%s.git", owner, repo)
 	first := commits[0]
-	files, _ := RefTreeAt(owner, repo, first.SHA)
+	first_files, _ := RefTreeAt(owner, repo, first.SHA)
 
-	var summary strings.Builder
-	summary.WriteString(fmt.Sprintf("repo %s/%s: %d total commits.\n", owner, repo, len(commits)))
-	summary.WriteString(fmt.Sprintf("bare repo at %s\n", dir))
-	summary.WriteString(fmt.Sprintf("read with: git --git-dir %s show <sha>:<path>\n", dir))
-	summary.WriteString(fmt.Sprintf("list with: git --git-dir %s log --oneline --reverse\n\n", dir))
+	log.Printf("ref_bind: %s/%s %d commits, first=%s %d files",
+		owner, repo, len(commits), short_sha(first.SHA), len(first_files))
 
-	summary.WriteString(fmt.Sprintf("FIRST COMMIT %s: %s — %d files\n",
-		first.SHA[:12], first.Message, len(files)))
-	for _, f := range files {
-		summary.WriteString(fmt.Sprintf("  %s\n", f))
+	task := ref_theorize_task(pid)
+
+	if len(first_files) > SPLIT_CHUNK {
+		ref_split(pid, owner, repo, first.SHA, first_files, task, 0)
+	} else {
+		ref_theorize(pid, owner, repo, first.SHA, "", len(first_files), first.Message)
 	}
 
-	summary.WriteString(fmt.Sprintf("\nSUBSEQUENT COMMITS: %d\n", len(commits)-1))
-	for i := 1; i < len(commits) && i <= 20; i++ {
-		summary.WriteString(fmt.Sprintf("  %s %s\n", commits[i].SHA[:12], commits[i].Message))
+	for i := 1; i < len(commits); i++ {
+		c := commits[i]
+		if theorem_get(owner+"/"+repo, c.SHA) != "" {
+			continue
+		}
+		_, changed, _ := RefReadCommit(owner, repo, c.SHA)
+		if len(changed) == 0 {
+			continue
+		}
+		ref_theorize(pid, owner, repo, c.SHA, "", len(changed), c.Message)
+
+		if (i+1)%50 == 0 {
+			log.Printf("ref_bind: %s/%s %d/%d commits", owner, repo, i+1, len(commits))
+		}
 	}
-	if len(commits) > 21 {
-		summary.WriteString(fmt.Sprintf("  ... and %d more\n", len(commits)-21))
-	}
 
-	prompt := summary.String() + "\n" +
-		"your job: read ALL code in this repo and produce mathematical theory.\n\n" +
-		"the first commit has " + fmt.Sprintf("%d", len(files)) + " files. " +
-		"if that is too many to read in one pass, split by directory — " +
-		"read the most important directories first, then continue.\n\n" +
-		"the subsequent " + fmt.Sprintf("%d", len(commits)-1) + " commits each touch a few files. " +
-		"if there are too many commits, process them in batches.\n\n" +
-		"for each file output key=value: file=<path> lines=<n> role=<phrase>\n" +
-		"after reading, output THEORY section with pure LaTeX.\n" +
-		"verify LaTeX compiles with pdflatex."
-
-	log.Printf("ref_bind: %s/%s %d commits, first has %d files",
-		owner, repo, len(commits), len(files))
-
-	child, err := Fork(prompt, ".")
-	if err != nil {
-		return "", err
-	}
-	Wait(child)
-
-	stdout := GetResult(child)
-	theorem_store(owner+"/"+repo, first.SHA, stdout, child)
-
-	log.Printf("ref_bind: %s/%s done, stdout=%d stderr=%d",
-		owner, repo, len(stdout), len(GetStderr(child)))
-	return stdout, nil
+	count := theorem_count(owner + "/" + repo)
+	result := fmt.Sprintf("%s/%s: %d commits %d theorems", owner, repo, len(commits), count)
+	log.Printf("ref_bind: %s", result)
+	return result, nil
 }
 
 func dev_from_theorems(pid int64, step *Step) (string, error) {

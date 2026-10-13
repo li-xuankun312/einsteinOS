@@ -108,15 +108,45 @@ func ref_clone_is_notfound(owner, name string) bool {
 }
 
 func ref_theorize(parent int64, owner, name, sha, diff string, nfiles int, msg string) string {
-	dir := fmt.Sprintf("/tmp/ref_%s_%s.git", owner, name)
-
 	files, err := RefTreeAt(owner, name, sha)
 	if err != nil {
 		files = nil
 	}
 
+	task := ref_theorize_task(parent)
+
+	if len(files) > SPLIT_CHUNK {
+		log.Printf("ref_theorize: %s/%s %s: %d files -> split",
+			owner, name, sha[:12], len(files))
+		return ref_split(parent, owner, name, sha, files, task, 0)
+	}
+
+	return ref_theorize_leaf(parent, owner, name, sha, files, task)
+}
+
+func ref_theorize_task(pid int64) string {
+	ctx := GetCOWContext(pid)
+	if ctx != nil && ctx.Len() > 0 {
+		return ctx.Read(0)
+	}
+	metaMu.Lock()
+	m := taskMeta[pid]
+	metaMu.Unlock()
+	if m != nil {
+		return strip_credentials(m.Prompt)
+	}
+	return ""
+}
+
+func ref_theorize_leaf(parent int64, owner, name, sha string, files []string, task string) string {
+	dir := fmt.Sprintf("/tmp/ref_%s_%s.git", owner, name)
+
 	var src strings.Builder
-	src.WriteString(fmt.Sprintf("commit %s: %s\n%d files\n\n", sha[:12], msg, nfiles))
+	if task != "" {
+		src.WriteString(fmt.Sprintf("[TASK] %s\n\n", task))
+	}
+	src.WriteString(fmt.Sprintf("[REFERENCE] %s/%s commit %s\n%d files\n\n",
+		owner, name, sha[:12], len(files)))
 
 	read := 0
 	for _, f := range files {
@@ -131,22 +161,19 @@ func ref_theorize(parent int64, owner, name, sha, diff string, nfiles int, msg s
 		read += lines
 	}
 
-	log.Printf("ref_theorize: %s/%s %s: %d files, %d lines, %d bytes fed",
-		owner, name, sha[:12], len(files), read, src.Len())
+	log.Printf("ref_theorize: %s/%s %s: %d files, %d lines fed",
+		owner, name, sha[:12], len(files), read)
 
-	prompt := src.String() + "\n" +
-		"above is EVERY line of EVERY file in commit " + sha[:12] + " of " + owner + "/" + name + ".\n" +
-		"you have read all " + fmt.Sprintf("%d", read) + " lines. nothing is truncated.\n" +
-		"for each semantic unit write pure LaTeX mathematics: " +
-		"definitions, theorems, lemmas, proof sketches.\n" +
+	prompt := src.String() +
+		"for each semantic unit write pure LaTeX mathematics.\n" +
 		"no code, no function names, no variable names. only math.\n" +
-		"the repo is also at " + dir + " if you need git for anything else."
+		"the repo is at " + dir + " if you need git."
 
 	child, err := Fork(prompt, ".")
 	if err != nil {
 		return fmt.Sprintf("ref_theorize fork: %v", err)
 	}
-	log.Printf("ref_theorize: parent=%d child=%d %s/%s %s (%d files fed)",
+	log.Printf("ref_theorize: parent=%d child=%d %s/%s %s (%d files)",
 		parent, child, owner, name, sha[:12], len(files))
 	Wait(child)
 	theory := GetResult(child)
