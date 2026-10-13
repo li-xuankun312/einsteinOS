@@ -56,9 +56,23 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 		}
 		child_pids = append(child_pids, child_pid)
 		Wait(child_pid)
-		results = append(results, GetResult(child_pid))
-		log.Printf("ref_split: %s/%s@%s chunk %d/%d done",
-			owner, repo, short_sha(sha), i+1, len(chunks))
+
+		text := GetResult(child_pid)
+		files_written := GetFiles(child_pid)
+		if len(files_written) > 0 {
+			log.Printf("ref_split: chunk %d/%d wrote %d files: %v",
+				i+1, len(chunks), len(files_written), files_written)
+			for _, fpath := range files_written {
+				content := readFileViaExec(fpath)
+				if content != "" {
+					text += fmt.Sprintf("\n\n[FILE %s]\n%s", fpath, content)
+				}
+			}
+		}
+
+		results = append(results, text)
+		log.Printf("ref_split: %s/%s@%s chunk %d/%d done (%d bytes)",
+			owner, repo, short_sha(sha), i+1, len(chunks), len(text))
 	}
 
 	if node >= 0 {
@@ -229,6 +243,16 @@ func ref_split_commit(parent_pid int64, owner, repo string, commits []RefCommit,
 	log.Printf("ref_split_commit: %s/%s merged %d commits -> %d bytes",
 		owner, repo, len(commits), len(merged))
 	return merged
+}
+
+func readFileViaExec(path string) string {
+	cmd := fmt.Sprintf("cat '%s' 2>/dev/null | head -c 100000", path)
+	pid, err := ForkExec(cmd, ".")
+	if err != nil {
+		return ""
+	}
+	Wait(pid)
+	return GetResult(pid)
 }
 
 func SplitStatus() string {

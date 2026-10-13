@@ -337,6 +337,18 @@ func ref_theorize_leaf(parent int64, owner, name, sha string, files []string, ta
 		parent, child, owner, name, sha[:12], len(files))
 	Wait(child)
 	theory := GetResult(child)
+
+	files_written := GetFiles(child)
+	if len(files_written) > 0 {
+		log.Printf("ref_theorize: child=%d wrote %d files: %v", child, len(files_written), files_written)
+		for _, fpath := range files_written {
+			content := readFileViaExec(fpath)
+			if content != "" {
+				theory += fmt.Sprintf("\n\n[FILE %s]\n%s", fpath, content)
+			}
+		}
+	}
+
 	theorem_store(owner+"/"+name, sha, theory, child)
 	return theory
 }
