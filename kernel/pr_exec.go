@@ -175,8 +175,13 @@ func PRRunNext(pid int64) (string, error) {
 		devPrompt := fmt.Sprintf(
 			"[REFERENCE THEORY from %s/%s commit %s]\n%s\n\n"+
 				"[DEVELOPMENT TASK]\n%s\n\n"+
-				"based on the mathematical theory above, write code that satisfies "+
-				"the stated invariants and bounds. output ONLY code and brief comments.",
+				"[DEVELOPMENT DISCIPLINE]\n"+
+				"before modifying any code:\n"+
+				"1. read the ENTIRE function you are about to change\n"+
+				"2. if the change touches multiple functions, read the ENTIRE file first\n"+
+				"3. read the reference theory above for the same subsystem\n"+
+				"4. only then write code that satisfies the stated invariants and bounds\n"+
+				"never modify a function you have not read in full.",
 			step.Owner, step.Repo, short_sha(step.SHA),
 			truncDiff(theory, 6000),
 			task)
@@ -312,7 +317,13 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 	}
 	prompt.WriteString("\n[TASK]\n")
 	prompt.WriteString(task)
-	prompt.WriteString("\n\nwrite code in the SAME style as the reference source above.")
+	prompt.WriteString("\n\n[DEVELOPMENT DISCIPLINE]\n")
+	prompt.WriteString("before modifying any code:\n")
+	prompt.WriteString("1. read the ENTIRE function you are about to change — understand what it does from the function's own perspective\n")
+	prompt.WriteString("2. if the change touches multiple functions, read the ENTIRE file first\n")
+	prompt.WriteString("3. read the corresponding reference source above for the same subsystem — understand how the reference implements it\n")
+	prompt.WriteString("4. only then write code, in the SAME style as the reference source above\n")
+	prompt.WriteString("never modify a function you have not read in full. never skip step 1-3.")
 
 	log.Printf("dev_from_theorems: %s %d files %d lines fed", repo, len(files), read)
 
