@@ -643,20 +643,6 @@ func (m *Model) RunConversation(prompt string) (string, string) {
 	stdout := result.String()
 	stderr := m.toolLog.String()
 
-	if m.Shadow != nil && m.Shadow.DB != nil {
-		var files []string
-		for _, rec := range m.Shadow.DB.ByConv(convID) {
-			if rec.File != "" {
-				files = append(files, rec.File)
-			}
-		}
-		if len(files) > 0 {
-			log.Printf("claudeweb: fork %s created %d files: %v",
-				convID[:8], len(files), files)
-			kernel.StoreConvFiles(convID, files)
-		}
-	}
-
 	log.Printf("claudeweb: fork %s done, stdout=%d stderr=%d",
 		convID[:8], len(stdout), len(stderr))
 	return stdout, stderr

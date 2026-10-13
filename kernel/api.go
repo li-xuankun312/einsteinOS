@@ -18,7 +18,6 @@ type TaskMeta struct {
 	ConvID string
 	Result string
 	StdErr string
-	Files  []string
 	Ctx    context.Context
 	Cancel context.CancelFunc
 	Cmd    *exec.Cmd
@@ -439,60 +438,7 @@ func GetStderr(pid int64) string {
 	return ""
 }
 
-func GetFiles(pid int64) []string {
-	metaMu.Lock()
-	defer metaMu.Unlock()
-	if m, ok := taskMeta[pid]; ok {
-		return m.Files
-	}
-	return nil
-}
 
-func SetFiles(pid int64, files []string) {
-	metaMu.Lock()
-	defer metaMu.Unlock()
-	if m, ok := taskMeta[pid]; ok {
-		m.Files = files
-	}
-}
-
-func SetFilesForConv(convID string, files []string) {
-	metaMu.Lock()
-	defer metaMu.Unlock()
-	for _, m := range taskMeta {
-		if m.ConvID == convID {
-			m.Files = files
-			return
-		}
-	}
-}
-
-var (
-	convFiles   = make(map[string][]string)
-	convFilesMu sync.Mutex
-)
-
-func StoreConvFiles(convID string, files []string) {
-	convFilesMu.Lock()
-	convFiles[convID] = files
-	convFilesMu.Unlock()
-}
-
-func GetConvFiles(convID string) []string {
-	convFilesMu.Lock()
-	defer convFilesMu.Unlock()
-	return convFiles[convID]
-}
-
-func AllConvFiles() map[string][]string {
-	convFilesMu.Lock()
-	defer convFilesMu.Unlock()
-	out := make(map[string][]string, len(convFiles))
-	for k, v := range convFiles {
-		out[k] = v
-	}
-	return out
-}
 
 func SetStartupTime(t int64) {
 	StartupTime = int32(t)
