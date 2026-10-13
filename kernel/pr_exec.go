@@ -21,7 +21,7 @@ const (
 	STEP_REF_THEORIZE
 	STEP_DEV_WITH_THEORY
 	STEP_HW_PROBE
-	STEP_REF_THEORIZE_ALL
+	STEP_REF_BIND
 	STEP_DEV_FROM_THEOREMS
 )
 
@@ -129,7 +129,7 @@ func PRRunNext(pid int64) (string, error) {
 			}
 		}
 
-	case STEP_REF_THEORIZE_ALL:
+	case STEP_REF_BIND:
 		result, err = ref_bind(pid, step.Owner, step.Repo)
 
 	case STEP_REF_READ:
@@ -216,83 +216,62 @@ func PRRunNext(pid int64) (string, error) {
 }
 
 func hw_init(pid int64) (string, error) {
-	commands := []string{
-		"cat /proc/cpuinfo | head -30",
-		"free -h",
-		"lspci | grep -i -E 'vga|3d|display|gpu' 2>/dev/null || echo 'no lspci'",
-		"nvidia-smi 2>/dev/null || ixsmi 2>/dev/null || echo 'no gpu tool'",
-		"uname -a",
-		"cat /etc/os-release 2>/dev/null | head -5",
+	pr := GetPR(pid)
+	task := ""
+	if pr != nil {
+		task = strip_credentials(pr.Title)
 	}
 
-	var results []string
-	for _, cmd := range commands {
-		childPid, err := ForkExec(cmd, ".")
-		if err != nil {
-			results = append(results, fmt.Sprintf("%s: %v", cmd, err))
-			continue
-		}
-		Wait(childPid)
-		out := GetResult(childPid)
-		stderr := GetStderr(childPid)
-		if out != "" {
-			results = append(results, out)
-		}
-		if stderr != "" {
-			results = append(results, stderr)
-		}
-	}
+	prompt := "probe this machine's hardware. " +
+		"run whatever commands you need (lspci, nvidia-smi, ixsmi, " +
+		"cpuinfo, free, topology, etc). " +
+		"report: GPU vendor/model/count, interconnect topology, " +
+		"CPU cores, memory, kernel version.\n\n" +
+		"context: " + task
 
-	hw_info := strings.Join(results, "\n---\n")
-	log.Printf("hw_init: pid=%d %d bytes", pid, len(hw_info))
+	child, err := Fork(prompt, ".")
+	if err != nil {
+		return "", err
+	}
+	log.Printf("hw_init: pid=%d child=%d", pid, child)
+	Wait(child)
+
+	hw_info := GetResult(child)
+	hw_tools := GetStderr(child)
 
 	prMu.Lock()
-	pr := prTable[pid]
-	prMu.Unlock()
-	if pr != nil {
-		pr.HWInfo = hw_info
+	if pr := prTable[pid]; pr != nil {
+		pr.HWInfo = hw_info + "\n" + hw_tools
 	}
+	prMu.Unlock()
 
+	log.Printf("hw_init: pid=%d stdout=%d stderr=%d", pid, len(hw_info), len(hw_tools))
 	return hw_info, nil
 }
 
 func ref_bind(pid int64, owner, repo string) (string, error) {
-	commits, err := RefListCommits(owner, repo)
+	commit, diff, err := RefFirstCommit(owner, repo)
 	if err != nil {
 		return "", err
 	}
-	log.Printf("ref_bind: %s/%s %d commits", owner, repo, len(commits))
+	log.Printf("ref_bind: %s/%s first commit %s (%d files)",
+		owner, repo, commit.SHA[:12], len(commit.Files))
 
-	done := 0
-	for i, c := range commits {
-		if theorem_get(owner+"/"+repo, c.SHA) != "" {
-			done++
-			continue
-		}
+	theory := ref_theorize(pid, owner, repo,
+		commit.SHA, diff, len(commit.Files), commit.Message)
 
-		diff, files, e := RefReadCommit(owner, repo, c.SHA)
-		if e != nil {
-			log.Printf("ref_bind: skip %s: %v", c.SHA[:12], e)
-			continue
-		}
-
-		ref_theorize(pid, owner, repo, c.SHA, diff, len(files), c.Message)
-		done++
-
-		if (i+1)%10 == 0 {
-			log.Printf("ref_bind: %s/%s %d/%d", owner, repo, done, len(commits))
-		}
-	}
-
-	count := theorem_count(owner + "/" + repo)
-	result := fmt.Sprintf("%s/%s: %d commits %d theorems", owner, repo, len(commits), count)
+	result := fmt.Sprintf("%s/%s: first commit %s -> %d bytes theory",
+		owner, repo, commit.SHA[:12], len(theory))
 	log.Printf("ref_bind: %s", result)
 	return result, nil
 }
 
 func dev_from_theorems(pid int64, step *Step) (string, error) {
 	repo := step.Owner + "/" + step.Repo
-	all_theorems := theorem_get_all(repo)
+	theory := theorem_get(repo, "")
+	if theory == "" {
+		return "", fmt.Errorf("no theorems for %s", repo)
+	}
 
 	pr := GetPR(pid)
 	task := ""
@@ -308,19 +287,18 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 		prompt.WriteString(truncDiff(hw_info, 2000))
 		prompt.WriteString("\n\n")
 	}
-	prompt.WriteString(fmt.Sprintf("[THEOREMS from %s — %d entries]\n", repo, theorem_count(repo)))
-	prompt.WriteString(truncDiff(all_theorems, 80000))
+	prompt.WriteString(fmt.Sprintf("[THEORY from %s first commit]\n", repo))
+	prompt.WriteString(truncDiff(theory, 12000))
 	prompt.WriteString("\n\n[TASK]\n")
 	prompt.WriteString(task)
-	prompt.WriteString("\n\nbased on the accumulated mathematical theory, write code. output ONLY code.")
 
-	childPid, err := Fork(prompt.String(), ".")
+	child, err := Fork(prompt.String(), ".")
 	if err != nil {
 		return "", err
 	}
-	Wait(childPid)
-	step.ChildPid = childPid
-	return GetResult(childPid), nil
+	Wait(child)
+	step.ChildPid = child
+	return GetResult(child), nil
 }
 
 func PRRunAll(pid int64) []string {
@@ -397,7 +375,7 @@ func step_name(k StepKind) string {
 		return "ref_first"
 	case STEP_REF_THEORIZE:
 		return "ref_theorize"
-	case STEP_REF_THEORIZE_ALL:
+	case STEP_REF_BIND:
 		return "ref_bind"
 	case STEP_DEV_WITH_THEORY:
 		return "dev_theory"

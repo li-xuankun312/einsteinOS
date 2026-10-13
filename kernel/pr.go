@@ -95,7 +95,7 @@ func PRFork(repo, branch, title string, refs []RefRepo) (int64, error) {
 
 	for _, ref := range refs {
 		pr_push_step(int64(pid), &Step{
-			Kind:  STEP_REF_THEORIZE_ALL,
+			Kind:  STEP_REF_BIND,
 			Owner: ref.Owner,
 			Repo:  ref.Name,
 		})
