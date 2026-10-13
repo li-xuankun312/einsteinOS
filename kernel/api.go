@@ -59,9 +59,9 @@ func Init() {
 	taskMeta[0] = &TaskMeta{Pwd: "."}
 }
 
-var convExecFn func(prompt string) string
+var convExecFn func(prompt string) (string, string)
 
-func SetConvExec(fn func(string) string) {
+func SetConvExec(fn func(string) (string, string)) {
 	convExecFn = fn
 }
 
@@ -102,10 +102,11 @@ func Fork(prompt string, pwd string) (int64, error) {
 
 	if convExecFn != nil {
 		go func() {
-			result := convExecFn(prompt)
+			stdout, stderr := convExecFn(prompt)
 
 			metaMu.Lock()
-			meta.Result = result
+			meta.Result = stdout
+			meta.StdErr = stderr
 			metaMu.Unlock()
 
 			schedMu.Lock()
