@@ -11,6 +11,7 @@ import (
 
 	"google.golang.org/genai"
 
+	"google.golang.org/adk/v2/kernel"
 	"google.golang.org/adk/v2/model"
 )
 
