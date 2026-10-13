@@ -448,8 +448,12 @@ func (m *Model) RunConversation(prompt string) (string, string) {
 		},
 	}
 
+	fullPrompt := localExecPrefix + prompt
+
 	log.Printf("claudeweb: fork %s/chat/%s", m.client.baseURL, convID)
 	log.Printf("claudeweb: → %s prompt=%q", convID[:8], truncate(prompt, 80))
+
+	webReq.Prompt = fullPrompt
 
 	m.toolLog.Reset()
 	var result strings.Builder
