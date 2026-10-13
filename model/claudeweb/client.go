@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 )
 
@@ -50,9 +51,41 @@ func NewClient(cfg ClientConfig) *Client {
 	}
 }
 
+const (
+	apiWindowSize = 9
+	apiWindowDur  = 10 * time.Minute
+)
+
+var (
+	apiCallTimes [apiWindowSize]time.Time
+	apiCallIdx   int
+	apiCallMu    sync.Mutex
+)
+
+func apiThrottle() {
+	apiCallMu.Lock()
+	defer apiCallMu.Unlock()
+
+	oldest := apiCallTimes[apiCallIdx%apiWindowSize]
+	if !oldest.IsZero() {
+		elapsed := time.Since(oldest)
+		if elapsed < apiWindowDur {
+			wait := apiWindowDur - elapsed
+			log.Printf("api_throttle: %d calls in %v, sleeping %v",
+				apiWindowSize, elapsed.Truncate(time.Second), wait.Truncate(time.Second))
+			apiCallMu.Unlock()
+			time.Sleep(wait)
+			apiCallMu.Lock()
+		}
+	}
+	apiCallTimes[apiCallIdx%apiWindowSize] = time.Now()
+	apiCallIdx++
+}
+
 // Completion sends a completion request and returns the raw SSE response body.
 // The caller is responsible for closing the body.
 func (c *Client) Completion(convID string, req *CompletionRequest) (io.ReadCloser, error) {
+	apiThrottle()
 	url := fmt.Sprintf("%s/api/organizations/%s/chat_conversations/%s/completion",
 		c.baseURL, c.orgID, convID)
 
