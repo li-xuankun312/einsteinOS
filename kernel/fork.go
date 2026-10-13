@@ -1,16 +1,20 @@
 package kernel
 
 import (
-	. "google.golang.org/adk/v2/include"
+	"google.golang.org/adk/v2/include"
 )
 
-var lastPid int32 = 0
+var lastPid int32
+
+var writeVerifyFn func(address uint32)
+
+func SetWriteVerify(fn func(uint32)) { writeVerifyFn = fn }
 
 func VerifyArea(addr uint32, size int32) {
 	start := addr
 	size += int32(start & 0xfff)
 	start &= 0xfffff000
-	start += GetBase(Current.Ldt[2])
+	start += include.GetBase(include.Current.Ldt[2])
 	for size > 0 {
 		size -= 4096
 		if writeVerifyFn != nil {
@@ -20,67 +24,56 @@ func VerifyArea(addr uint32, size int32) {
 	}
 }
 
-var writeVerifyFn func(address uint32)
-
-func SetWriteVerify(fn func(uint32)) {
-	writeVerifyFn = fn
-}
-
-func copyMem(nr int, p *TaskStruct) int {
-	var oldDataBase, newDataBase, dataLimit uint32
-	var oldCodeBase, newCodeBase, codeLimit uint32
-
-	codeLimit = GetLimit(Current.Ldt[1])
-	dataLimit = GetLimit(Current.Ldt[2])
-	oldCodeBase = GetBase(Current.Ldt[1])
-	oldDataBase = GetBase(Current.Ldt[2])
-
-	if oldDataBase != oldCodeBase {
-		Panic("We don't support separate I&D")
-	}
-	if dataLimit < codeLimit {
-		Panic("Bad data_limit")
-	}
-
-	newDataBase = uint32(nr) * 0x4000000
-	newCodeBase = newDataBase
-	p.StartCode = newCodeBase
-
-	SetBase(&p.Ldt[1], newCodeBase)
-	SetBase(&p.Ldt[2], newDataBase)
-
-	if copyPageTablesFn != nil {
-		if copyPageTablesFn(oldDataBase, newDataBase, int32(dataLimit)) != 0 {
-			Printk("free_page_tables: from copy_mem\n")
-			if freePageTablesFn != nil {
-				freePageTablesFn(newDataBase, int32(dataLimit))
-			}
-			return -ENOMEM
-		}
-	}
-	return 0
-}
-
 var copyPageTablesFn func(from, to uint32, size int32) int
 var freePageTablesFn func(from uint32, size int32) int
 
 func SetCopyPageTables(fn func(uint32, uint32, int32) int) { copyPageTablesFn = fn }
 func SetFreePageTables(fn func(uint32, int32) int)         { freePageTablesFn = fn }
 
+func copyMem(nr int, p *include.TaskStruct) int {
+	codeLimit := include.GetLimit(include.Current.Ldt[1])
+	dataLimit := include.GetLimit(include.Current.Ldt[2])
+	oldCodeBase := include.GetBase(include.Current.Ldt[1])
+	oldDataBase := include.GetBase(include.Current.Ldt[2])
+
+	if oldDataBase != oldCodeBase {
+		Panic("separate I&D not supported")
+	}
+	if dataLimit < codeLimit {
+		Panic("bad data_limit")
+	}
+
+	newBase := uint32(nr) * 0x4000000
+	p.StartCode = newBase
+	include.SetBase(&p.Ldt[1], newBase)
+	include.SetBase(&p.Ldt[2], newBase)
+
+	if copyPageTablesFn == nil {
+		return 0
+	}
+	if copyPageTablesFn(oldDataBase, newBase, int32(dataLimit)) != 0 {
+		Printk("free_page_tables: from copy_mem\n")
+		if freePageTablesFn != nil {
+			freePageTablesFn(newBase, int32(dataLimit))
+		}
+		return -include.ENOMEM
+	}
+	return 0
+}
+
 func CopyProcess(nr int, ebp, edi, esi, gs int32,
 	ebx, ecx, edx int32,
 	fs, es, ds int32,
 	eip, cs, eflags, esp, ss int32) int32 {
 
-	p := &TaskStruct{}
+	p := &include.TaskStruct{}
+	*p = *include.Current
 
-	Task[nr] = p
+	include.Task[nr] = p
 
-	copyTaskStruct(p, Current)
-
-	p.State = TASK_UNINTERRUPTIBLE
+	p.State = include.TASK_UNINTERRUPTIBLE
 	p.Pid = lastPid
-	p.Father = Current.Pid
+	p.Father = include.Current.Pid
 	p.Counter = p.Priority
 	p.Signal = 0
 	p.Alarm = 0
@@ -89,122 +82,81 @@ func CopyProcess(nr int, ebp, edi, esi, gs int32,
 	p.Stime = 0
 	p.Cutime = 0
 	p.Cstime = 0
-	p.StartTime = Jiffies
+	p.StartTime = include.Jiffies
+	p.TokenUsed = 0
+	p.ContextSize = 0
 
-	p.Tss.BackLink = 0
-	p.Tss.Esp0 = PAGE_SIZE
-	p.Tss.Ss0 = 0x10
-	p.Tss.Eip = eip
-	p.Tss.Eflags = eflags
-	p.Tss.Eax = 0
-	p.Tss.Ecx = ecx
-	p.Tss.Edx = edx
-	p.Tss.Ebx = ebx
-	p.Tss.Esp = esp
-	p.Tss.Ebp = ebp
-	p.Tss.Esi = esi
-	p.Tss.Edi = edi
-	p.Tss.Es = es & 0xffff
-	p.Tss.Cs = cs & 0xffff
-	p.Tss.Ss = ss & 0xffff
-	p.Tss.Ds = ds & 0xffff
-	p.Tss.Fs = fs & 0xffff
-	p.Tss.Gs = gs & 0xffff
-	p.Tss.Ldt = int32(LDT(nr))
-	p.Tss.TraceBitmap = 0x80000000
-
-	if LastTaskUsedMath == Current {
+	p.Tss = include.TssStruct{
+		Esp0:        include.PAGE_SIZE,
+		Ss0:         0x10,
+		Eip:         eip,
+		Eflags:      eflags,
+		Eax:         0,
+		Ecx:         ecx,
+		Edx:         edx,
+		Ebx:         ebx,
+		Esp:         esp,
+		Ebp:         ebp,
+		Esi:         esi,
+		Edi:         edi,
+		Es:          es & 0xffff,
+		Cs:          cs & 0xffff,
+		Ss:          ss & 0xffff,
+		Ds:          ds & 0xffff,
+		Fs:          fs & 0xffff,
+		Gs:          gs & 0xffff,
+		Ldt:         int32(include.LDT(nr)),
+		TraceBitmap: 0x80000000,
 	}
 
 	if copyMem(nr, p) != 0 {
-		Task[nr] = nil
-		return -EAGAIN
+		include.Task[nr] = nil
+		return -include.EAGAIN
 	}
 
-	for i := 0; i < NR_OPEN; i++ {
-		f := p.Filp[i]
-		if f != nil {
+	for i := 0; i < include.NR_OPEN; i++ {
+		if f := p.Filp[i]; f != nil {
 			f.FCount++
 		}
 	}
 
-	if Current.Pwd != nil {
-		Current.Pwd.ICount++
+	if include.Current.Pwd != nil {
+		include.Current.Pwd.ICount++
 	}
-	if Current.Root != nil {
-		Current.Root.ICount++
+	if include.Current.Root != nil {
+		include.Current.Root.ICount++
 	}
-	if Current.Executable != nil {
-		Current.Executable.ICount++
+	if include.Current.Executable != nil {
+		include.Current.Executable.ICount++
 	}
 
-	p.State = TASK_RUNNING
-
+	p.State = include.TASK_RUNNING
 	return lastPid
 }
 
 func FindEmptyProcess() int {
-repeat:
-	lastPid++
-	if lastPid < 0 {
-		lastPid = 1
-	}
-	for i := 0; i < NR_TASKS; i++ {
-		if Task[i] != nil && Task[i].Pid == lastPid {
-			goto repeat
+	for {
+		lastPid++
+		if lastPid < 0 {
+			lastPid = 1
+		}
+
+		conflict := false
+		for i := 0; i < include.NR_TASKS; i++ {
+			if include.Task[i] != nil && include.Task[i].Pid == lastPid {
+				conflict = true
+				break
+			}
+		}
+		if !conflict {
+			break
 		}
 	}
-	for i := 1; i < NR_TASKS; i++ {
-		if Task[i] == nil {
+
+	for i := 1; i < include.NR_TASKS; i++ {
+		if include.Task[i] == nil {
 			return i
 		}
 	}
-	return -EAGAIN
-}
-
-func copyTaskStruct(dst, src *TaskStruct) {
-	dst.State = src.State
-	dst.Counter = src.Counter
-	dst.Priority = src.Priority
-	dst.Signal = src.Signal
-	dst.Sigaction = src.Sigaction
-	dst.Blocked = src.Blocked
-	dst.ExitCode = src.ExitCode
-	dst.StartCode = src.StartCode
-	dst.EndCode = src.EndCode
-	dst.EndData = src.EndData
-	dst.Brk = src.Brk
-	dst.StartStack = src.StartStack
-	dst.Pid = src.Pid
-	dst.Father = src.Father
-	dst.Pgrp = src.Pgrp
-	dst.Session = src.Session
-	dst.Leader = src.Leader
-	dst.Uid = src.Uid
-	dst.Euid = src.Euid
-	dst.Suid = src.Suid
-	dst.Gid = src.Gid
-	dst.Egid = src.Egid
-	dst.Sgid = src.Sgid
-	dst.Alarm = src.Alarm
-	dst.Utime = src.Utime
-	dst.Stime = src.Stime
-	dst.Cutime = src.Cutime
-	dst.Cstime = src.Cstime
-	dst.StartTime = src.StartTime
-	dst.UsedMath = src.UsedMath
-	dst.Tty = src.Tty
-	dst.Umask = src.Umask
-	dst.Pwd = src.Pwd
-	dst.Root = src.Root
-	dst.Executable = src.Executable
-	dst.CloseOnExec = src.CloseOnExec
-	dst.Filp = src.Filp
-	dst.Ldt = src.Ldt
-	dst.Tss = src.Tss
-	dst.TokenBudget = src.TokenBudget
-	dst.TokenUsed = 0
-	dst.ContextSize = 0
-	dst.ContextLimit = src.ContextLimit
-	dst.Effort = src.Effort
+	return -include.EAGAIN
 }

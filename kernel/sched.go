@@ -1,4 +1,3 @@
-
 package kernel
 
 import (
@@ -8,12 +7,16 @@ import (
 	"sync"
 	"time"
 
-	. "google.golang.org/adk/v2/include"
+	"google.golang.org/adk/v2/include"
 )
-func _S(nr int) int32 { return 1 << (nr - 1) }
 
-var _BLOCKABLE int32 = ^(_S(SIGKILL) | _S(SIGSTOP))
-func ShowTask(nr int, p *TaskStruct) {
+func signalBit(nr int) int32 { return 1 << (nr - 1) }
+
+var blockable int32 = ^(signalBit(include.SIGKILL) | signalBit(include.SIGSTOP))
+
+var schedMu sync.Mutex
+
+func ShowTask(nr int, p *include.TaskStruct) {
 	names := [5]string{"RUNNING", "INTERRUPTIBLE", "UNINTERRUPTIBLE", "ZOMBIE", "STOPPED"}
 	s := "?"
 	if p.State >= 0 && p.State < 5 {
@@ -24,128 +27,128 @@ func ShowTask(nr int, p *TaskStruct) {
 }
 
 func ShowStat() {
-	for i := 0; i < NR_TASKS; i++ {
-		if Task[i] != nil {
-			ShowTask(i, Task[i])
+	for i := 0; i < include.NR_TASKS; i++ {
+		if include.Task[i] != nil {
+			ShowTask(i, include.Task[i])
 		}
 	}
 }
-var schedMu sync.Mutex
 
 func switchTo(n int) {
-	if Task[n] == Current {
+	if include.Task[n] == include.Current {
 		return
 	}
-	Current = Task[n]
+	include.Current = include.Task[n]
 }
 
 func Schedule() {
-	var i, next int
-	var c int32
-
-	for i = NR_TASKS - 1; i > 0; i-- {
-		p := Task[i]
+	for i := include.NR_TASKS - 1; i > 0; i-- {
+		p := include.Task[i]
 		if p == nil {
 			continue
 		}
-		if p.Alarm != 0 && p.Alarm < Jiffies {
-			p.Signal |= _S(SIGALRM)
+		if p.Alarm != 0 && p.Alarm < include.Jiffies {
+			p.Signal |= signalBit(include.SIGALRM)
 			p.Alarm = 0
 		}
-		if (p.Signal & ^(_BLOCKABLE & p.Blocked)) != 0 &&
-			p.State == TASK_INTERRUPTIBLE {
-			p.State = TASK_RUNNING
+		if (p.Signal & ^(blockable & p.Blocked)) != 0 &&
+			p.State == include.TASK_INTERRUPTIBLE {
+			p.State = include.TASK_RUNNING
 		}
 	}
 
 	for {
-		c = -1
-		next = 0
-		i = NR_TASKS
-		for i > 1 {
-			i--
-			if Task[i] == nil {
+		c := int32(-1)
+		next := 0
+		for i := include.NR_TASKS - 1; i > 0; i-- {
+			t := include.Task[i]
+			if t == nil {
 				continue
 			}
-			if Task[i].State == TASK_RUNNING && Task[i].Counter > c {
-				c = Task[i].Counter
+			if t.State == include.TASK_RUNNING && t.Counter > c {
+				c = t.Counter
 				next = i
 			}
 		}
 		if c != 0 {
-			break
+			switchTo(next)
+			return
 		}
-		for i = NR_TASKS - 1; i > 0; i-- {
-			if Task[i] != nil {
-				Task[i].Counter = (Task[i].Counter >> 1) + Task[i].Priority
+		for i := include.NR_TASKS - 1; i > 0; i-- {
+			if include.Task[i] != nil {
+				include.Task[i].Counter = (include.Task[i].Counter >> 1) + include.Task[i].Priority
 			}
 		}
 	}
-	switchTo(next)
 }
+
 func SysPause() int {
-	Current.State = TASK_INTERRUPTIBLE
+	include.Current.State = include.TASK_INTERRUPTIBLE
 	Schedule()
 	return 0
 }
 
-func SleepOn(p **TaskStruct) {
+func SleepOn(p **include.TaskStruct) {
 	if p == nil {
 		return
 	}
-	if Current == Task[0] {
+	if include.Current == include.Task[0] {
 		Printk("task[0] trying to sleep\n")
 		return
 	}
 	tmp := *p
-	*p = Current
-	Current.State = TASK_UNINTERRUPTIBLE
+	*p = include.Current
+	include.Current.State = include.TASK_UNINTERRUPTIBLE
 	Schedule()
 	if tmp != nil {
-		tmp.State = TASK_RUNNING
+		tmp.State = include.TASK_RUNNING
 	}
 }
 
-func InterruptibleSleepOn(p **TaskStruct) {
+func InterruptibleSleepOn(p **include.TaskStruct) {
 	if p == nil {
 		return
 	}
-	if Current == Task[0] {
+	if include.Current == include.Task[0] {
 		Printk("task[0] trying to sleep\n")
 		return
 	}
 	tmp := *p
-	*p = Current
-repeat:
-	Current.State = TASK_INTERRUPTIBLE
-	Schedule()
-	if *p != nil && *p != Current {
-		(*p).State = TASK_RUNNING
-		goto repeat
+	*p = include.Current
+
+	for {
+		include.Current.State = include.TASK_INTERRUPTIBLE
+		Schedule()
+		if *p == nil || *p == include.Current {
+			break
+		}
+		(*p).State = include.TASK_RUNNING
 	}
+
 	*p = nil
 	if tmp != nil {
-		tmp.State = TASK_RUNNING
+		tmp.State = include.TASK_RUNNING
 	}
 }
 
-func WakeUp(p **TaskStruct) {
+func WakeUp(p **include.TaskStruct) {
 	if p != nil && *p != nil {
-		(*p).State = TASK_RUNNING
+		(*p).State = include.TASK_RUNNING
 		*p = nil
 	}
 }
-const TIME_REQUESTS = 64
 
-type timerListEntry struct {
-	jiffies int32 // differential delay from predecessor
+const maxTimerRequests = 64
+
+type timerEntry struct {
+	jiffies int32
 	fn      func()
-	next    *timerListEntry
+	next    *timerEntry
 }
 
 var (
-	timerList [TIME_REQUESTS]timerListEntry
-	nextTimer *timerListEntry
+	timerPool [maxTimerRequests]timerEntry
+	timerHead *timerEntry
 	timerMu   sync.Mutex
 )
 
@@ -161,43 +164,44 @@ func AddTimer(ticks int32, fn func()) {
 		return
 	}
 
-	var p *timerListEntry
-	for i := 0; i < TIME_REQUESTS; i++ {
-		if timerList[i].fn == nil {
-			p = &timerList[i]
+	var entry *timerEntry
+	for i := range timerPool {
+		if timerPool[i].fn == nil {
+			entry = &timerPool[i]
 			break
 		}
 	}
-	if p == nil {
-		Panic("No more time requests free")
+	if entry == nil {
+		Panic("no free timer slots")
 	}
 
-	p.fn = fn
-	p.jiffies = ticks
-	p.next = nextTimer
-	nextTimer = p
+	entry.fn = fn
+	entry.jiffies = ticks
+	entry.next = timerHead
+	timerHead = entry
 
-	for p.next != nil && p.next.jiffies < p.jiffies {
-		p.jiffies -= p.next.jiffies
-		p.fn, p.next.fn = p.next.fn, p.fn
-		p.jiffies, p.next.jiffies = p.next.jiffies, p.jiffies
-		p = p.next
+	for entry.next != nil && entry.next.jiffies < entry.jiffies {
+		entry.jiffies -= entry.next.jiffies
+		entry.fn, entry.next.fn = entry.next.fn, entry.fn
+		entry.jiffies, entry.next.jiffies = entry.next.jiffies, entry.jiffies
+		entry = entry.next
 	}
 }
+
 func DoTimer(cpl int32) {
 	if cpl != 0 {
-		Current.Utime++
+		include.Current.Utime++
 	} else {
-		Current.Stime++
+		include.Current.Stime++
 	}
 
 	timerMu.Lock()
-	if nextTimer != nil {
-		nextTimer.jiffies--
-		for nextTimer != nil && nextTimer.jiffies <= 0 {
-			fn := nextTimer.fn
-			nextTimer.fn = nil
-			nextTimer = nextTimer.next
+	if timerHead != nil {
+		timerHead.jiffies--
+		for timerHead != nil && timerHead.jiffies <= 0 {
+			fn := timerHead.fn
+			timerHead.fn = nil
+			timerHead = timerHead.next
 			if fn != nil {
 				timerMu.Unlock()
 				fn()
@@ -207,60 +211,64 @@ func DoTimer(cpl int32) {
 	}
 	timerMu.Unlock()
 
-	Current.Counter--
-	if Current.Counter > 0 {
+	include.Current.Counter--
+	if include.Current.Counter > 0 {
 		return
 	}
-	Current.Counter = 0
+	include.Current.Counter = 0
 	if cpl == 0 {
 		return
 	}
 	Schedule()
 }
+
 func SysAlarm(seconds int32) int32 {
-	old := Current.Alarm
+	old := include.Current.Alarm
 	if old != 0 {
-		old = (old - Jiffies) / HZ
+		old = (old - include.Jiffies) / include.HZ
 	}
 	if seconds > 0 {
-		Current.Alarm = Jiffies + HZ*seconds
+		include.Current.Alarm = include.Jiffies + include.HZ*seconds
 	} else {
-		Current.Alarm = 0
+		include.Current.Alarm = 0
 	}
 	return old
 }
-func SysGetpid() int32   { return Current.Pid }
-func SysGetppid() int32  { return Current.Father }
-func SysGetuid() uint16  { return Current.Uid }
-func SysGeteuid() uint16 { return Current.Euid }
-func SysGetgid() uint16  { return Current.Gid }
-func SysGetegid() uint16 { return Current.Egid }
+
+func SysGetpid() int32   { return include.Current.Pid }
+func SysGetppid() int32  { return include.Current.Father }
+func SysGetuid() uint16  { return include.Current.Uid }
+func SysGeteuid() uint16 { return include.Current.Euid }
+func SysGetgid() uint16  { return include.Current.Gid }
+func SysGetegid() uint16 { return include.Current.Egid }
 
 func SysNice(increment int32) int {
-	if Current.Priority-increment > 0 {
-		Current.Priority -= increment
+	if include.Current.Priority-increment > 0 {
+		include.Current.Priority -= increment
 	}
 	return 0
 }
+
 func SchedInit() {
-	initTask := &TaskStruct{}
-	initTask.State = TASK_RUNNING
-	initTask.Counter = 15
-	initTask.Priority = 15
-	initTask.Pid = 0
-	initTask.Father = -1
-	initTask.Leader = 1
-	initTask.Tty = -1
-	initTask.Umask = 0022
-
-	for i := 1; i < NR_TASKS; i++ {
-		Task[i] = nil
+	initTask := &include.TaskStruct{
+		State:    include.TASK_RUNNING,
+		Counter:  15,
+		Priority: 15,
+		Pid:      0,
+		Father:   -1,
+		Leader:   1,
+		Tty:      -1,
+		Umask:    0022,
 	}
-	Task[0] = initTask
-	Current = initTask
 
-	Jiffies = 0
-	StartupTime = int32(time.Now().Unix())
+	for i := 1; i < include.NR_TASKS; i++ {
+		include.Task[i] = nil
+	}
+	include.Task[0] = initTask
+	include.Current = initTask
+
+	include.Jiffies = 0
+	include.StartupTime = int32(time.Now().Unix())
 
 	go timerTicker()
 
@@ -269,11 +277,11 @@ func SchedInit() {
 }
 
 func timerTicker() {
-	ticker := time.NewTicker(time.Second / HZ)
+	ticker := time.NewTicker(time.Second / include.HZ)
 	defer ticker.Stop()
 	for range ticker.C {
 		schedMu.Lock()
-		Jiffies++
+		include.Jiffies++
 		DoTimer(1)
 		schedMu.Unlock()
 	}

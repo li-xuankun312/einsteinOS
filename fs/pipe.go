@@ -1,123 +1,199 @@
 package fs
 
 import (
-	. "google.golang.org/adk/v2/include"
+	"errors"
+	"sync"
+
+	"google.golang.org/adk/v2/include"
 )
 
-var PipeBuffers = make(map[*MInode][]byte)
+var (
+	errBrokenPipe = errors.New("broken pipe")
+)
 
-func pipeSize(inode *MInode) int {
-	return int((inode.IZone[0] - inode.IZone[1]) & (PAGE_SIZE - 1))
+type Pipe struct {
+	mu   sync.Mutex
+	cond *sync.Cond
+
+	buf  []byte
+	head int
+	tail int
+
+	readers int
+	writers int
 }
 
-func ReadPipe(inode *MInode, buf []byte, count int) int {
-	readn := 0
-	pipeBuf := PipeBuffers[inode]
-	if pipeBuf == nil { return 0 }
+var pipes sync.Map
 
-	for count > 0 {
-		for {
-			size := pipeSize(inode)
-			if size != 0 { break }
-			if wakeUpFn != nil { wakeUpFn(&inode.IWait) }
-			if inode.ICount != 2 { return readn }
-			if sleepOnFn != nil { sleepOnFn(&inode.IWait) }
-		}
-		size := pipeSize(inode)
-		chars := PAGE_SIZE - int(inode.IZone[1])
-		if chars > count { chars = count }
-		if chars > size { chars = size }
-		count -= chars
-		readn += chars
-		tail := int(inode.IZone[1])
-		inode.IZone[1] = uint16((int(inode.IZone[1]) + chars) & (PAGE_SIZE - 1))
-		for i := 0; i < chars; i++ {
-			if readn-chars+i < len(buf) {
-				buf[readn-chars+i] = pipeBuf[tail]
-			}
-			tail++
-		}
+func newPipe(inode *include.MInode) *Pipe {
+	p := &Pipe{
+		buf:     make([]byte, include.PAGE_SIZE),
+		readers: 1,
+		writers: 1,
 	}
-	if wakeUpFn != nil { wakeUpFn(&inode.IWait) }
-	return readn
+	p.cond = sync.NewCond(&p.mu)
+	pipes.Store(inode, p)
+	return p
 }
 
-func WritePipe(inode *MInode, buf []byte, count int) int {
-	written := 0
-	pipeBuf := PipeBuffers[inode]
-	if pipeBuf == nil { return -1 }
+func getPipe(inode *include.MInode) *Pipe {
+	v, ok := pipes.Load(inode)
+	if !ok {
+		return nil
+	}
+	return v.(*Pipe)
+}
+
+func (p *Pipe) size() int {
+	return (p.head - p.tail) & (include.PAGE_SIZE - 1)
+}
+
+func (p *Pipe) space() int {
+	return (include.PAGE_SIZE - 1) - p.size()
+}
+
+func (p *Pipe) Read(dst []byte) (int, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	total := 0
+	count := len(dst)
 
 	for count > 0 {
-		for {
-			size := (PAGE_SIZE - 1) - pipeSize(inode)
-			if size != 0 { break }
-			if wakeUpFn != nil { wakeUpFn(&inode.IWait) }
-			if inode.ICount != 2 {
-				Current.Signal |= 1 << (SIGPIPE - 1)
-				if written != 0 { return written }
-				return -1
+		for p.size() == 0 {
+			if p.writers < 1 {
+				return total, nil
 			}
-			if sleepOnFn != nil { sleepOnFn(&inode.IWait) }
+			p.cond.Wait()
 		}
-		size := (PAGE_SIZE - 1) - pipeSize(inode)
-		chars := PAGE_SIZE - int(inode.IZone[0])
-		if chars > count { chars = count }
-		if chars > size { chars = size }
-		count -= chars
-		written += chars
-		head := int(inode.IZone[0])
-		inode.IZone[0] = uint16((int(inode.IZone[0]) + chars) & (PAGE_SIZE - 1))
-		for i := 0; i < chars; i++ {
-			if written-chars+i < len(buf) {
-				pipeBuf[head] = buf[written-chars+i]
-			}
-			head++
+
+		n := include.PAGE_SIZE - p.tail
+		if n > count {
+			n = count
 		}
+		if n > p.size() {
+			n = p.size()
+		}
+
+		copy(dst[total:total+n], p.buf[p.tail:p.tail+n])
+		p.tail = (p.tail + n) & (include.PAGE_SIZE - 1)
+		total += n
+		count -= n
 	}
-	if wakeUpFn != nil { wakeUpFn(&inode.IWait) }
-	return written
+
+	p.cond.Broadcast()
+	return total, nil
+}
+
+func (p *Pipe) Write(src []byte) (int, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	total := 0
+	count := len(src)
+
+	for count > 0 {
+		for p.space() == 0 {
+			if p.readers < 1 {
+				include.Current.Signal |= 1 << (include.SIGPIPE - 1)
+				if total > 0 {
+					return total, errBrokenPipe
+				}
+				return 0, errBrokenPipe
+			}
+			p.cond.Broadcast()
+			p.cond.Wait()
+		}
+
+		n := include.PAGE_SIZE - p.head
+		if n > count {
+			n = count
+		}
+		if n > p.space() {
+			n = p.space()
+		}
+
+		copy(p.buf[p.head:p.head+n], src[total:total+n])
+		p.head = (p.head + n) & (include.PAGE_SIZE - 1)
+		total += n
+		count -= n
+	}
+
+	p.cond.Broadcast()
+	return total, nil
+}
+
+func ReadPipe(inode *include.MInode, buf []byte, count int) int {
+	p := getPipe(inode)
+	if p == nil {
+		return 0
+	}
+	n, _ := p.Read(buf[:count])
+	return n
+}
+
+func WritePipe(inode *include.MInode, buf []byte, count int) int {
+	p := getPipe(inode)
+	if p == nil {
+		return -1
+	}
+	n, err := p.Write(buf[:count])
+	if err != nil && n == 0 {
+		return -1
+	}
+	return n
 }
 
 func SysPipe(fildes []int) int {
-	var f [2]*File
+	var f [2]*include.File
 	var fd [2]int
 
 	j := 0
-	for i := 0; j < 2 && i < NR_FILE; i++ {
+	for i := 0; j < 2 && i < include.NR_FILE; i++ {
 		if FileTable[i].FCount == 0 {
 			f[j] = &FileTable[i]
 			f[j].FCount++
 			j++
 		}
 	}
-	if j == 1 { f[0].FCount = 0 }
-	if j < 2 { return -1 }
+	if j == 1 {
+		f[0].FCount = 0
+	}
+	if j < 2 {
+		return -1
+	}
 
 	j = 0
-	for i := 0; j < 2 && i < NR_OPEN; i++ {
-		if Current.Filp[i] == nil {
+	for i := 0; j < 2 && i < include.NR_OPEN; i++ {
+		if include.Current.Filp[i] == nil {
 			fd[j] = i
-			Current.Filp[i] = f[j]
+			include.Current.Filp[i] = f[j]
 			j++
 		}
 	}
-	if j == 1 { Current.Filp[fd[0]] = nil }
+	if j == 1 {
+		include.Current.Filp[fd[0]] = nil
+	}
 	if j < 2 {
-		f[0].FCount = 0; f[1].FCount = 0
+		f[0].FCount = 0
+		f[1].FCount = 0
 		return -1
 	}
 
 	inode := GetPipeInode()
 	if inode == nil {
-		Current.Filp[fd[0]] = nil
-		Current.Filp[fd[1]] = nil
-		f[0].FCount = 0; f[1].FCount = 0
+		include.Current.Filp[fd[0]] = nil
+		include.Current.Filp[fd[1]] = nil
+		f[0].FCount = 0
+		f[1].FCount = 0
 		return -1
 	}
-	PipeBuffers[inode] = make([]byte, PAGE_SIZE)
+	newPipe(inode)
 
-	f[0].FInode = inode; f[1].FInode = inode
-	f[0].FPos = 0; f[1].FPos = 0
+	f[0].FInode = inode
+	f[1].FInode = inode
+	f[0].FPos = 0
+	f[1].FPos = 0
 	f[0].FMode = 1
 	f[1].FMode = 2
 
