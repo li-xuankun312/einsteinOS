@@ -172,11 +172,16 @@ func PRRunNext(pid int64) (string, error) {
 			theory = theorem_get(step.Owner+"/"+step.Repo, step.SHA)
 		}
 		task := strip_credentials(step.Command)
-		feedback := pr_feedback(pid)
+		repo := step.Owner + "/" + step.Repo
+		feedback := pr_feedback(pid, map[string]string{
+			"repo":   repo,
+			"task":   task,
+			"commit": short_sha(step.SHA),
+		})
 		devPrompt := fmt.Sprintf(
-			"[REFERENCE THEORY from %s/%s commit %s]\n%s\n\n"+
+			"[REFERENCE THEORY from %s commit %s]\n%s\n\n"+
 				"[DEVELOPMENT TASK]\n%s",
-			step.Owner, step.Repo, short_sha(step.SHA),
+			repo, short_sha(step.SHA),
 			truncDiff(theory, 6000),
 			task)
 		if feedback != "" {
@@ -315,7 +320,12 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 	prompt.WriteString("\n[TASK]\n")
 	prompt.WriteString(task)
 
-	feedback := pr_feedback(pid)
+	feedback := pr_feedback(pid, map[string]string{
+		"repo":  repo,
+		"task":  task,
+		"files": fmt.Sprintf("%d", len(files)),
+		"lines": fmt.Sprintf("%d", read),
+	})
 	if feedback != "" {
 		prompt.WriteString(fmt.Sprintf("\n\n[DEVELOPMENT DISCIPLINE from prior review]\n%s", feedback))
 	}
@@ -456,20 +466,33 @@ func StepName(k StepKind) string {
 	return step_name(k)
 }
 
-func pr_feedback(pid int64) string {
+func pr_feedback(pid int64, ctx map[string]string) string {
 	prMu.Lock()
-	defer prMu.Unlock()
 	pr := prTable[pid]
 	if pr == nil || len(pr.Feedback) == 0 {
+		prMu.Unlock()
 		return ""
 	}
-	return strings.Join(pr.Feedback, "\n")
+	rules := make([]string, len(pr.Feedback))
+	copy(rules, pr.Feedback)
+	prMu.Unlock()
+
+	var sb strings.Builder
+	for _, rule := range rules {
+		line := rule
+		for k, v := range ctx {
+			line = strings.ReplaceAll(line, "{"+k+"}", v)
+		}
+		sb.WriteString(line)
+		sb.WriteString("\n")
+	}
+	return sb.String()
 }
 
-func PRFeedbackAdd(pid int64, line string) {
+func PRFeedbackAdd(pid int64, rule string) {
 	prMu.Lock()
 	defer prMu.Unlock()
 	if pr := prTable[pid]; pr != nil {
-		pr.Feedback = append(pr.Feedback, line)
+		pr.Feedback = append(pr.Feedback, rule)
 	}
 }
