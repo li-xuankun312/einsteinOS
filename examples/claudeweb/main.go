@@ -557,6 +557,15 @@ func newConversation(name string) (*claudeweb.Model, *runner.Runner, string) {
 		DB:      claudeweb.NewShadowDB(),
 	}
 	shadow.RegisterDriver(&kernel.PRDriver{})
+	shadow.RegisterDriver(&vikingdb.SyncDriver{
+		Engine:    dbEngine,
+		ProjectDB: &projectDB,
+		Token:     os.Getenv("GITHUB_TOKEN"),
+		Roots: map[string]string{
+			"li-xuankun312": "20224550109@stu.usc.edu.cn",
+			"zeng-bin3123":  "20210820209@stu.usc.edu.cn",
+		},
+	})
 	if projectDB != nil {
 		shadow.RegisterDriver(vikingdb.NewVikingDBDriver(dbEngine, projectDB))
 	}
