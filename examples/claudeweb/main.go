@@ -323,7 +323,9 @@ func main() {
 			go func() {
 				if err := syncer.SyncRepo(rp[0], rp[1]); err != nil {
 					log.Printf("[vikingdb] sync error: %v", err)
+					return
 				}
+				kernel.RegisterDevRepo(rp[0], rp[1])
 			}()
 			fmt.Printf("  syncing %s in background...\n", repoPath)
 
