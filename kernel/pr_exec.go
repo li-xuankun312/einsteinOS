@@ -172,19 +172,16 @@ func PRRunNext(pid int64) (string, error) {
 			theory = theorem_get(step.Owner+"/"+step.Repo, step.SHA)
 		}
 		task := strip_credentials(step.Command)
+		feedback := pr_feedback(pid)
 		devPrompt := fmt.Sprintf(
 			"[REFERENCE THEORY from %s/%s commit %s]\n%s\n\n"+
-				"[DEVELOPMENT TASK]\n%s\n\n"+
-				"[DEVELOPMENT DISCIPLINE]\n"+
-				"before modifying any code:\n"+
-				"1. read the ENTIRE function you are about to change\n"+
-				"2. if the change touches multiple functions, read the ENTIRE file first\n"+
-				"3. read the reference theory above for the same subsystem\n"+
-				"4. only then write code that satisfies the stated invariants and bounds\n"+
-				"never modify a function you have not read in full.",
+				"[DEVELOPMENT TASK]\n%s",
 			step.Owner, step.Repo, short_sha(step.SHA),
 			truncDiff(theory, 6000),
 			task)
+		if feedback != "" {
+			devPrompt += fmt.Sprintf("\n\n[DEVELOPMENT DISCIPLINE from prior review]\n%s", feedback)
+		}
 		childPid, e := Fork(devPrompt, ".")
 		err = e
 		if err == nil {
@@ -317,13 +314,11 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 	}
 	prompt.WriteString("\n[TASK]\n")
 	prompt.WriteString(task)
-	prompt.WriteString("\n\n[DEVELOPMENT DISCIPLINE]\n")
-	prompt.WriteString("before modifying any code:\n")
-	prompt.WriteString("1. read the ENTIRE function you are about to change — understand what it does from the function's own perspective\n")
-	prompt.WriteString("2. if the change touches multiple functions, read the ENTIRE file first\n")
-	prompt.WriteString("3. read the corresponding reference source above for the same subsystem — understand how the reference implements it\n")
-	prompt.WriteString("4. only then write code, in the SAME style as the reference source above\n")
-	prompt.WriteString("never modify a function you have not read in full. never skip step 1-3.")
+
+	feedback := pr_feedback(pid)
+	if feedback != "" {
+		prompt.WriteString(fmt.Sprintf("\n\n[DEVELOPMENT DISCIPLINE from prior review]\n%s", feedback))
+	}
 
 	log.Printf("dev_from_theorems: %s %d files %d lines fed", repo, len(files), read)
 
@@ -459,4 +454,22 @@ func findPrevResult(pid int64, kind StepKind, owner, repo string) string {
 
 func StepName(k StepKind) string {
 	return step_name(k)
+}
+
+func pr_feedback(pid int64) string {
+	prMu.Lock()
+	defer prMu.Unlock()
+	pr := prTable[pid]
+	if pr == nil || len(pr.Feedback) == 0 {
+		return ""
+	}
+	return strings.Join(pr.Feedback, "\n")
+}
+
+func PRFeedbackAdd(pid int64, line string) {
+	prMu.Lock()
+	defer prMu.Unlock()
+	if pr := prTable[pid]; pr != nil {
+		pr.Feedback = append(pr.Feedback, line)
+	}
 }

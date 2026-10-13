@@ -32,6 +32,7 @@ type PRProcess struct {
 	RefRepos   []RefRepo
 	Commits    []PRCommit
 	HWInfo     string
+	Feedback   []string
 	CreateTime time.Time
 	MergeTime  time.Time
 }
