@@ -257,38 +257,51 @@ func hw_init(pid int64) (string, error) {
 }
 
 func ref_bind(pid int64, owner, repo string) (string, error) {
-	commit, _, err := RefFirstCommit(owner, repo)
+	commits, err := RefListCommits(owner, repo)
 	if err != nil {
 		return "", err
 	}
-
-	files, _ := RefTreeAt(owner, repo, commit.SHA)
-	dir := fmt.Sprintf("/tmp/ref_%s_%s.git", owner, repo)
-
-	var listing strings.Builder
-	for _, f := range files {
-		listing.WriteString(f)
-		listing.WriteString("\n")
+	if len(commits) == 0 {
+		return "", fmt.Errorf("ref_bind: %s/%s no commits", owner, repo)
 	}
 
-	prompt := fmt.Sprintf(
-		"repo %s/%s first commit %s: %d files.\n"+
-			"bare repo at %s, read with: git --git-dir %s show %s:<path>\n\n"+
-			"file list:\n%s\n"+
-			"read ALL %d files. you decide the order and grouping.\n"+
-			"if there are too many to read in one pass, use bash to read batches, "+
-			"or focus on the most important directories first.\n"+
-			"for each file, output key=value:\n"+
-			"  file=<path>\n  lines=<number>\n  role=<one phrase>\n\n"+
-			"after reading all files, output a THEORY section with pure LaTeX "+
-			"mathematical formalizations for each semantic unit.\n"+
-			"verify LaTeX compiles with pdflatex.",
-		owner, repo, commit.SHA[:12], len(files),
-		dir, dir, commit.SHA,
-		listing.String(), len(files))
+	dir := fmt.Sprintf("/tmp/ref_%s_%s.git", owner, repo)
+	first := commits[0]
+	files, _ := RefTreeAt(owner, repo, first.SHA)
 
-	log.Printf("ref_bind: %s/%s %s %d files, child decides reading strategy",
-		owner, repo, commit.SHA[:12], len(files))
+	var summary strings.Builder
+	summary.WriteString(fmt.Sprintf("repo %s/%s: %d total commits.\n", owner, repo, len(commits)))
+	summary.WriteString(fmt.Sprintf("bare repo at %s\n", dir))
+	summary.WriteString(fmt.Sprintf("read with: git --git-dir %s show <sha>:<path>\n", dir))
+	summary.WriteString(fmt.Sprintf("list with: git --git-dir %s log --oneline --reverse\n\n", dir))
+
+	summary.WriteString(fmt.Sprintf("FIRST COMMIT %s: %s — %d files\n",
+		first.SHA[:12], first.Message, len(files)))
+	for _, f := range files {
+		summary.WriteString(fmt.Sprintf("  %s\n", f))
+	}
+
+	summary.WriteString(fmt.Sprintf("\nSUBSEQUENT COMMITS: %d\n", len(commits)-1))
+	for i := 1; i < len(commits) && i <= 20; i++ {
+		summary.WriteString(fmt.Sprintf("  %s %s\n", commits[i].SHA[:12], commits[i].Message))
+	}
+	if len(commits) > 21 {
+		summary.WriteString(fmt.Sprintf("  ... and %d more\n", len(commits)-21))
+	}
+
+	prompt := summary.String() + "\n" +
+		"your job: read ALL code in this repo and produce mathematical theory.\n\n" +
+		"the first commit has " + fmt.Sprintf("%d", len(files)) + " files. " +
+		"if that is too many to read in one pass, split by directory — " +
+		"read the most important directories first, then continue.\n\n" +
+		"the subsequent " + fmt.Sprintf("%d", len(commits)-1) + " commits each touch a few files. " +
+		"if there are too many commits, process them in batches.\n\n" +
+		"for each file output key=value: file=<path> lines=<n> role=<phrase>\n" +
+		"after reading, output THEORY section with pure LaTeX.\n" +
+		"verify LaTeX compiles with pdflatex."
+
+	log.Printf("ref_bind: %s/%s %d commits, first has %d files",
+		owner, repo, len(commits), len(files))
 
 	child, err := Fork(prompt, ".")
 	if err != nil {
@@ -297,12 +310,10 @@ func ref_bind(pid int64, owner, repo string) (string, error) {
 	Wait(child)
 
 	stdout := GetResult(child)
-	stderr := GetStderr(child)
-
-	theorem_store(owner+"/"+repo, commit.SHA, stdout, child)
+	theorem_store(owner+"/"+repo, first.SHA, stdout, child)
 
 	log.Printf("ref_bind: %s/%s done, stdout=%d stderr=%d",
-		owner, repo, len(stdout), len(stderr))
+		owner, repo, len(stdout), len(GetStderr(child)))
 	return stdout, nil
 }
 
