@@ -104,3 +104,32 @@ func pr_driver_status(pid int64) string {
 func PRDriverSetup(task string) string {
 	return pr_driver_setup(task)
 }
+
+func PRDriverStep(pid int64) string {
+	if pid == 0 {
+		pid = pr_find_active()
+		if pid == 0 {
+			return ""
+		}
+	}
+	return pr_driver_step(pid)
+}
+
+func pr_find_active() int64 {
+	schedMu.Lock()
+	defer schedMu.Unlock()
+	prMu.Lock()
+	defer prMu.Unlock()
+	for i := 1; i < NR_TASKS; i++ {
+		t := Task[i]
+		if t == nil {
+			continue
+		}
+		if _, ok := prTable[int64(t.Pid)]; ok {
+			if t.State == PR_DRAFT || t.State == PR_WORKING {
+				return int64(t.Pid)
+			}
+		}
+	}
+	return 0
+}

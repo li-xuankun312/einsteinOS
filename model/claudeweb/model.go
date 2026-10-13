@@ -377,7 +377,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 				}
 			}
 			if !st.usedServices && st.totalTools >= 30 {
-				log.Printf("claudeweb: %d tools without registered services, stopping and running pr_setup", st.totalTools)
+				log.Printf("claudeweb: %d tools without registered services, switching to pr pipeline", st.totalTools)
 				m.client.StopResponse(st.convID)
 				st.usedServices = true
 
@@ -386,14 +386,31 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 					task = task[:500]
 				}
 				setupResult := kernel.PRDriverSetup(task)
-				log.Printf("claudeweb: pr_setup result: %s", truncate(setupResult, 200))
+				log.Printf("claudeweb: pr_setup done: %s", truncate(setupResult, 200))
+
+				var stepResults []string
+				for i := 0; i < 20; i++ {
+					stepResult := kernel.PRDriverStep(0)
+					if stepResult == "" || strings.Contains(stepResult, "no more steps") {
+						break
+					}
+					log.Printf("claudeweb: pr_step %d: %s", i+1, truncate(stepResult, 200))
+					stepResults = append(stepResults, stepResult)
+				}
+
+				var allResults strings.Builder
+				allResults.WriteString("[PR PIPELINE COMPLETE]\n\n")
+				allResults.WriteString(setupResult)
+				allResults.WriteString("\n\n")
+				for i, r := range stepResults {
+					allResults.WriteString(fmt.Sprintf("[STEP %d]\n%s\n\n", i+1, r))
+				}
 
 				webReq.Prompt = fmt.Sprintf(
-					"[SYSTEM] context degradation detected after %d tool calls. "+
-						"pr_setup has been executed automatically:\n\n%s\n\n"+
-						"use pr_step {pid:N} to continue work through child processes "+
-						"with fresh context. do NOT read more code yourself.",
-					st.totalTools, setupResult)
+					"[SYSTEM] after %d tool calls the PR pipeline ran automatically. "+
+						"results from %d child processes below. "+
+						"use these results to write code.\n\n%s",
+					st.totalTools, len(stepResults), truncate(allResults.String(), 12000))
 				webReq.CreateConversationParams = nil
 				continue
 			}
