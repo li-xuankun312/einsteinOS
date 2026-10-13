@@ -99,8 +99,13 @@ func (c *Client) Completion(convID string, req *CompletionRequest) (io.ReadClose
 		if resp.StatusCode >= 500 {
 			errBody, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
-			lastErr = fmt.Errorf("API %d: %s", resp.StatusCode, truncBody(errBody))
+			errStr := string(errBody)
 			log.Printf("claudeweb: attempt %d status %d: %s", attempt, resp.StatusCode, truncBody(errBody))
+			if isRateLimit(errStr) {
+				lastErr = &RateLimitError{Body: errStr}
+				return nil, lastErr
+			}
+			lastErr = fmt.Errorf("API %d: %s", resp.StatusCode, truncBody(errBody))
 			continue
 		}
 
@@ -191,4 +196,32 @@ func truncBody(b []byte) string {
 		return s[:300] + "..."
 	}
 	return s
+}
+
+type RateLimitError struct {
+	Body string
+}
+
+func (e *RateLimitError) Error() string {
+	return "rate limit: " + truncBody([]byte(e.Body))
+}
+
+func isRateLimit(body string) bool {
+	return len(body) > 0 &&
+		(contains(body, "使用次数已达到限制") ||
+			contains(body, "rate limit") ||
+			contains(body, "usage limit"))
+}
+
+func contains(s, sub string) bool {
+	return len(s) >= len(sub) && searchStr(s, sub)
+}
+
+func searchStr(s, sub string) bool {
+	for i := 0; i <= len(s)-len(sub); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
 }
