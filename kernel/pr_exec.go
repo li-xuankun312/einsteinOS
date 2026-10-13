@@ -488,22 +488,25 @@ func ref_diff(pid int64, step *Step) (string, error) {
 			step.Owner, step.Repo, short_sha(step.SHA), step.Path, err)
 	}
 
-	lines := strings.Count(ref_content, "\n") + 1
-	prior := pr_feedback(pid)
+	ref_lines := strings.Count(ref_content, "\n") + 1
 
 	var prompt strings.Builder
 	prompt.WriteString(fmt.Sprintf("[REFERENCE: %s/%s commit %s — %s (%d lines)]\n",
-		step.Owner, step.Repo, short_sha(step.SHA), step.Path, lines))
+		step.Owner, step.Repo, short_sha(step.SHA), step.Path, ref_lines))
 	prompt.WriteString(ref_content)
 	prompt.WriteString("\n\n")
-	prompt.WriteString("you have read every line of the reference file above.\n")
-	prompt.WriteString("now read the corresponding file in our working directory.\n")
-	prompt.WriteString("compare from the whole-function perspective.\n")
-	prompt.WriteString("output ONLY concrete feedback lines, one per line, each starting with '- '.\n")
-	prompt.WriteString("each line must name specific files, functions, line counts — no placeholders.\n")
-	if prior != "" {
-		prompt.WriteString(fmt.Sprintf("\n[PRIOR FEEDBACK]\n%s\n", prior))
-	}
+	prompt.WriteString("read every line above. then read the corresponding file in our working directory.\n")
+	prompt.WriteString("output ONLY key=value pairs, one per line. no prose, no explanation.\n")
+	prompt.WriteString("required keys:\n")
+	prompt.WriteString("  ref_file=<path>\n")
+	prompt.WriteString("  ref_lines=<number>\n")
+	prompt.WriteString("  ref_funcs=<comma-separated function/struct names>\n")
+	prompt.WriteString("  ref_pattern=<one phrase: what the ref does differently>\n")
+	prompt.WriteString("  our_file=<path>\n")
+	prompt.WriteString("  our_lines=<number>\n")
+	prompt.WriteString("  our_funcs=<comma-separated function/struct names>\n")
+	prompt.WriteString("  gap=<one phrase: what ours is missing or doing wrong>\n")
+	prompt.WriteString("repeat the block for each function/struct pair that differs.\n")
 
 	child, err := Fork(prompt.String(), step.Dir)
 	if err != nil {
@@ -513,18 +516,42 @@ func ref_diff(pid int64, step *Step) (string, error) {
 	step.ChildPid = child
 
 	stdout := GetResult(child)
-	stderr := GetStderr(child)
+	blocks := parse_kv_blocks(stdout)
 
-	for _, line := range strings.Split(stdout, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "- ") && len(trimmed) > 10 {
-			PRFeedbackAdd(pid, trimmed)
-		}
+	for _, b := range blocks {
+		line := fmt.Sprintf("- %s (%s lines, funcs: %s) pattern: %s | our %s (%s lines, funcs: %s) gap: %s",
+			b["ref_file"], b["ref_lines"], b["ref_funcs"], b["ref_pattern"],
+			b["our_file"], b["our_lines"], b["our_funcs"], b["gap"])
+		PRFeedbackAdd(pid, line)
 	}
 
-	log.Printf("ref_diff: %s/%s %s -> stdout=%d stderr=%d feedback=%d",
+	log.Printf("ref_diff: %s/%s %s -> %d kv blocks, %d feedback",
 		step.Owner, step.Repo, step.Path,
-		len(stdout), len(stderr), len(GetPR(pid).Feedback))
+		len(blocks), len(GetPR(pid).Feedback))
 
 	return stdout, nil
+}
+
+func parse_kv_blocks(text string) []map[string]string {
+	var blocks []map[string]string
+	current := map[string]string{}
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			if len(current) > 0 {
+				blocks = append(blocks, current)
+				current = map[string]string{}
+			}
+			continue
+		}
+		if idx := strings.Index(line, "="); idx > 0 {
+			key := strings.TrimSpace(line[:idx])
+			val := strings.TrimSpace(line[idx+1:])
+			current[key] = val
+		}
+	}
+	if len(current) > 0 {
+		blocks = append(blocks, current)
+	}
+	return blocks
 }
