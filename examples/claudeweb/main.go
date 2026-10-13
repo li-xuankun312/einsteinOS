@@ -577,7 +577,7 @@ func newConversation(name string) (*claudeweb.Model, *runner.Runner, string) {
 	llm := claudeweb.NewModel(client, cfg.modelName, cfg.effort)
 
 	kernel.SetConvExec(func(prompt string) string {
-		return llm.SingleCompletion(prompt)
+		return llm.RunConversation(prompt)
 	})
 
 	shadow := &claudeweb.ShadowExecutor{

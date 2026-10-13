@@ -423,9 +423,10 @@ func emptyResponse() iter.Seq2[*model.LLMResponse, error] {
 	}
 }
 
-func (m *Model) SingleCompletion(prompt string) string {
+func (m *Model) RunConversation(prompt string) string {
 	convID := generateUUID()
-	req := &CompletionRequest{
+
+	webReq := &CompletionRequest{
 		Prompt:        prompt,
 		Model:         m.modelName,
 		Timezone:      "Asia/Shanghai",
@@ -445,94 +446,29 @@ func (m *Model) SingleCompletion(prompt string) string {
 		},
 	}
 
-	log.Printf("single_completion: %s/chat/%s", m.client.baseURL, convID)
-	log.Printf("single_completion: conv=%s prompt=%q", convID[:8], truncate(prompt, 80))
+	log.Printf("claudeweb: fork %s/chat/%s", m.client.baseURL, convID)
+	log.Printf("claudeweb: → %s prompt=%q", convID[:8], truncate(prompt, 80))
 
-	var allText strings.Builder
+	var result strings.Builder
+	ctx := context.Background()
 
-	for round := 0; round < 20; round++ {
-		body, err := m.client.Completion(convID, req)
+	m.completionLoop(ctx, convID, webReq, false, func(resp *model.LLMResponse, err error) bool {
 		if err != nil {
-			log.Printf("single_completion: round %d: %v", round, err)
-			break
+			return false
 		}
-
-		var textBuf strings.Builder
-		tbs := map[int]*toolBlock{}
-		var tools []toolBlock
-
-		for event := range ParseSSEStream(body) {
-			switch event.Event {
-			case "content_block_start":
-				var ev ContentBlockStartEvent
-				if json.Unmarshal(event.Data, &ev) == nil && ev.ContentBlock.Type == "tool_use" {
-					tbs[ev.Index] = &toolBlock{id: ev.ContentBlock.ID, name: ev.ContentBlock.Name}
+		if resp.Content != nil {
+			for _, p := range resp.Content.Parts {
+				if p.Text != "" {
+					result.WriteString(p.Text)
 				}
-			case "content_block_delta":
-				var ev ContentBlockDeltaEvent
-				if json.Unmarshal(event.Data, &ev) == nil {
-					if ev.Delta.Type == "text_delta" {
-						textBuf.WriteString(ev.Delta.Text)
-					} else if ev.Delta.Type == "input_json_delta" {
-						if tb, ok := tbs[ev.Index]; ok {
-							tb.inputJSON.WriteString(ev.Delta.PartialJSON)
-						}
-					}
-				}
-			case "content_block_stop":
-				var ev ContentBlockStopEvent
-				if json.Unmarshal(event.Data, &ev) == nil {
-					if tb, ok := tbs[ev.Index]; ok {
-						tools = append(tools, *tb)
-						delete(tbs, ev.Index)
-					}
-				}
-			case "message_stop", "error":
-				body.Close()
-				goto roundDone
 			}
 		}
-		body.Close()
+		return true
+	})
 
-	roundDone:
-		allText.WriteString(textBuf.String())
-
-		if len(tools) == 0 || m.Shadow == nil {
-			break
-		}
-
-		log.Printf("single_completion: round %d, %d tools", round, len(tools))
-		var results []ToolResult
-		for _, tb := range tools {
-			out := m.Shadow.Execute(tb.name, tb.inputJSON.String())
-			results = append(results, ToolResult{ToolUseID: tb.id, Content: out})
-			log.Printf("single_completion: %s -> %s", tb.name, truncate(out, 80))
-		}
-
-		var cont strings.Builder
-		cont.WriteString("Continue.\n\n")
-		for _, tr := range results {
-			cont.WriteString(fmt.Sprintf("[%s] %s\n\n", tr.ToolUseID, truncate(tr.Content, 500)))
-		}
-
-		req = &CompletionRequest{
-			Prompt:        cont.String(),
-			Model:         m.modelName,
-			Timezone:      "Asia/Shanghai",
-			Locale:        "en-US",
-			Effort:        m.effort,
-			ThinkingMode:  "off",
-			RenderingMode: "messages",
-			Attachments:   []json.RawMessage{},
-			Files:         []json.RawMessage{},
-			SyncSources:   []json.RawMessage{},
-			Tools:         []WebTool{},
-		}
-	}
-
-	result := allText.String()
-	log.Printf("single_completion: conv=%s done, %d bytes", convID[:8], len(result))
-	return result
+	text := result.String()
+	log.Printf("claudeweb: fork %s done, %d bytes", convID[:8], len(text))
+	return text
 }
 
 func truncate(s string, n int) string {
