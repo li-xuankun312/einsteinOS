@@ -184,10 +184,11 @@ func exitCodeStr(code int) string {
 }
 
 type loopState struct {
-	rounds              int
-	totalTools          int
+	rounds               int
+	totalTools           int
 	consecutiveContinues int
-	convID              string
+	usedServices         bool
+	convID               string
 }
 
 func (m *Model) completionLoop(ctx context.Context, convID string, webReq *CompletionRequest, stream bool, yield func(*model.LLMResponse, error) bool) {
@@ -361,6 +362,25 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 		}
 
 		st.totalTools += len(collectedTools)
+
+		if st.totalTools > 30 && !st.usedServices {
+			for _, tb := range collectedTools {
+				if tb.name == "pr_setup" || tb.name == "pr_step" || tb.name == "sync_repo" {
+					st.usedServices = true
+				}
+			}
+			if !st.usedServices && st.totalTools > 30 {
+				log.Printf("claudeweb: %d tools without registered services, stopping", st.totalTools)
+				m.client.StopResponse(st.convID)
+				webReq.Prompt = "[SYSTEM] you have used " + fmt.Sprintf("%d", st.totalTools) +
+					" tool calls reading code directly. STOP reading and use pr_setup/pr_step " +
+					"to fork child conversations with fresh context for heavy reading. " +
+					"your context is degrading. call pr_setup now."
+				webReq.CreateConversationParams = nil
+				continue
+			}
+		}
+
 		var toolResults []ToolResult
 		for _, tb := range collectedTools {
 			result := m.Shadow.Execute(tb.name, tb.inputJSON.String())

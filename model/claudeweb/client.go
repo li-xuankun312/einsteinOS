@@ -165,6 +165,26 @@ func (c *Client) CreateConversation(name, modelName string) (string, error) {
 	return convID, nil
 }
 
+func (c *Client) StopResponse(convID string) error {
+	url := fmt.Sprintf("%s/api/organizations/%s/chat_conversations/%s/stop_response",
+		c.baseURL, c.orgID, convID)
+	body, _ := json.Marshal(map[string]string{})
+	req, err := http.NewRequest("POST", url, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Cookie", c.cookie)
+	req.Header.Set("anthropic-client-platform", "web_claude_ai")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	log.Printf("claudeweb: stop_response %s -> %d", convID[:8], resp.StatusCode)
+	return nil
+}
+
 func truncBody(b []byte) string {
 	s := string(b)
 	if len(s) > 300 {
