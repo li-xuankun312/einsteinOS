@@ -325,43 +325,6 @@ func main() {
 			}
 			fmt.Println()
 
-		case strings.HasPrefix(input, "/pr_resume"):
-			args := strings.TrimSpace(strings.TrimPrefix(input, "/pr_resume"))
-			if args == "" {
-				saved := kernel.PRListSaved()
-				if len(saved) == 0 {
-					fmt.Println("  no saved PR state")
-				} else {
-					fmt.Println("  saved PRs:")
-					for _, p := range saved {
-						fmt.Printf("    pid=%d\n", p)
-					}
-					fmt.Println("  /pr_resume <pid> to resume")
-				}
-			} else {
-				pid, _ := strconv.ParseInt(args, 10, 64)
-				if kernel.PRLoad(pid) {
-					total, done := kernel.PRStepCount(pid)
-					fmt.Printf("  resumed PR pid=%d, %d/%d steps done\n", pid, done, total)
-					fmt.Print(kernel.PRStepLog(pid))
-					if done < total {
-						go func() {
-							results := kernel.PRRunAll(pid)
-							for _, r := range results {
-								log.Printf("[PR %d] step done: %s", pid, truncLog(r, 80))
-							}
-							log.Printf("[PR %d] all steps complete", pid)
-						}()
-						fmt.Printf("  continuing from step %d...\n", done+1)
-					} else {
-						fmt.Println("  all steps already complete")
-					}
-				} else {
-					fmt.Printf("  no saved state for pid %d\n", pid)
-				}
-			}
-			fmt.Println()
-
 		case strings.HasPrefix(input, "/sync "):
 			parts := strings.Fields(input)
 			if len(parts) < 2 {
