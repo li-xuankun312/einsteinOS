@@ -41,15 +41,35 @@ func ref_clone(owner, name string) {
 const MAX_REFS = 3
 
 func ref_discover(task string) []RefRepo {
-	prompt := task + "\n" +
-		"what are the top 3 most relevant reference repositories on github " +
-		"for developing this? " +
-		"reply with ONLY owner/name lines, max 3, nothing else."
-
 	var good []RefRepo
-	var tried int
 
-	for tried < 3 {
+	direct := extractRepoMentions(task)
+	for _, r := range direct {
+		ref_clone(r.Owner, r.Name)
+		refMu.Lock()
+		_, ok := refRepos[r.Owner+"/"+r.Name]
+		refMu.Unlock()
+		if ok {
+			good = append(good, r)
+			log.Printf("ref_discover: direct mention %s/%s cloned", r.Owner, r.Name)
+		} else {
+			log.Printf("ref_discover: direct mention %s/%s clone failed", r.Owner, r.Name)
+		}
+	}
+	if len(good) >= MAX_REFS {
+		return good[:MAX_REFS]
+	}
+
+	need := MAX_REFS - len(good)
+	prompt := fmt.Sprintf("[USER TASK]\n%s\n\n"+
+		"based on the task above, list %d relevant open-source "+
+		"reference repositories on github.\n"+
+		"reply with ONLY owner/name lines, one per line, nothing else.\n"+
+		"example:\nNVIDIA/nccl\nkvcache-ai/Mooncake\n",
+		truncDiff(task, 3000), need)
+
+	var tried int
+	for tried < 3 && len(good) < MAX_REFS {
 		tried++
 		pid, err := Fork(prompt, ".")
 		if err != nil {
@@ -59,12 +79,21 @@ func ref_discover(task string) []RefRepo {
 		log.Printf("ref_discover: attempt %d pid %d", tried, pid)
 		Wait(pid)
 
-		candidates := parseRefRepos(GetResult(pid))
+		raw := GetResult(pid)
+		log.Printf("ref_discover: attempt %d raw (%d bytes): %s",
+			tried, len(raw), truncDiff(raw, 500))
+
+		candidates := parseRefRepos(raw)
 		if len(candidates) > MAX_REFS {
 			candidates = candidates[:MAX_REFS]
 		}
 		if len(candidates) == 0 {
-			return good
+			prompt = fmt.Sprintf(
+				"your previous response did not contain valid owner/name pairs.\n"+
+					"the task is:\n%s\n\n"+
+					"reply with ONLY lines like: owner/name\n"+
+					"example:\nNVIDIA/nccl\n", truncDiff(task, 2000))
+			continue
 		}
 
 		var notfound []string
@@ -93,6 +122,44 @@ func ref_discover(task string) []RefRepo {
 			strings.Join(notfound, ", "))
 	}
 	return good
+}
+
+func extractRepoMentions(text string) []RefRepo {
+	seen := make(map[string]bool)
+	var repos []RefRepo
+
+	skip := map[string]bool{
+		"commit": true, "tree": true, "blob": true,
+		"issues": true, "pull": true, "releases": true,
+		"actions": true, "settings": true, "wiki": true,
+	}
+
+	for _, line := range strings.Split(text, "\n") {
+		for _, prefix := range []string{"https://github.com/", "github.com/"} {
+			idx := strings.Index(line, prefix)
+			for idx >= 0 {
+				rest := line[idx+len(prefix):]
+				if sp := strings.IndexAny(rest, " \t,;:!?)>\"'"); sp > 0 {
+					rest = rest[:sp]
+				}
+				parts := strings.SplitN(rest, "/", 3)
+				if len(parts) >= 2 && parts[0] != "" && parts[1] != "" {
+					owner := parts[0]
+					name := strings.TrimRight(parts[1], ".,;:!?")
+					if !skip[name] {
+						key := owner + "/" + name
+						if !seen[key] && len(owner) > 1 && len(name) > 1 {
+							seen[key] = true
+							repos = append(repos, RefRepo{Owner: owner, Name: name})
+						}
+					}
+				}
+				line = line[idx+len(prefix):]
+				idx = strings.Index(line, prefix)
+			}
+		}
+	}
+	return repos
 }
 
 func ref_clone_is_notfound(owner, name string) bool {

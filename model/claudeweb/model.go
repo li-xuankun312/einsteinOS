@@ -399,8 +399,11 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 				st.usedServices = true
 
 				task := webReq.Prompt
-				if len(task) > 500 {
-					task = task[:500]
+				if strings.HasPrefix(task, localExecPrefix) {
+					task = task[len(localExecPrefix):]
+				}
+				if len(task) > 4000 {
+					task = task[:4000]
 				}
 				setupResult := kernel.PRDriverSetup(task)
 				log.Printf("claudeweb: pr_setup done: %s", truncate(setupResult, 200))
