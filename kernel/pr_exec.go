@@ -216,6 +216,15 @@ func PRRunNext(pid int64) (string, error) {
 	PRAdvance(pid)
 	PRTick(pid, int64(step.Finished.Sub(step.Started).Milliseconds()))
 
+	total, done := PRStepCount(pid)
+	nextStep := PRCurrentStep(pid)
+	nextKind := "nil"
+	if nextStep != nil {
+		nextKind = step_name(nextStep.Kind)
+	}
+	log.Printf("PRRunNext: pid=%d finished step %s, advanced to %d/%d next=%s",
+		pid, step_name(step.Kind), done, total, nextKind)
+
 	if err != nil {
 		return "", err
 	}

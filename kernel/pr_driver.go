@@ -128,10 +128,13 @@ func pr_find_active() int64 {
 			continue
 		}
 		if _, ok := prTable[int64(t.Pid)]; ok {
+			log.Printf("pr_find_active: pid=%d state=%d (DRAFT=%d WORKING=%d BLOCKED=%d)",
+				t.Pid, t.State, PR_DRAFT, PR_WORKING, PR_BLOCKED)
 			if t.State == PR_DRAFT || t.State == PR_WORKING {
 				return int64(t.Pid)
 			}
 		}
 	}
+	log.Printf("pr_find_active: no active PR found")
 	return 0
 }
