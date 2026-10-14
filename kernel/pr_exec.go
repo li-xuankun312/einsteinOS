@@ -352,30 +352,179 @@ func ref_bind(pid int64, owner, repo string) (string, error) {
 func dev_from_theorems(pid int64, step *Step) (string, error) {
 	repo := step.Owner + "/" + step.Repo
 
-	commit, _, err := RefFirstCommit(step.Owner, step.Repo)
+	theory := theorem_get(repo, "")
+	if theory == "" {
+		return "", fmt.Errorf("dev_from_theorems: no theory for %s", repo)
+	}
+
+	pr := GetPR(pid)
+	task := ""
+	hw_info := ""
+	gpuAll := "0,1,2,3"
+	gpuUsable := "0,1,2,3"
+	if pr != nil {
+		task = strip_credentials(pr.Title)
+		hw_info = pr.HWInfo
+		if pr.GPUAll != "" {
+			gpuAll = pr.GPUAll
+		}
+		if pr.GPUUsable != "" {
+			gpuUsable = pr.GPUUsable
+		}
+	}
+
+	log.Printf("dev_from_theorems: %s phase 1 (theory only, no source), gpu_all=%s gpu_usable=%s",
+		repo, gpuAll, gpuUsable)
+
+	// phase 1: theory only, no source code
+	// child sees LAYER 1 math + LAYER 2 form template + hw + task
+	// child does NOT see original source — it fills the template from the quotient
+	var p1 strings.Builder
+	if hw_info != "" {
+		p1.WriteString("[HARDWARE]\n")
+		p1.WriteString(hw_info)
+		p1.WriteString("\n\n")
+	}
+	p1.WriteString(fmt.Sprintf("[THEORY from %s — LAYER 1 (math) + LAYER 2 (form template)]\n", repo))
+	p1.WriteString(theory)
+	p1.WriteString("\n\n[TASK]\n")
+	p1.WriteString(task)
+	p1.WriteString(fmt.Sprintf(dev_draft_instruction, gpuAll, gpuUsable, gpuUsable))
+
+	feedback := pr_feedback(pid)
+	if feedback != "" {
+		p1.WriteString(fmt.Sprintf("\n\n[PRIOR FEEDBACK]\n%s", feedback))
+	}
+
+	child1, err := Fork(p1.String(), ".")
 	if err != nil {
 		return "", err
 	}
+	Wait(child1)
+	step.ChildPid = child1
 
-	files, _ := RefTreeAt(step.Owner, step.Repo, commit.SHA)
-	var src strings.Builder
-	read := 0
-	for _, f := range files {
-		if isBinaryFile(f) {
-			continue
+	stdout1 := GetResult(child1)
+	status1 := parse_last_status(stdout1)
+
+	if status1 != nil {
+		log.Printf("dev_from_theorems: phase 1 — compile=%s needs_source=%s template_fill=%s",
+			status1["compile"], status1["needs_source"], status1["template_fill"])
+
+		if status1["template_fill"] != "" {
+			PRFeedbackAdd(pid, fmt.Sprintf("- dev[%s]: template_fill=%s", repo, status1["template_fill"]))
 		}
-		content, e := RefFileAt(step.Owner, step.Repo, commit.SHA, f)
-		if e != nil {
-			continue
+
+		// kernel decision: does child need source files?
+		needsSource := status1["needs_source"] == "true"
+		compileFail := status1["compile"] == "fail"
+		if needsSource || compileFail {
+			// phase 2: kernel selectively provides source
+			srcResult := dev_phase2_selective_source(pid, step, repo, status1, gpuAll, gpuUsable, stdout1)
+			return srcResult, nil
 		}
-		lines := strings.Count(content, "\n") + 1
-		src.WriteString(fmt.Sprintf("=== %s (%d lines) ===\n", f, lines))
-		src.WriteString(content)
-		src.WriteString("\n\n")
-		read += lines
+
+		// phase 1 compiled — proceed to phase 3 verify
+		gpuUsable = dev_update_gpu(pid, status1, gpuAll, gpuUsable)
+		for k, v := range status1 {
+			PRFeedbackAdd(pid, fmt.Sprintf("- dev[%s]: %s=%s", repo, k, v))
+		}
+		if status1["compile"] == "pass" && status1["smoke"] == "pass" {
+			log.Printf("dev_from_theorems: %s verified in phase 1", repo)
+			return stdout1, nil
+		}
+		// compile pass but smoke fail — phase 3 retry with gpu update
+		return dev_phase3_verify(pid, step, repo, gpuAll, gpuUsable, stdout1)
 	}
 
-	theory := theorem_get(repo, "")
+	log.Printf("dev_from_theorems: phase 1 — no status block, falling through to phase 2")
+	return dev_phase2_selective_source(pid, step, repo, nil, gpuAll, gpuUsable, stdout1)
+}
+
+func dev_phase2_selective_source(pid int64, step *Step, repo string,
+	phase1Status map[string]string, gpuAll, gpuUsable, phase1Output string) string {
+
+	commit, _, err := RefFirstCommit(step.Owner, step.Repo)
+	if err != nil {
+		log.Printf("dev_phase2: %s RefFirstCommit: %v", repo, err)
+		return phase1Output
+	}
+
+	// kernel decides which files to provide
+	// if child requested specific files, give those; otherwise give file list only
+	requestedFiles := ""
+	if phase1Status != nil {
+		requestedFiles = phase1Status["needs_source_files"]
+	}
+
+	var src strings.Builder
+	files, _ := RefTreeAt(step.Owner, step.Repo, commit.SHA)
+	read := 0
+
+	if requestedFiles != "" {
+		// child asked for specific files — kernel provides only those
+		wanted := make(map[string]bool)
+		for _, f := range strings.Split(requestedFiles, ",") {
+			f = strings.TrimSpace(f)
+			if f != "" {
+				wanted[f] = true
+			}
+		}
+		for _, f := range files {
+			if !wanted[f] {
+				// check basename match too
+				base := f
+				if idx := strings.LastIndex(f, "/"); idx >= 0 {
+					base = f[idx+1:]
+				}
+				if !wanted[base] {
+					continue
+				}
+			}
+			content, e := RefFileAt(step.Owner, step.Repo, commit.SHA, f)
+			if e != nil {
+				continue
+			}
+			lines := strings.Count(content, "\n") + 1
+			src.WriteString(fmt.Sprintf("=== %s (%d lines) ===\n", f, lines))
+			src.WriteString(content)
+			src.WriteString("\n\n")
+			read += lines
+		}
+		log.Printf("dev_phase2: %s kernel provided %d requested files (%d lines)",
+			repo, len(wanted), read)
+	} else {
+		// no specific request — give file listing + first 5 key files
+		src.WriteString(fmt.Sprintf("[FILE LISTING — %d files in %s first commit]\n", len(files), repo))
+		for _, f := range files {
+			src.WriteString(f + "\n")
+		}
+		src.WriteString("\n")
+		// kernel picks key files: headers and main source
+		given := 0
+		for _, f := range files {
+			if given >= 5 {
+				break
+			}
+			if isBinaryFile(f) {
+				continue
+			}
+			if strings.HasSuffix(f, ".h") || strings.Contains(f, "engine") ||
+				strings.Contains(f, "transport") || strings.Contains(f, "main") {
+				content, e := RefFileAt(step.Owner, step.Repo, commit.SHA, f)
+				if e != nil {
+					continue
+				}
+				lines := strings.Count(content, "\n") + 1
+				src.WriteString(fmt.Sprintf("=== %s (%d lines) ===\n", f, lines))
+				src.WriteString(content)
+				src.WriteString("\n\n")
+				read += lines
+				given++
+			}
+		}
+		log.Printf("dev_phase2: %s kernel provided file list + %d key files (%d lines)",
+			repo, given, read)
+	}
 
 	pr := GetPR(pid)
 	task := ""
@@ -385,110 +534,129 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 		hw_info = pr.HWInfo
 	}
 
-	var prompt strings.Builder
+	var p2 strings.Builder
 	if hw_info != "" {
-		prompt.WriteString("[HARDWARE]\n")
-		prompt.WriteString(hw_info)
-		prompt.WriteString("\n\n")
+		p2.WriteString("[HARDWARE]\n")
+		p2.WriteString(hw_info)
+		p2.WriteString("\n\n")
 	}
-	prompt.WriteString(fmt.Sprintf("[REFERENCE SOURCE from %s first commit — %d files, %d lines, read in full]\n", repo, len(files), read))
-	prompt.WriteString(src.String())
+	theory := theorem_get(repo, "")
 	if theory != "" {
-		prompt.WriteString(fmt.Sprintf("\n[THEORY extracted from above]\n%s\n", theory))
+		p2.WriteString(fmt.Sprintf("[THEORY from %s]\n%s\n\n", repo, theory))
 	}
-	prompt.WriteString("\n[TASK]\n")
-	prompt.WriteString(task)
+	p2.WriteString(fmt.Sprintf("[SELECTIVE SOURCE from %s — kernel-provided]\n", repo))
+	p2.WriteString(src.String())
+	p2.WriteString("\n[TASK]\n")
+	p2.WriteString(task)
+	if phase1Output != "" {
+		p2.WriteString(fmt.Sprintf("\n\n[PRIOR ATTEMPT — fix these issues]\n%s", truncDiff(phase1Output, 3000)))
+	}
+	p2.WriteString(fmt.Sprintf(dev_verify_instruction, gpuAll, gpuUsable, gpuUsable, gpuAll))
 
-	// GPU args — kernel fills placeholders from PRProcess state
-	gpuAll := "0,1,2,3"
-	gpuUsable := "0,1,2,3"
+	child2, err := Fork(p2.String(), ".")
+	if err != nil {
+		return phase1Output
+	}
+	Wait(child2)
+	step.ChildPid = child2
+
+	stdout2 := GetResult(child2)
+	status2 := parse_last_status(stdout2)
+
+	if status2 != nil {
+		gpuUsable = dev_update_gpu(pid, status2, gpuAll, gpuUsable)
+		for k, v := range status2 {
+			PRFeedbackAdd(pid, fmt.Sprintf("- dev[%s]: %s=%s", repo, k, v))
+		}
+		if status2["compile"] == "pass" && status2["smoke"] == "pass" {
+			log.Printf("dev_from_theorems: %s verified in phase 2", repo)
+			return stdout2
+		}
+	}
+
+	// phase 3: one more retry with updated GPU config
+	return dev_phase3_verify(pid, step, repo, gpuAll, gpuUsable, stdout2)
+}
+
+func dev_phase3_verify(pid int64, step *Step, repo, gpuAll, gpuUsable, prevOutput string) string {
+	prMu.Lock()
+	if pr := prTable[pid]; pr != nil && pr.GPUUsable != "" {
+		gpuUsable = pr.GPUUsable
+	}
+	prMu.Unlock()
+
+	pr := GetPR(pid)
+	hw_info := ""
+	task := ""
 	if pr != nil {
-		if pr.GPUAll != "" {
-			gpuAll = pr.GPUAll
+		hw_info = pr.HWInfo
+		task = strip_credentials(pr.Title)
+	}
+
+	var p3 strings.Builder
+	if hw_info != "" {
+		p3.WriteString("[HARDWARE]\n")
+		p3.WriteString(hw_info)
+		p3.WriteString("\n\n")
+	}
+	theory := theorem_get(repo, "")
+	if theory != "" {
+		p3.WriteString(fmt.Sprintf("[THEORY from %s]\n%s\n\n", repo, theory))
+	}
+	p3.WriteString("[TASK]\n")
+	p3.WriteString(task)
+	p3.WriteString(fmt.Sprintf("\n\n[RETRY — previous attempt had issues]\n%s", truncDiff(prevOutput, 3000)))
+	p3.WriteString(fmt.Sprintf("\n\n[UPDATED GPU CONFIG] use CUDA_VISIBLE_DEVICES=%s\n", gpuUsable))
+	p3.WriteString(fmt.Sprintf(dev_verify_instruction, gpuAll, gpuUsable, gpuUsable, gpuAll))
+
+	child3, err := Fork(p3.String(), ".")
+	if err != nil {
+		return prevOutput
+	}
+	Wait(child3)
+	step.ChildPid = child3
+
+	stdout3 := GetResult(child3)
+	status3 := parse_last_status(stdout3)
+
+	if status3 != nil {
+		dev_update_gpu(pid, status3, gpuAll, gpuUsable)
+		for k, v := range status3 {
+			PRFeedbackAdd(pid, fmt.Sprintf("- dev[%s]: %s=%s", repo, k, v))
 		}
-		if pr.GPUUsable != "" {
-			gpuUsable = pr.GPUUsable
+		if status3["compile"] == "pass" && status3["smoke"] == "pass" {
+			log.Printf("dev_from_theorems: %s verified in phase 3", repo)
+			return stdout3
 		}
 	}
 
-	prompt.WriteString(fmt.Sprintf(dev_verify_instruction, gpuAll, gpuUsable, gpuUsable, gpuAll))
+	log.Printf("dev_from_theorems: %s failed after 3 phases, gpu_usable=%s", repo, gpuUsable)
+	return stdout3
+}
 
-	feedback := pr_feedback(pid)
-	if feedback != "" {
-		prompt.WriteString(fmt.Sprintf("\n\n[PRIOR FEEDBACK]\n%s", feedback))
+func dev_update_gpu(pid int64, status map[string]string, gpuAll, gpuUsable string) string {
+	if pairsOK, ok := status["gpu_pairs_ok"]; ok && pairsOK != "" {
+		usable := computeUsableGPUs(gpuAll, pairsOK, status["gpu_pairs_fail"])
+		prMu.Lock()
+		if pr := prTable[pid]; pr != nil {
+			pr.GPUPairsOK = pairsOK
+			pr.GPUUsable = usable
+		}
+		prMu.Unlock()
+		log.Printf("dev_update_gpu: kernel computed gpu_usable=%s from pairs_ok=%s", usable, pairsOK)
+		return usable
 	}
+	return gpuUsable
+}
 
-	log.Printf("dev_from_theorems: %s %d files %d lines fed, gpu_all=%s gpu_usable=%s",
-		repo, len(files), read, gpuAll, gpuUsable)
-
-	var lastResult string
-	for attempt := 0; attempt < 3; attempt++ {
-		p := prompt.String()
-		if attempt > 0 {
-			// re-inject updated GPU usable for retry
-			prMu.Lock()
-			if pr := prTable[pid]; pr != nil && pr.GPUUsable != "" {
-				gpuUsable = pr.GPUUsable
-			}
-			prMu.Unlock()
-			p += fmt.Sprintf("\n\n[RETRY %d/3 — previous attempt failed]\n%s\n"+
-				"[UPDATED GPU CONFIG] use CUDA_VISIBLE_DEVICES=%s\n"+
-				"fix the issues above and re-verify.", attempt, lastResult, gpuUsable)
+func parse_last_status(text string) map[string]string {
+	blocks := parse_kv_blocks(text)
+	for i := len(blocks) - 1; i >= 0; i-- {
+		if _, ok := blocks[i]["compile"]; ok {
+			return blocks[i]
 		}
-
-		child, err := Fork(p, ".")
-		if err != nil {
-			return lastResult, err
-		}
-		Wait(child)
-		step.ChildPid = child
-
-		stdout := GetResult(child)
-		blocks := parse_kv_blocks(stdout)
-
-		var status map[string]string
-		for _, b := range blocks {
-			if _, ok := b["compile"]; ok {
-				status = b
-			}
-		}
-
-		if status != nil {
-			log.Printf("dev_from_theorems: attempt %d — compile=%s gpu_test=%s smoke=%s gpu_pairs_ok=%s gpu_pairs_fail=%s",
-				attempt+1, status["compile"], status["gpu_test"], status["smoke"],
-				status["gpu_pairs_ok"], status["gpu_pairs_fail"])
-
-			// kernel decision: compute usable GPUs from P2P test results
-			if pairsOK, ok := status["gpu_pairs_ok"]; ok && pairsOK != "" {
-				usable := computeUsableGPUs(gpuAll, pairsOK, status["gpu_pairs_fail"])
-				prMu.Lock()
-				if pr := prTable[pid]; pr != nil {
-					pr.GPUPairsOK = pairsOK
-					pr.GPUUsable = usable
-				}
-				prMu.Unlock()
-				gpuUsable = usable
-				log.Printf("dev_from_theorems: kernel computed gpu_usable=%s from pairs_ok=%s",
-					usable, pairsOK)
-			}
-
-			for k, v := range status {
-				PRFeedbackAdd(pid, fmt.Sprintf("- dev[%s]: %s=%s", repo, k, v))
-			}
-
-			if status["compile"] == "pass" && status["smoke"] == "pass" {
-				log.Printf("dev_from_theorems: %s verified on attempt %d", repo, attempt+1)
-				return stdout, nil
-			}
-		} else {
-			log.Printf("dev_from_theorems: attempt %d — no status block in output", attempt+1)
-		}
-
-		lastResult = stdout
 	}
-
-	log.Printf("dev_from_theorems: %s failed after 3 attempts, gpu_usable=%s", repo, gpuUsable)
-	return lastResult, nil
+	return nil
 }
 
 // computeUsableGPUs: given all GPUs and P2P test results, find the largest
@@ -545,7 +713,59 @@ func computeUsableGPUs(gpuAll, pairsOK, pairsFail string) string {
 	return strings.Join(best, ",")
 }
 
-// dev_verify_instruction uses %%s placeholders: arg1=gpu_all, arg2=gpu_usable
+const dev_draft_instruction = `
+
+[GPU CONFIGURATION]
+all GPUs on this machine: %s
+usable GPUs (from prior P2P test): %s
+use CUDA_VISIBLE_DEVICES=%s for all GPU operations.
+
+[WHAT YOU HAVE]
+you have the THEORY above: LAYER 1 (math specs) and LAYER 2 (form templates).
+you do NOT have the original source code. this is intentional.
+
+LAYER 2 form templates use placeholder identifiers:
+  prjname = project namespace (fill with YOUR project's namespace)
+  adj = adjective prefix (choose one that fits YOUR component)
+  Obj = object class (name it for YOUR domain)
+  typenameType = type alias (define YOUR own)
+  objtype = member handle (YOUR internal handle type)
+  argname = argument names (YOUR naming convention)
+
+you are creating NEW code, not copying. the form template is a quotient —
+all implementations that share the same structural depth are equivalent.
+you choose the representative: SetPosition can become WriteDefinition,
+TransferEngine can become CollectiveRunner, as long as the math in
+LAYER 1 is satisfied and the structural depth of LAYER 2 is preserved.
+
+[OUTPUT FORMAT]
+write code, compile it, test it on the real machine. then output a status block:
+
+compile=pass|fail
+compile_error=<one line if fail>
+needs_source=true|false
+needs_source_files=<comma-separated filenames if needs_source=true>
+needs_source_reason=<one line: what you need to see to proceed>
+template_fill=<your choices: adjObj→YourName, prjname→yourns, typenameType→YourType>
+gpu_pairs_ok=<pairs that pass P2P, e.g. 0-1,1-2>
+gpu_pairs_fail=<pairs that fail>
+gpu_test=pass|fail
+smoke=pass|fail
+smoke_error=<one line if fail>
+files_written=<comma-separated paths>
+
+if compile fails and you believe seeing specific source files would help,
+set needs_source=true and list the files. the kernel will decide what to provide.
+do NOT guess at source structure you haven't seen — ask the kernel for it.
+
+VERIFICATION STEPS:
+1. fill the form template with your project's identifiers
+2. write the code to the dev repo
+3. compile — if fail after 2 tries, set needs_source=true with the files you need
+4. if compile passes, test GPU P2P on all pairs
+5. smoke test end to end
+`
+
 const dev_verify_instruction = `
 
 [GPU CONFIGURATION]
