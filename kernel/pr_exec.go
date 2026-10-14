@@ -255,14 +255,42 @@ func hw_init(pid int64) (string, error) {
 	hw_info := GetResult(child)
 	hw_tools := GetStderr(child)
 
+	gpuAll := parseGPUList(hw_info + "\n" + hw_tools)
+
 	prMu.Lock()
 	if pr := prTable[pid]; pr != nil {
 		pr.HWInfo = hw_info + "\n" + hw_tools
+		pr.GPUAll = gpuAll
+		pr.GPUUsable = gpuAll // assume all usable until P2P test says otherwise
 	}
 	prMu.Unlock()
 
-	log.Printf("hw_init: pid=%d stdout=%d stderr=%d", pid, len(hw_info), len(hw_tools))
+	log.Printf("hw_init: pid=%d stdout=%d stderr=%d gpu_all=%s", pid, len(hw_info), len(hw_tools), gpuAll)
 	return hw_info, nil
+}
+
+func parseGPUList(hwText string) string {
+	// count GPU devices from ixsmi/nvidia-smi output
+	count := 0
+	for _, line := range strings.Split(hwText, "\n") {
+		lower := strings.ToLower(line)
+		if strings.Contains(lower, "bi-v100") || strings.Contains(lower, "iluvatar") ||
+			strings.Contains(lower, "gpu 0") || strings.Contains(lower, "gpu 1") ||
+			strings.Contains(lower, "/dev/iluvatar") {
+			count++
+		}
+	}
+	if count == 0 {
+		count = 4 // fallback
+	}
+	if count > 8 {
+		count = 8
+	}
+	var ids []string
+	for i := 0; i < count; i++ {
+		ids = append(ids, fmt.Sprintf("%d", i))
+	}
+	return strings.Join(ids, ",")
 }
 
 func ref_bind(pid int64, owner, repo string) (string, error) {
@@ -371,20 +399,41 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 	prompt.WriteString("\n[TASK]\n")
 	prompt.WriteString(task)
 
-	prompt.WriteString(dev_verify_instruction)
+	// GPU args — kernel fills placeholders from PRProcess state
+	gpuAll := "0,1,2,3"
+	gpuUsable := "0,1,2,3"
+	if pr != nil {
+		if pr.GPUAll != "" {
+			gpuAll = pr.GPUAll
+		}
+		if pr.GPUUsable != "" {
+			gpuUsable = pr.GPUUsable
+		}
+	}
+
+	prompt.WriteString(fmt.Sprintf(dev_verify_instruction, gpuAll, gpuUsable, gpuUsable, gpuAll))
 
 	feedback := pr_feedback(pid)
 	if feedback != "" {
 		prompt.WriteString(fmt.Sprintf("\n\n[PRIOR FEEDBACK]\n%s", feedback))
 	}
 
-	log.Printf("dev_from_theorems: %s %d files %d lines fed", repo, len(files), read)
+	log.Printf("dev_from_theorems: %s %d files %d lines fed, gpu_all=%s gpu_usable=%s",
+		repo, len(files), read, gpuAll, gpuUsable)
 
 	var lastResult string
 	for attempt := 0; attempt < 3; attempt++ {
 		p := prompt.String()
 		if attempt > 0 {
-			p += fmt.Sprintf("\n\n[RETRY %d/3 — previous attempt failed]\n%s\nfix the issues above and re-verify.", attempt, lastResult)
+			// re-inject updated GPU usable for retry
+			prMu.Lock()
+			if pr := prTable[pid]; pr != nil && pr.GPUUsable != "" {
+				gpuUsable = pr.GPUUsable
+			}
+			prMu.Unlock()
+			p += fmt.Sprintf("\n\n[RETRY %d/3 — previous attempt failed]\n%s\n"+
+				"[UPDATED GPU CONFIG] use CUDA_VISIBLE_DEVICES=%s\n"+
+				"fix the issues above and re-verify.", attempt, lastResult, gpuUsable)
 		}
 
 		child, err := Fork(p, ".")
@@ -405,8 +454,23 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 		}
 
 		if status != nil {
-			log.Printf("dev_from_theorems: attempt %d — compile=%s gpu_test=%s smoke=%s",
-				attempt+1, status["compile"], status["gpu_test"], status["smoke"])
+			log.Printf("dev_from_theorems: attempt %d — compile=%s gpu_test=%s smoke=%s gpu_pairs_ok=%s gpu_pairs_fail=%s",
+				attempt+1, status["compile"], status["gpu_test"], status["smoke"],
+				status["gpu_pairs_ok"], status["gpu_pairs_fail"])
+
+			// kernel decision: compute usable GPUs from P2P test results
+			if pairsOK, ok := status["gpu_pairs_ok"]; ok && pairsOK != "" {
+				usable := computeUsableGPUs(gpuAll, pairsOK, status["gpu_pairs_fail"])
+				prMu.Lock()
+				if pr := prTable[pid]; pr != nil {
+					pr.GPUPairsOK = pairsOK
+					pr.GPUUsable = usable
+				}
+				prMu.Unlock()
+				gpuUsable = usable
+				log.Printf("dev_from_theorems: kernel computed gpu_usable=%s from pairs_ok=%s",
+					usable, pairsOK)
+			}
 
 			for k, v := range status {
 				PRFeedbackAdd(pid, fmt.Sprintf("- dev[%s]: %s=%s", repo, k, v))
@@ -423,18 +487,79 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 		lastResult = stdout
 	}
 
-	log.Printf("dev_from_theorems: %s failed after 3 attempts", repo)
+	log.Printf("dev_from_theorems: %s failed after 3 attempts, gpu_usable=%s", repo, gpuUsable)
 	return lastResult, nil
 }
 
+// computeUsableGPUs: given all GPUs and P2P test results, find the largest
+// connected subset. child reports pairs, kernel decides.
+func computeUsableGPUs(gpuAll, pairsOK, pairsFail string) string {
+	// parse all GPU ids
+	allIDs := strings.Split(gpuAll, ",")
+
+	// parse working pairs into adjacency
+	adj := make(map[string]map[string]bool)
+	for _, id := range allIDs {
+		adj[strings.TrimSpace(id)] = make(map[string]bool)
+	}
+	for _, pair := range strings.Split(pairsOK, ",") {
+		parts := strings.SplitN(strings.TrimSpace(pair), "-", 2)
+		if len(parts) == 2 {
+			a, b := strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+			adj[a][b] = true
+			adj[b][a] = true
+		}
+	}
+
+	// find the largest clique (for small N=4..8, brute force is fine)
+	var best []string
+	n := len(allIDs)
+	for mask := 1; mask < (1 << n); mask++ {
+		var subset []string
+		for i := 0; i < n; i++ {
+			if mask&(1<<i) != 0 {
+				subset = append(subset, strings.TrimSpace(allIDs[i]))
+			}
+		}
+		// check all pairs in subset are connected
+		ok := true
+		for i := 0; i < len(subset) && ok; i++ {
+			for j := i + 1; j < len(subset) && ok; j++ {
+				if !adj[subset[i]][subset[j]] {
+					ok = false
+				}
+			}
+		}
+		if ok && len(subset) > len(best) {
+			best = subset
+		}
+	}
+
+	if len(best) == 0 {
+		// no connected pair found, try each GPU alone
+		if len(allIDs) > 0 {
+			return strings.TrimSpace(allIDs[0])
+		}
+		return "0"
+	}
+	return strings.Join(best, ",")
+}
+
+// dev_verify_instruction uses %%s placeholders: arg1=gpu_all, arg2=gpu_usable
 const dev_verify_instruction = `
+
+[GPU CONFIGURATION]
+all GPUs on this machine: %s
+usable GPUs (from prior P2P test): %s
+use CUDA_VISIBLE_DEVICES=%s for all GPU operations.
 
 [OUTPUT FORMAT]
 write code, compile it, test it on the real machine. then output a status block:
 
 compile=pass|fail
 compile_error=<one line if fail>
-gpu_visible=<which GPUs work, e.g. 0,1,2,3 or 1,2>
+gpu_pairs_ok=<pairs that pass P2P, e.g. 0-1,1-2,2-3>
+gpu_pairs_fail=<pairs that fail P2P, e.g. 0-3,1-3>
 gpu_test=pass|fail
 gpu_test_detail=<what you tested: p2p, allreduce, memory>
 smoke=pass|fail
@@ -444,17 +569,18 @@ files_written=<comma-separated paths of code you wrote>
 VERIFICATION STEPS (do all of these before outputting the status block):
 1. write the code to the dev repo
 2. compile — if fail, fix and recompile until pass or 3 tries
-3. run ixsmi / gpu topology check — determine which GPUs are reachable
-   if some GPUs have no P2P path, only use the working subset
-4. test GPU-to-GPU: cudaMemcpyPeer or equivalent P2P transfer between
-   each pair of usable GPUs. this is not optional.
-5. if a model exists at /tmp/model, check size vs available memory.
-   if it won't fit, adjust tp or exclude GPUs to avoid OOM.
-6. smoke test: run the code with a minimal workload end to end.
+3. test GPU-to-GPU P2P: for EVERY pair of GPUs in {%s},
+   try cudaMemcpyPeer or equivalent transfer. report each pair
+   as pass or fail in gpu_pairs_ok / gpu_pairs_fail.
+   THIS IS NOT OPTIONAL. you must test every pair.
+4. if a model exists at /tmp/model, check its size vs available memory.
+   if it won't fit with the usable GPU count, report smoke=fail.
+5. smoke test: run the code with a minimal workload end to end
+   using only the GPUs that passed P2P.
    if it hangs or crashes, read the error, fix, retry.
 
-do NOT output the status block until you have actually run steps 1-6.
-the tool results are from the REAL machine with 4x BI-V100.
+do NOT output the status block until you have actually run steps 1-5.
+the tool results are from the REAL machine.
 `
 
 func PRRunAll(pid int64) []string {

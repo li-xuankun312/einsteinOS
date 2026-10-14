@@ -32,6 +32,9 @@ type PRProcess struct {
 	RefRepos   []RefRepo
 	Commits    []PRCommit
 	HWInfo     string
+	GPUAll     string // from hw_probe: "0,1,2,3"
+	GPUUsable  string // computed from P2P test: "1,2"
+	GPUPairsOK string // from child: "1-2,2-3"
 	Feedback   []string
 	CreateTime time.Time
 	MergeTime  time.Time
