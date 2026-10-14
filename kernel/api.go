@@ -3,9 +3,12 @@ package kernel
 import (
 	"context"
 	"fmt"
+	"log"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
+	"time"
 
 	. "google.golang.org/adk/v2/include"
 )
@@ -238,13 +241,35 @@ func Exit(pid int64, code int) {
 	schedMu.Unlock()
 }
 
+const SIG_INT int64 = 2
+
 func Wait(pid int64) (int64, int, error) {
+	return WaitTimeout(pid, 5*time.Minute)
+}
+
+func WaitTimeout(pid int64, timeout time.Duration) (int64, int, error) {
 	if pid >= 0 {
 		metaMu.Lock()
 		meta := taskMeta[pid]
 		metaMu.Unlock()
 		if meta != nil && meta.Done != nil {
-			<-meta.Done
+			select {
+			case <-meta.Done:
+				// normal exit
+			case <-time.After(timeout):
+				log.Printf("wait: pid %d timed out after %v, sending SIGINT", pid, timeout)
+				sendSigint(pid)
+				// give it 10s to clean up after SIGINT
+				select {
+				case <-meta.Done:
+					log.Printf("wait: pid %d exited after SIGINT", pid)
+				case <-time.After(10 * time.Second):
+					log.Printf("wait: pid %d still alive 10s after SIGINT, giving up", pid)
+					if meta.Cancel != nil {
+						meta.Cancel()
+					}
+				}
+			}
 		}
 	}
 
@@ -272,23 +297,35 @@ func Wait(pid int64) (int64, int, error) {
 	return int64(ret), int(stat >> 8), nil
 }
 
+func sendSigint(pid int64) {
+	metaMu.Lock()
+	m := taskMeta[pid]
+	metaMu.Unlock()
+	if m != nil && m.Cmd != nil && m.Cmd.Process != nil {
+		m.Cmd.Process.Signal(os.Interrupt)
+	}
+}
+
 func Kill(pid int64, sig int64) error {
 	ret := SysKill(int32(pid), int32(sig))
 	if ret != 0 {
 		return fmt.Errorf("kill: no such process %d", pid)
 	}
 
-	if sig == int64(SIGKILL) {
-		metaMu.Lock()
-		m := taskMeta[pid]
-		metaMu.Unlock()
-		if m != nil {
-			if m.Cmd != nil && m.Cmd.Process != nil {
+	metaMu.Lock()
+	m := taskMeta[pid]
+	metaMu.Unlock()
+	if m != nil {
+		if m.Cmd != nil && m.Cmd.Process != nil {
+			switch sig {
+			case SIG_INT:
+				m.Cmd.Process.Signal(os.Interrupt)
+			case int64(SIGKILL):
 				m.Cmd.Process.Kill()
 			}
-			if m.Cancel != nil {
-				m.Cancel()
-			}
+		}
+		if sig == int64(SIGKILL) && m.Cancel != nil {
+			m.Cancel()
 		}
 	}
 	return nil
