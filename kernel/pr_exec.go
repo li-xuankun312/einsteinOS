@@ -378,21 +378,91 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 	prompt.WriteString("\n[TASK]\n")
 	prompt.WriteString(task)
 
+	prompt.WriteString(dev_verify_instruction)
+
 	feedback := pr_feedback(pid)
 	if feedback != "" {
-		prompt.WriteString(fmt.Sprintf("\n\n[DEVELOPMENT DISCIPLINE from prior review]\n%s", feedback))
+		prompt.WriteString(fmt.Sprintf("\n\n[PRIOR FEEDBACK]\n%s", feedback))
 	}
 
 	log.Printf("dev_from_theorems: %s %d files %d lines fed", repo, len(files), read)
 
-	child, err := Fork(prompt.String(), ".")
-	if err != nil {
-		return "", err
+	var lastResult string
+	for attempt := 0; attempt < 3; attempt++ {
+		p := prompt.String()
+		if attempt > 0 {
+			p += fmt.Sprintf("\n\n[RETRY %d/3 — previous attempt failed]\n%s\nfix the issues above and re-verify.", attempt, lastResult)
+		}
+
+		child, err := Fork(p, ".")
+		if err != nil {
+			return lastResult, err
+		}
+		Wait(child)
+		step.ChildPid = child
+
+		stdout := GetResult(child)
+		blocks := parse_kv_blocks(stdout)
+
+		var status map[string]string
+		for _, b := range blocks {
+			if _, ok := b["compile"]; ok {
+				status = b
+			}
+		}
+
+		if status != nil {
+			log.Printf("dev_from_theorems: attempt %d — compile=%s gpu_test=%s smoke=%s",
+				attempt+1, status["compile"], status["gpu_test"], status["smoke"])
+
+			for k, v := range status {
+				PRFeedbackAdd(pid, fmt.Sprintf("- dev[%s]: %s=%s", repo, k, v))
+			}
+
+			if status["compile"] == "pass" && status["smoke"] == "pass" {
+				log.Printf("dev_from_theorems: %s verified on attempt %d", repo, attempt+1)
+				return stdout, nil
+			}
+		} else {
+			log.Printf("dev_from_theorems: attempt %d — no status block in output", attempt+1)
+		}
+
+		lastResult = stdout
 	}
-	Wait(child)
-	step.ChildPid = child
-	return GetResult(child), nil
+
+	log.Printf("dev_from_theorems: %s failed after 3 attempts", repo)
+	return lastResult, nil
 }
+
+const dev_verify_instruction = `
+
+[OUTPUT FORMAT]
+write code, compile it, test it on the real machine. then output a status block:
+
+compile=pass|fail
+compile_error=<one line if fail>
+gpu_visible=<which GPUs work, e.g. 0,1,2,3 or 1,2>
+gpu_test=pass|fail
+gpu_test_detail=<what you tested: p2p, allreduce, memory>
+smoke=pass|fail
+smoke_error=<one line if fail>
+files_written=<comma-separated paths of code you wrote>
+
+VERIFICATION STEPS (do all of these before outputting the status block):
+1. write the code to the dev repo
+2. compile — if fail, fix and recompile until pass or 3 tries
+3. run ixsmi / gpu topology check — determine which GPUs are reachable
+   if some GPUs have no P2P path, only use the working subset
+4. test GPU-to-GPU: cudaMemcpyPeer or equivalent P2P transfer between
+   each pair of usable GPUs. this is not optional.
+5. if a model exists at /tmp/model, check size vs available memory.
+   if it won't fit, adjust tp or exclude GPUs to avoid OOM.
+6. smoke test: run the code with a minimal workload end to end.
+   if it hangs or crashes, read the error, fix, retry.
+
+do NOT output the status block until you have actually run steps 1-6.
+the tool results are from the REAL machine with 4x BI-V100.
+`
 
 func PRRunAll(pid int64) []string {
 	var results []string
