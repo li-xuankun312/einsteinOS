@@ -105,7 +105,11 @@ func ref_split_fork(parent_pid int64, owner, repo, sha string, files []string, t
 	prompt := src_text + theorize_instruction +
 		"the repo is at " + dir + " if you need git.\n" +
 		"if any single file is too large to fully analyze, " +
-		"list its functions and produce both layers for the most important ones."
+		"list its functions and produce both layers for the most important ones.\n\n" +
+		"CRITICAL: output your LAYER 1 and LAYER 2 directly as text in your response. " +
+		"do NOT use create_file, Artifact, or present_files. " +
+		"do NOT write to /mnt/user-data/outputs/. " +
+		"your text response IS the output. just print the math and templates."
 
 	pid, err := Fork(prompt, ".")
 	if err != nil {
@@ -150,7 +154,11 @@ func ref_split_leaf(parent_pid int64, owner, repo, sha string, files []string, t
 	}
 
 	prompt := src_text + theorize_instruction +
-		"the repo is at " + dir + " if you need git."
+		"the repo is at " + dir + " if you need git.\n\n" +
+		"CRITICAL: output your LAYER 1 and LAYER 2 directly as text in your response. " +
+		"do NOT use create_file, Artifact, or present_files. " +
+		"do NOT write to /mnt/user-data/outputs/. " +
+		"your text response IS the output. just print the math and templates."
 
 	pid, err := Fork(prompt, ".")
 	if err != nil {

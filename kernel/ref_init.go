@@ -266,7 +266,11 @@ func ref_theorize(parent int64, owner, name, sha, diff string, nfiles int, msg s
 	if len(files) > SPLIT_CHUNK {
 		log.Printf("ref_theorize: %s/%s %s: %d files -> split",
 			owner, name, sha[:12], len(files))
-		return ref_split(parent, owner, name, sha, files, task, 0)
+		result := ref_split(parent, owner, name, sha, files, task, 0)
+		if len(strings.TrimSpace(result)) > 10 {
+			theorem_store(owner+"/"+name, sha, result, 0)
+		}
+		return result
 	}
 
 	return ref_theorize_leaf(parent, owner, name, sha, files, task)
@@ -327,7 +331,11 @@ func ref_theorize_leaf(parent int64, owner, name, sha string, files []string, ta
 	}
 
 	prompt := src.String() + extra + theorize_instruction +
-		"the repo is at " + dir + " if you need git."
+		"the repo is at " + dir + " if you need git.\n\n" +
+		"CRITICAL: output your LAYER 1 and LAYER 2 directly as text in your response. " +
+		"do NOT use create_file, Artifact, or present_files. " +
+		"do NOT write to /mnt/user-data/outputs/. " +
+		"your text response IS the output. just print the math and templates."
 
 	child, err := Fork(prompt, ".")
 	if err != nil {
