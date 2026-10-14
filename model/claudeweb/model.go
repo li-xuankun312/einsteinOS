@@ -424,8 +424,11 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 
 				var stepResults []string
 				for i := 0; i < 20; i++ {
+					log.Printf("claudeweb: pr_step_loop i=%d calling PRDriverStep(0)", i)
 					stepResult := kernel.PRDriverStep(0)
+					log.Printf("claudeweb: pr_step_loop i=%d result=%q", i, truncate(stepResult, 100))
 					if stepResult == "" || strings.Contains(stepResult, "no more steps") {
+						log.Printf("claudeweb: pr_step_loop breaking at i=%d", i)
 						break
 					}
 					log.Printf("claudeweb: pr_step %d: %s", i+1, truncate(stepResult, 200))
