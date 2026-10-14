@@ -14,17 +14,26 @@ import (
 )
 
 type TaskMeta struct {
-	Prompt string
-	Pwd    string
-	ConvID string
-	Result string
-	StdErr string
-	Ctx    context.Context
-	Cancel context.CancelFunc
-	Cmd    *exec.Cmd
-	stdout strings.Builder
-	stderr strings.Builder
-	Done   chan struct{}
+	Prompt       string
+	Pwd          string
+	ConvID       string
+	Result       string
+	StdErr       string
+	Ctx          context.Context
+	Cancel       context.CancelFunc
+	Cmd          *exec.Cmd
+	stdout       strings.Builder
+	stderr       strings.Builder
+	Done         chan struct{}
+	LastActivity int64
+}
+
+func Touch(pid int64) {
+	metaMu.Lock()
+	if m, ok := taskMeta[pid]; ok {
+		m.LastActivity = time.Now().Unix()
+	}
+	metaMu.Unlock()
 }
 
 var (
@@ -244,34 +253,46 @@ func Exit(pid int64, code int) {
 const SIG_INT int64 = 2
 
 func Wait(pid int64) (int64, int, error) {
-	return WaitTimeout(pid, 15*time.Minute)
+	return WaitTimeout(pid, 5*time.Minute)
 }
 
-func WaitTimeout(pid int64, timeout time.Duration) (int64, int, error) {
+func WaitTimeout(pid int64, idleTimeout time.Duration) (int64, int, error) {
 	if pid >= 0 {
 		metaMu.Lock()
 		meta := taskMeta[pid]
 		metaMu.Unlock()
 		if meta != nil && meta.Done != nil {
-			select {
-			case <-meta.Done:
-				// normal exit
-			case <-time.After(timeout):
-				log.Printf("wait: pid %d timed out after %v, sending SIGINT", pid, timeout)
-				sendSigint(pid)
-				// give it 10s to clean up after SIGINT
+			Touch(pid)
+			ticker := time.NewTicker(30 * time.Second)
+			defer ticker.Stop()
+			for {
 				select {
 				case <-meta.Done:
-					log.Printf("wait: pid %d exited after SIGINT", pid)
-				case <-time.After(10 * time.Second):
-					log.Printf("wait: pid %d still alive 10s after SIGINT, giving up", pid)
-					if meta.Cancel != nil {
-						meta.Cancel()
+					goto waited
+				case <-ticker.C:
+					metaMu.Lock()
+					last := meta.LastActivity
+					metaMu.Unlock()
+					idle := time.Since(time.Unix(last, 0))
+					if idle > idleTimeout {
+						log.Printf("wait: pid %d idle %v (no activity for %v), sending SIGINT", pid, idle, idleTimeout)
+						sendSigint(pid)
+						select {
+						case <-meta.Done:
+							log.Printf("wait: pid %d exited after SIGINT", pid)
+						case <-time.After(10 * time.Second):
+							log.Printf("wait: pid %d still alive 10s after SIGINT, giving up", pid)
+							if meta.Cancel != nil {
+								meta.Cancel()
+							}
+						}
+						goto waited
 					}
 				}
 			}
 		}
 	}
+waited:
 
 	schedMu.Lock()
 	wpid := int32(-1)
@@ -415,6 +436,18 @@ func TaskCtx(t *TaskStruct) context.Context {
 func SetConvID(pid int64, convID string) {
 	m := getMeta(pid)
 	m.ConvID = convID
+}
+
+func TouchByConv(convID string) {
+	metaMu.Lock()
+	defer metaMu.Unlock()
+	now := time.Now().Unix()
+	for _, m := range taskMeta {
+		if m.ConvID == convID {
+			m.LastActivity = now
+			return
+		}
+	}
 }
 
 func SetResult(pid int64, result string) {

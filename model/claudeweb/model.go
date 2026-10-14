@@ -473,6 +473,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 		}
 
 		log.Printf("claudeweb: stop_reason=%q tools=%d text=%d", stopReason, len(collectedTools), textBuf.Len())
+		kernel.TouchByConv(convID)
 
 		if textBuf.Len() > 0 {
 			st.consecutiveContinues = 0
@@ -491,6 +492,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 			localDiff.WriteString(fmt.Sprintf("[%s] %s\n\n", tr.ToolUseID, truncate(tr.Content, 500)))
 		}
 		log.Printf("claudeweb: writeback %d results + Continue (silent=%d/%d)", len(toolResults), st.consecutiveContinues, maxContinues)
+		kernel.TouchByConv(convID)
 		webReq = &CompletionRequest{
 			Prompt:        localDiff.String(),
 			Model:         m.modelName,
