@@ -229,13 +229,18 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 
 		body, err := m.client.Completion(convID, webReq)
 		if err != nil {
-			if _, ok := err.(*RateLimitError); ok && m.effort != "high" {
-				log.Printf("claudeweb: rate limit on effort=%s, escalating to high+thinking", m.effort)
-				m.mu.Lock()
-				m.effort = "high"
-				m.mu.Unlock()
-				webReq.Effort = "high"
-				webReq.ThinkingMode = "extended"
+			if _, ok := err.(*RateLimitError); ok {
+				if m.effort != "high" {
+					log.Printf("claudeweb: rate limit on effort=%s, escalating to high+thinking", m.effort)
+					m.mu.Lock()
+					m.effort = "high"
+					m.mu.Unlock()
+					webReq.Effort = "high"
+					webReq.ThinkingMode = "extended"
+					continue
+				}
+				log.Printf("claudeweb: rate limit on effort=high, waiting 3 minutes")
+				time.Sleep(3 * time.Minute)
 				continue
 			}
 			doExit(exitError, fmt.Sprintf("[API Error] %v", err))

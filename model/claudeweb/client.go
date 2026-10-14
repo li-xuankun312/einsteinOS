@@ -129,23 +129,27 @@ func (c *Client) Completion(convID string, req *CompletionRequest) (io.ReadClose
 			continue
 		}
 
-		if resp.StatusCode >= 500 {
+		if resp.StatusCode >= 400 && resp.StatusCode != http.StatusOK {
 			errBody, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
 			errStr := string(errBody)
 			log.Printf("claudeweb: attempt %d status %d: %s", attempt, resp.StatusCode, truncBody(errBody))
+
 			if isRateLimit(errStr) {
+				if isProxyThrottle(errStr) {
+					log.Printf("claudeweb: proxy throttle, waiting 2 minutes before retry")
+					time.Sleep(2 * time.Minute)
+					lastErr = &RateLimitError{Body: errStr}
+					continue
+				}
 				lastErr = &RateLimitError{Body: errStr}
 				return nil, lastErr
 			}
-			lastErr = fmt.Errorf("API %d: %s", resp.StatusCode, truncBody(errBody))
-			continue
-		}
 
-		if resp.StatusCode != http.StatusOK {
-			errBody, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
-			log.Printf("claudeweb: attempt %d status %d: %s", attempt, resp.StatusCode, truncBody(errBody))
+			if resp.StatusCode >= 500 {
+				lastErr = fmt.Errorf("API %d: %s", resp.StatusCode, truncBody(errBody))
+				continue
+			}
 			return nil, fmt.Errorf("API %d: %s", resp.StatusCode, truncBody(errBody))
 		}
 
@@ -243,7 +247,14 @@ func isRateLimit(body string) bool {
 	return len(body) > 0 &&
 		(contains(body, "使用次数已达到限制") ||
 			contains(body, "rate limit") ||
-			contains(body, "usage limit"))
+			contains(body, "usage limit") ||
+			contains(body, "为防止claude封号") ||
+			contains(body, "提问次数已达上限"))
+}
+
+func isProxyThrottle(body string) bool {
+	return contains(body, "为防止claude封号") ||
+		contains(body, "提问次数已达上限")
 }
 
 func contains(s, sub string) bool {
