@@ -413,8 +413,7 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 		needsSource := status1["needs_source"] == "true"
 		compileFail := status1["compile"] == "fail"
 		if needsSource || compileFail {
-			srcResult := dev_phase2_selective_source(pid, step, repo, status1, gpuAll, gpuUsable, stdout1)
-			return srcResult, nil
+			return dev_phase2_selective_source(pid, step, repo, status1, gpuAll, gpuUsable, stdout1), nil
 		}
 
 		gpuUsable = dev_update_gpu(pid, status1, gpuAll, gpuUsable)
@@ -425,11 +424,11 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 			log.Printf("dev_from_theorems: %s verified in phase 1", repo)
 			return stdout1, nil
 		}
-		return dev_phase3_verify(pid, step, repo, gpuAll, gpuUsable, stdout1)
+		return dev_phase3_verify(pid, step, repo, gpuAll, gpuUsable, stdout1), nil
 	}
 
 	log.Printf("dev_from_theorems: phase 1 — no status block, falling through to phase 2")
-	return dev_phase2_selective_source(pid, step, repo, nil, gpuAll, gpuUsable, stdout1)
+	return dev_phase2_selective_source(pid, step, repo, nil, gpuAll, gpuUsable, stdout1), nil
 }
 
 func dev_phase2_selective_source(pid int64, step *Step, repo string,
