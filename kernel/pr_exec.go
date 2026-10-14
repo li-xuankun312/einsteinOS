@@ -261,7 +261,7 @@ func hw_init(pid int64) (string, error) {
 	if pr := prTable[pid]; pr != nil {
 		pr.HWInfo = hw_info + "\n" + hw_tools
 		pr.GPUAll = gpuAll
-		pr.GPUUsable = gpuAll // assume all usable until P2P test says otherwise
+		pr.GPUUsable = gpuAll
 	}
 	prMu.Unlock()
 
@@ -270,7 +270,6 @@ func hw_init(pid int64) (string, error) {
 }
 
 func parseGPUList(hwText string) string {
-	// count GPU devices from ixsmi/nvidia-smi output
 	count := 0
 	for _, line := range strings.Split(hwText, "\n") {
 		lower := strings.ToLower(line)
@@ -281,7 +280,7 @@ func parseGPUList(hwText string) string {
 		}
 	}
 	if count == 0 {
-		count = 4 // fallback
+		count = 4
 	}
 	if count > 8 {
 		count = 8
@@ -376,9 +375,6 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 	log.Printf("dev_from_theorems: %s phase 1 (theory only, no source), gpu_all=%s gpu_usable=%s",
 		repo, gpuAll, gpuUsable)
 
-	// phase 1: theory only, no source code
-	// child sees LAYER 1 math + LAYER 2 form template + hw + task
-	// child does NOT see original source — it fills the template from the quotient
 	var p1 strings.Builder
 	if hw_info != "" {
 		p1.WriteString("[HARDWARE]\n")
@@ -414,16 +410,13 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 			PRFeedbackAdd(pid, fmt.Sprintf("- dev[%s]: template_fill=%s", repo, status1["template_fill"]))
 		}
 
-		// kernel decision: does child need source files?
 		needsSource := status1["needs_source"] == "true"
 		compileFail := status1["compile"] == "fail"
 		if needsSource || compileFail {
-			// phase 2: kernel selectively provides source
 			srcResult := dev_phase2_selective_source(pid, step, repo, status1, gpuAll, gpuUsable, stdout1)
 			return srcResult, nil
 		}
 
-		// phase 1 compiled — proceed to phase 3 verify
 		gpuUsable = dev_update_gpu(pid, status1, gpuAll, gpuUsable)
 		for k, v := range status1 {
 			PRFeedbackAdd(pid, fmt.Sprintf("- dev[%s]: %s=%s", repo, k, v))
@@ -432,7 +425,6 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 			log.Printf("dev_from_theorems: %s verified in phase 1", repo)
 			return stdout1, nil
 		}
-		// compile pass but smoke fail — phase 3 retry with gpu update
 		return dev_phase3_verify(pid, step, repo, gpuAll, gpuUsable, stdout1)
 	}
 
@@ -449,8 +441,6 @@ func dev_phase2_selective_source(pid int64, step *Step, repo string,
 		return phase1Output
 	}
 
-	// kernel decides which files to provide
-	// if child requested specific files, give those; otherwise give file list only
 	requestedFiles := ""
 	if phase1Status != nil {
 		requestedFiles = phase1Status["needs_source_files"]
@@ -461,7 +451,6 @@ func dev_phase2_selective_source(pid int64, step *Step, repo string,
 	read := 0
 
 	if requestedFiles != "" {
-		// child asked for specific files — kernel provides only those
 		wanted := make(map[string]bool)
 		for _, f := range strings.Split(requestedFiles, ",") {
 			f = strings.TrimSpace(f)
@@ -471,7 +460,6 @@ func dev_phase2_selective_source(pid int64, step *Step, repo string,
 		}
 		for _, f := range files {
 			if !wanted[f] {
-				// check basename match too
 				base := f
 				if idx := strings.LastIndex(f, "/"); idx >= 0 {
 					base = f[idx+1:]
@@ -493,13 +481,11 @@ func dev_phase2_selective_source(pid int64, step *Step, repo string,
 		log.Printf("dev_phase2: %s kernel provided %d requested files (%d lines)",
 			repo, len(wanted), read)
 	} else {
-		// no specific request — give file listing + first 5 key files
 		src.WriteString(fmt.Sprintf("[FILE LISTING — %d files in %s first commit]\n", len(files), repo))
 		for _, f := range files {
 			src.WriteString(f + "\n")
 		}
 		src.WriteString("\n")
-		// kernel picks key files: headers and main source
 		given := 0
 		for _, f := range files {
 			if given >= 5 {
@@ -574,7 +560,6 @@ func dev_phase2_selective_source(pid int64, step *Step, repo string,
 		}
 	}
 
-	// phase 3: one more retry with updated GPU config
 	return dev_phase3_verify(pid, step, repo, gpuAll, gpuUsable, stdout2)
 }
 
@@ -659,13 +644,9 @@ func parse_last_status(text string) map[string]string {
 	return nil
 }
 
-// computeUsableGPUs: given all GPUs and P2P test results, find the largest
-// connected subset. child reports pairs, kernel decides.
 func computeUsableGPUs(gpuAll, pairsOK, pairsFail string) string {
-	// parse all GPU ids
 	allIDs := strings.Split(gpuAll, ",")
 
-	// parse working pairs into adjacency
 	adj := make(map[string]map[string]bool)
 	for _, id := range allIDs {
 		adj[strings.TrimSpace(id)] = make(map[string]bool)
@@ -679,7 +660,6 @@ func computeUsableGPUs(gpuAll, pairsOK, pairsFail string) string {
 		}
 	}
 
-	// find the largest clique (for small N=4..8, brute force is fine)
 	var best []string
 	n := len(allIDs)
 	for mask := 1; mask < (1 << n); mask++ {
@@ -689,7 +669,6 @@ func computeUsableGPUs(gpuAll, pairsOK, pairsFail string) string {
 				subset = append(subset, strings.TrimSpace(allIDs[i]))
 			}
 		}
-		// check all pairs in subset are connected
 		ok := true
 		for i := 0; i < len(subset) && ok; i++ {
 			for j := i + 1; j < len(subset) && ok; j++ {
@@ -704,7 +683,6 @@ func computeUsableGPUs(gpuAll, pairsOK, pairsFail string) string {
 	}
 
 	if len(best) == 0 {
-		// no connected pair found, try each GPU alone
 		if len(allIDs) > 0 {
 			return strings.TrimSpace(allIDs[0])
 		}
