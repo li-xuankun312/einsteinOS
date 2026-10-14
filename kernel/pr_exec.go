@@ -312,24 +312,8 @@ func ref_bind(pid int64, owner, repo string) (string, error) {
 		ref_theorize(pid, owner, repo, theoryCommit.SHA, "", len(theoryFiles), theoryCommit.Message)
 	}
 
-	var diffLog strings.Builder
-	for i := 1; i < len(commits); i++ {
-		c := commits[i]
-		_, changed, _ := RefReadCommit(owner, repo, c.SHA)
-		if len(changed) == 0 {
-			continue
-		}
-		diffLog.WriteString(fmt.Sprintf("%s %d files: %s\n",
-			short_sha(c.SHA), len(changed), c.Message))
-		if (i+1)%500 == 0 {
-			log.Printf("ref_bind: %s/%s scanned %d/%d commits",
-				owner, repo, i+1, len(commits))
-		}
-	}
-	if diffLog.Len() > 0 {
-		theorem_store(owner+"/"+repo, "changelog",
-			fmt.Sprintf("[%d subsequent commits]\n%s", len(commits)-1, diffLog.String()), 0)
-	}
+	log.Printf("ref_bind: %s/%s done, %d subsequent commits in git (not scanned)",
+		owner, repo, len(commits)-1)
 
 	count := theorem_count(owner + "/" + repo)
 	result := fmt.Sprintf("%s/%s: %d commits %d theorems", owner, repo, len(commits), count)
