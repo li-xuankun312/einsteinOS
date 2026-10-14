@@ -244,7 +244,7 @@ func Exit(pid int64, code int) {
 const SIG_INT int64 = 2
 
 func Wait(pid int64) (int64, int, error) {
-	return WaitTimeout(pid, 5*time.Minute)
+	return WaitTimeout(pid, 15*time.Minute)
 }
 
 func WaitTimeout(pid int64, timeout time.Duration) (int64, int, error) {
