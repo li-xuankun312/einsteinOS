@@ -23,6 +23,7 @@ const (
 	STEP_HW_PROBE
 	STEP_REF_BIND
 	STEP_DEV_FROM_THEOREMS
+	STEP_DEV_FIX // kernel-driven fix: structured args, not "fix the issues above"
 	STEP_REF_DIFF
 	STEP_DEV_AUTONOMOUS
 )
@@ -196,6 +197,9 @@ func PRRunNext(pid int64) (string, error) {
 	case STEP_DEV_FROM_THEOREMS:
 		result, err = dev_from_theorems(pid, step)
 
+	case STEP_DEV_FIX:
+		result, err = dev_fix(pid, step)
+
 	case STEP_REF_DIFF:
 		result, err = ref_diff(pid, step)
 
@@ -357,20 +361,13 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 	pr := GetPR(pid)
 	task := ""
 	hw_info := ""
-	gpuAll := "0,1,2,3"
-	gpuUsable := "0,1,2,3"
+	gpuAll, gpuUsable := pr_gpu_args(pid)
 	if pr != nil {
 		task = strip_credentials(pr.Title)
 		hw_info = pr.HWInfo
-		if pr.GPUAll != "" {
-			gpuAll = pr.GPUAll
-		}
-		if pr.GPUUsable != "" {
-			gpuUsable = pr.GPUUsable
-		}
 	}
 
-	log.Printf("dev_from_theorems: %s phase 1 (theory only, no source), gpu_all=%s gpu_usable=%s",
+	log.Printf("dev_from_theorems: %s (theory only, no source), gpu_all=%s gpu_usable=%s",
 		repo, gpuAll, gpuUsable)
 
 	var p1 strings.Builder
@@ -387,17 +384,10 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 	devRepos := GetDevRepos()
 	if len(devRepos) > 0 {
 		p1.WriteString("\n\n[DEV REPO]\n")
-		p1.WriteString("the dev repo is already cloned on the local machine. read it with bash_tool:\n")
 		for _, dr := range devRepos {
-			p1.WriteString(fmt.Sprintf("  repo: %s → ls /home/claude/%s/\n", dr, strings.Split(dr, "/")[1]))
+			parts := strings.Split(dr, "/")
+			p1.WriteString(fmt.Sprintf("  %s → /home/claude/%s/\n", dr, parts[len(parts)-1]))
 		}
-		p1.WriteString("key files to read first:\n")
-		p1.WriteString("  cat patch_ops.sh        — env vars for GPU/vllm runtime\n")
-		p1.WriteString("  cat Makefile             — build system\n")
-		p1.WriteString("  ls src/ include/         — existing code structure\n")
-		p1.WriteString("  cat *.sh                 — deployment scripts\n")
-		p1.WriteString("your code must work with the existing env vars and build system.\n")
-		p1.WriteString("write code INTO the dev repo, not /home/claude/.\n")
 	}
 
 	p1.WriteString(fmt.Sprintf(dev_draft_instruction, gpuAll, gpuUsable, gpuUsable))
@@ -407,6 +397,7 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 		p1.WriteString(fmt.Sprintf("\n\n[PRIOR FEEDBACK]\n%s", feedback))
 	}
 
+	// single attempt — kernel decides what comes next
 	child1, err := Fork(p1.String(), ".")
 	if err != nil {
 		return "", err
@@ -420,33 +411,32 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 	stdout1 := GetResult(child1)
 	status1 := parse_last_status(stdout1)
 
-	if status1 != nil {
-		log.Printf("dev_from_theorems: phase 1 — compile=%s needs_source=%s template_fill=%s",
-			status1["compile"], status1["needs_source"], status1["template_fill"])
-
-		if status1["template_fill"] != "" {
-			PRFeedbackAdd(pid, fmt.Sprintf("- dev[%s]: template_fill=%s", repo, status1["template_fill"]))
-		}
-
-		needsSource := status1["needs_source"] == "true"
-		compileFail := status1["compile"] == "fail"
-		if needsSource || compileFail {
-			return dev_phase2_selective_source(pid, step, repo, status1, gpuAll, gpuUsable, stdout1), nil
-		}
-
-		gpuUsable = dev_update_gpu(pid, status1, gpuAll, gpuUsable)
-		for k, v := range status1 {
-			PRFeedbackAdd(pid, fmt.Sprintf("- dev[%s]: %s=%s", repo, k, v))
-		}
-		if status1["compile"] == "pass" && status1["smoke"] == "pass" {
-			log.Printf("dev_from_theorems: %s verified in phase 1", repo)
-			return stdout1, nil
-		}
-		return dev_phase3_verify(pid, step, repo, gpuAll, gpuUsable, stdout1), nil
+	if status1 == nil {
+		log.Printf("dev_from_theorems: no status block")
+		status1 = map[string]string{"compile": "fail", "compile_error": "no status block in child output"}
 	}
 
-	log.Printf("dev_from_theorems: phase 1 — no status block, falling through to phase 2")
-	return dev_phase2_selective_source(pid, step, repo, nil, gpuAll, gpuUsable, stdout1), nil
+	log.Printf("dev_from_theorems: compile=%s needs_source=%s template_fill=%s",
+		status1["compile"], status1["needs_source"], status1["template_fill"])
+
+	// kernel absorbs observations
+	dev_update_gpu(pid, status1, gpuAll, gpuUsable)
+	if status1["template_fill"] != "" {
+		PRFeedbackAdd(pid, fmt.Sprintf("- dev[%s]: template_fill=%s", repo, status1["template_fill"]))
+	}
+	for k, v := range status1 {
+		PRFeedbackAdd(pid, fmt.Sprintf("- dev[%s]: %s=%s", repo, k, v))
+	}
+
+	// done?
+	if status1["compile"] == "pass" && status1["smoke"] == "pass" {
+		log.Printf("dev_from_theorems: %s verified", repo)
+		return stdout1, nil
+	}
+
+	// not done — kernel pushes a fix step with structured args
+	dev_push_fix(pid, step.Owner, step.Repo, status1, 1)
+	return stdout1, nil
 }
 
 func dev_autonomous(pid int64, step *Step) (string, error) {
@@ -580,63 +570,193 @@ tests=pass|fail|skipped
 	return result, nil
 }
 
-func dev_phase2_selective_source(pid int64, step *Step, repo string,
-	phase1Status map[string]string, gpuAll, gpuUsable, phase1Output string) string {
+// dev_fix: kernel-driven fix step. Step fields carry structured args:
+//   Command = failure type (compile_fail | gpu_fail | smoke_fail | needs_source)
+//   Path    = error message from child's status block
+//   SHA     = comma-separated ref file hints (kernel-selected from compile error)
+//   Result  = files_written by previous attempt
+//   Dir     = attempt number as string
+func dev_fix(pid int64, step *Step) (string, error) {
+	repo := step.Owner + "/" + step.Repo
+	attempt := dev_fix_attempt(step)
 
-	commit, _, err := RefFirstCommit(step.Owner, step.Repo)
+	if attempt > 3 {
+		log.Printf("dev_fix: %s exceeded max attempts", repo)
+		return step.Result, nil
+	}
+
+	pr := GetPR(pid)
+	task := ""
+	hw_info := ""
+	if pr != nil {
+		task = strip_credentials(pr.Title)
+		hw_info = pr.HWInfo
+	}
+
+	theory := theorem_get(repo, "")
+	gpuAll, gpuUsable := pr_gpu_args(pid)
+
+	var prompt strings.Builder
+
+	if hw_info != "" {
+		prompt.WriteString("[HARDWARE]\n")
+		prompt.WriteString(hw_info)
+		prompt.WriteString("\n\n")
+	}
+
+	if theory != "" {
+		prompt.WriteString(fmt.Sprintf("[THEORY from %s]\n%s\n\n", repo, theory))
+	}
+
+	prompt.WriteString(fmt.Sprintf("[TASK]\n%s\n\n", task))
+
+	// kernel-computed failure diagnosis — kv format, not prose
+	prompt.WriteString("[PRIOR RESULT]\n")
+	prompt.WriteString(fmt.Sprintf("status=%s\n", step.Command))
+	if step.Path != "" {
+		prompt.WriteString(fmt.Sprintf("error=%s\n", step.Path))
+	}
+	if step.Result != "" {
+		prompt.WriteString(fmt.Sprintf("files_written=%s\n", step.Result))
+	}
+	prompt.WriteString("\n")
+
+	// kernel provides ref source files based on failure type
+	needsSource := step.Command == "compile_fail" || step.Command == "needs_source"
+	if needsSource {
+		sourceFiles := dev_select_source_files(step.Owner, step.Repo, step.SHA, step.Path)
+		if sourceFiles != "" {
+			prompt.WriteString(fmt.Sprintf("[SELECTIVE SOURCE from %s — kernel-provided]\n", repo))
+			prompt.WriteString(sourceFiles)
+			prompt.WriteString("\n")
+		}
+	}
+
+	// dev repo listing
+	devRepos := GetDevRepos()
+	if len(devRepos) > 0 {
+		prompt.WriteString("[DEV REPO]\n")
+		for _, dr := range devRepos {
+			parts := strings.Split(dr, "/")
+			prompt.WriteString(fmt.Sprintf("  %s → /home/claude/%s/\n", dr, parts[len(parts)-1]))
+		}
+		prompt.WriteString("\n")
+	}
+
+	prompt.WriteString(fmt.Sprintf(dev_verify_instruction, gpuAll, gpuUsable, gpuUsable, gpuAll))
+
+	feedback := pr_feedback(pid)
+	if feedback != "" {
+		prompt.WriteString(fmt.Sprintf("\n\n[PRIOR FEEDBACK]\n%s", feedback))
+	}
+
+	log.Printf("dev_fix: %s attempt=%d failure=%s gpu_usable=%s",
+		repo, attempt, step.Command, gpuUsable)
+
+	child, err := Fork(prompt.String(), ".")
 	if err != nil {
-		log.Printf("dev_phase2: %s RefFirstCommit: %v", repo, err)
-		return phase1Output
+		return "", err
+	}
+	if m := getMeta(child); m != nil && m.ConvID != "" {
+		RegisterConv(pid, m.ConvID, repo, fmt.Sprintf("dev_fix_%d", attempt), attempt)
+	}
+	Wait(child)
+	step.ChildPid = child
+
+	stdout := GetResult(child)
+	status := parse_last_status(stdout)
+
+	if status == nil {
+		log.Printf("dev_fix: %s attempt=%d no status block", repo, attempt)
+		status = map[string]string{"compile": "fail", "compile_error": "no status block"}
 	}
 
-	requestedFiles := ""
-	if phase1Status != nil {
-		requestedFiles = phase1Status["needs_source_files"]
+	dev_update_gpu(pid, status, gpuAll, gpuUsable)
+	for k, v := range status {
+		PRFeedbackAdd(pid, fmt.Sprintf("- dev[%s]: %s=%s", repo, k, v))
 	}
 
-	var src strings.Builder
-	files, _ := RefTreeAt(step.Owner, step.Repo, commit.SHA)
-	read := 0
+	if status["compile"] == "pass" && status["smoke"] == "pass" {
+		log.Printf("dev_fix: %s verified on attempt %d", repo, attempt)
+		return stdout, nil
+	}
 
-	if requestedFiles != "" {
-		wanted := make(map[string]bool)
-		for _, f := range strings.Split(requestedFiles, ",") {
-			f = strings.TrimSpace(f)
-			if f != "" {
-				wanted[f] = true
-			}
+	// still failing — kernel pushes another fix step
+	dev_push_fix(pid, step.Owner, step.Repo, status, attempt+1)
+	return stdout, nil
+}
+
+// dev_push_fix: kernel classifies failure and pushes a STEP_DEV_FIX.
+// no text instructions — only structured args in Step fields.
+func dev_push_fix(pid int64, owner, repo string, status map[string]string, attempt int) {
+	if attempt > 3 {
+		log.Printf("dev_push_fix: %s/%s max attempts reached", owner, repo)
+		return
+	}
+
+	failureType := "unknown"
+	errorMsg := ""
+	filesWritten := status["files_written"]
+	sourceHints := ""
+
+	switch {
+	case status["needs_source"] == "true":
+		failureType = "needs_source"
+		errorMsg = status["needs_source_reason"]
+		sourceHints = status["needs_source_files"]
+
+	case status["compile"] == "fail":
+		failureType = "compile_fail"
+		errorMsg = status["compile_error"]
+		sourceHints = dev_extract_source_hints(owner, repo, errorMsg)
+
+	case status["gpu_test"] == "fail":
+		failureType = "gpu_fail"
+		errorMsg = status["gpu_test_detail"]
+
+	case status["smoke"] == "fail":
+		failureType = "smoke_fail"
+		errorMsg = status["smoke_error"]
+	}
+
+	log.Printf("dev_push_fix: %s/%s type=%s attempt=%d hints=%q",
+		owner, repo, failureType, attempt, sourceHints)
+
+	pr_push_step(pid, &Step{
+		Kind:    STEP_DEV_FIX,
+		Owner:   owner,
+		Repo:    repo,
+		Command: failureType,
+		Path:    errorMsg,
+		SHA:     sourceHints,
+		Result:  filesWritten,
+		Dir:     fmt.Sprintf("%d", attempt),
+	})
+}
+
+// dev_select_source_files: kernel reads ref repo and returns formatted source
+// for files matching hints or compile error references.
+func dev_select_source_files(owner, repo, hints, compileError string) string {
+	commit, _, err := RefFirstCommit(owner, repo)
+	if err != nil {
+		return ""
+	}
+
+	files, _ := RefTreeAt(owner, repo, commit.SHA)
+
+	// collect wanted files from hints (child's needs_source_files or kernel's extract)
+	wanted := make(map[string]bool)
+	for _, f := range strings.Split(hints, ",") {
+		f = strings.TrimSpace(f)
+		if f != "" {
+			wanted[f] = true
 		}
+	}
+
+	// if no hints, kernel picks key files (headers, engine, transport, main)
+	if len(wanted) == 0 {
 		for _, f := range files {
-			if !wanted[f] {
-				base := f
-				if idx := strings.LastIndex(f, "/"); idx >= 0 {
-					base = f[idx+1:]
-				}
-				if !wanted[base] {
-					continue
-				}
-			}
-			content, e := RefFileAt(step.Owner, step.Repo, commit.SHA, f)
-			if e != nil {
-				continue
-			}
-			lines := strings.Count(content, "\n") + 1
-			src.WriteString(fmt.Sprintf("=== %s (%d lines) ===\n", f, lines))
-			src.WriteString(content)
-			src.WriteString("\n\n")
-			read += lines
-		}
-		log.Printf("dev_phase2: %s kernel provided %d requested files (%d lines)",
-			repo, len(wanted), read)
-	} else {
-		src.WriteString(fmt.Sprintf("[FILE LISTING — %d files in %s first commit]\n", len(files), repo))
-		for _, f := range files {
-			src.WriteString(f + "\n")
-		}
-		src.WriteString("\n")
-		given := 0
-		for _, f := range files {
-			if given >= 5 {
+			if len(wanted) >= 5 {
 				break
 			}
 			if isBinaryFile(f) {
@@ -644,133 +764,94 @@ func dev_phase2_selective_source(pid int64, step *Step, repo string,
 			}
 			if strings.HasSuffix(f, ".h") || strings.Contains(f, "engine") ||
 				strings.Contains(f, "transport") || strings.Contains(f, "main") {
-				content, e := RefFileAt(step.Owner, step.Repo, commit.SHA, f)
-				if e != nil {
-					continue
-				}
-				lines := strings.Count(content, "\n") + 1
-				src.WriteString(fmt.Sprintf("=== %s (%d lines) ===\n", f, lines))
-				src.WriteString(content)
-				src.WriteString("\n\n")
-				read += lines
-				given++
+				wanted[f] = true
 			}
 		}
-		log.Printf("dev_phase2: %s kernel provided file list + %d key files (%d lines)",
-			repo, given, read)
 	}
 
-	pr := GetPR(pid)
-	task := ""
-	hw_info := ""
-	if pr != nil {
-		task = strip_credentials(pr.Title)
-		hw_info = pr.HWInfo
-	}
-
-	var p2 strings.Builder
-	if hw_info != "" {
-		p2.WriteString("[HARDWARE]\n")
-		p2.WriteString(hw_info)
-		p2.WriteString("\n\n")
-	}
-	theory := theorem_get(repo, "")
-	if theory != "" {
-		p2.WriteString(fmt.Sprintf("[THEORY from %s]\n%s\n\n", repo, theory))
-	}
-	p2.WriteString(fmt.Sprintf("[SELECTIVE SOURCE from %s — kernel-provided]\n", repo))
-	p2.WriteString(src.String())
-	p2.WriteString("\n[TASK]\n")
-	p2.WriteString(task)
-	if phase1Output != "" {
-		p2.WriteString(fmt.Sprintf("\n\n[PRIOR ATTEMPT — fix these issues]\n%s", truncDiff(phase1Output, 3000)))
-	}
-	p2.WriteString(fmt.Sprintf(dev_verify_instruction, gpuAll, gpuUsable, gpuUsable, gpuAll))
-
-	child2, err := Fork(p2.String(), ".")
-	if err != nil {
-		return phase1Output
-	}
-	if m := getMeta(child2); m != nil && m.ConvID != "" {
-		RegisterConv(pid, m.ConvID, repo, "dev_fix", 2)
-	}
-	Wait(child2)
-	step.ChildPid = child2
-
-	stdout2 := GetResult(child2)
-	status2 := parse_last_status(stdout2)
-
-	if status2 != nil {
-		gpuUsable = dev_update_gpu(pid, status2, gpuAll, gpuUsable)
-		for k, v := range status2 {
-			PRFeedbackAdd(pid, fmt.Sprintf("- dev[%s]: %s=%s", repo, k, v))
+	var src strings.Builder
+	read := 0
+	for _, f := range files {
+		if !wanted[f] {
+			base := f
+			if idx := strings.LastIndex(f, "/"); idx >= 0 {
+				base = f[idx+1:]
+			}
+			if !wanted[base] {
+				continue
+			}
 		}
-		if status2["compile"] == "pass" && status2["smoke"] == "pass" {
-			log.Printf("dev_from_theorems: %s verified in phase 2", repo)
-			return stdout2
+		content, e := RefFileAt(owner, repo, commit.SHA, f)
+		if e != nil {
+			continue
 		}
+		lines := strings.Count(content, "\n") + 1
+		src.WriteString(fmt.Sprintf("=== %s (%d lines) ===\n", f, lines))
+		src.WriteString(content)
+		src.WriteString("\n\n")
+		read += lines
 	}
 
-	return dev_phase3_verify(pid, step, repo, gpuAll, gpuUsable, stdout2)
+	log.Printf("dev_select_source: %s/%s provided %d files (%d lines)",
+		owner, repo, len(wanted), read)
+	return src.String()
 }
 
-func dev_phase3_verify(pid int64, step *Step, repo, gpuAll, gpuUsable, prevOutput string) string {
+// dev_extract_source_hints: kernel parses compile error for ref file names.
+func dev_extract_source_hints(owner, repo, compileError string) string {
+	if compileError == "" {
+		return ""
+	}
+	commit, _, err := RefFirstCommit(owner, repo)
+	if err != nil {
+		return ""
+	}
+	files, _ := RefTreeAt(owner, repo, commit.SHA)
+
+	var hints []string
+	for _, f := range files {
+		base := f
+		if idx := strings.LastIndex(f, "/"); idx >= 0 {
+			base = f[idx+1:]
+		}
+		name := strings.TrimSuffix(base, ".go")
+		name = strings.TrimSuffix(name, ".h")
+		name = strings.TrimSuffix(name, ".c")
+		name = strings.TrimSuffix(name, ".py")
+		if name != "" && len(name) > 3 && strings.Contains(strings.ToLower(compileError), strings.ToLower(name)) {
+			hints = append(hints, f)
+		}
+	}
+	if len(hints) > 5 {
+		hints = hints[:5]
+	}
+	return strings.Join(hints, ",")
+}
+
+// dev_fix_attempt: read attempt number from Step.Dir
+func dev_fix_attempt(step *Step) int {
+	n := 1
+	if step.Dir != "" {
+		fmt.Sscanf(step.Dir, "%d", &n)
+	}
+	return n
+}
+
+// pr_gpu_args: read GPU config from PRProcess, with defaults.
+func pr_gpu_args(pid int64) (string, string) {
+	gpuAll := "0,1,2,3"
+	gpuUsable := "0,1,2,3"
 	prMu.Lock()
-	if pr := prTable[pid]; pr != nil && pr.GPUUsable != "" {
-		gpuUsable = pr.GPUUsable
+	if pr := prTable[pid]; pr != nil {
+		if pr.GPUAll != "" {
+			gpuAll = pr.GPUAll
+		}
+		if pr.GPUUsable != "" {
+			gpuUsable = pr.GPUUsable
+		}
 	}
 	prMu.Unlock()
-
-	pr := GetPR(pid)
-	hw_info := ""
-	task := ""
-	if pr != nil {
-		hw_info = pr.HWInfo
-		task = strip_credentials(pr.Title)
-	}
-
-	var p3 strings.Builder
-	if hw_info != "" {
-		p3.WriteString("[HARDWARE]\n")
-		p3.WriteString(hw_info)
-		p3.WriteString("\n\n")
-	}
-	theory := theorem_get(repo, "")
-	if theory != "" {
-		p3.WriteString(fmt.Sprintf("[THEORY from %s]\n%s\n\n", repo, theory))
-	}
-	p3.WriteString("[TASK]\n")
-	p3.WriteString(task)
-	p3.WriteString(fmt.Sprintf("\n\n[RETRY — previous attempt had issues]\n%s", truncDiff(prevOutput, 3000)))
-	p3.WriteString(fmt.Sprintf("\n\n[UPDATED GPU CONFIG] use CUDA_VISIBLE_DEVICES=%s\n", gpuUsable))
-	p3.WriteString(fmt.Sprintf(dev_verify_instruction, gpuAll, gpuUsable, gpuUsable, gpuAll))
-
-	child3, err := Fork(p3.String(), ".")
-	if err != nil {
-		return prevOutput
-	}
-	if m := getMeta(child3); m != nil && m.ConvID != "" {
-		RegisterConv(pid, m.ConvID, repo, "dev_verify", 3)
-	}
-	Wait(child3)
-	step.ChildPid = child3
-
-	stdout3 := GetResult(child3)
-	status3 := parse_last_status(stdout3)
-
-	if status3 != nil {
-		dev_update_gpu(pid, status3, gpuAll, gpuUsable)
-		for k, v := range status3 {
-			PRFeedbackAdd(pid, fmt.Sprintf("- dev[%s]: %s=%s", repo, k, v))
-		}
-		if status3["compile"] == "pass" && status3["smoke"] == "pass" {
-			log.Printf("dev_from_theorems: %s verified in phase 3", repo)
-			return stdout3
-		}
-	}
-
-	log.Printf("dev_from_theorems: %s failed after 3 phases, gpu_usable=%s", repo, gpuUsable)
-	return stdout3
+	return gpuAll, gpuUsable
 }
 
 func dev_update_gpu(pid int64, status map[string]string, gpuAll, gpuUsable string) string {
@@ -1015,6 +1096,8 @@ func step_name(k StepKind) string {
 		return "dev_theory"
 	case STEP_DEV_FROM_THEOREMS:
 		return "dev_thms"
+	case STEP_DEV_FIX:
+		return "dev_fix"
 	case STEP_DEV_EXEC:
 		return "dev_exec"
 	case STEP_HW_PROBE:
