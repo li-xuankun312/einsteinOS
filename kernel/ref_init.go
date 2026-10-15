@@ -111,6 +111,16 @@ func is_dev_repo(owner, name string) bool {
 	return dev_repos[owner+"/"+name]
 }
 
+func GetDevRepos() []string {
+	dev_repos_mu.Lock()
+	defer dev_repos_mu.Unlock()
+	var out []string
+	for k := range dev_repos {
+		out = append(out, k)
+	}
+	return out
+}
+
 func detect_dev_repos(task string) {
 	markers := []string{
 		"项目在", "项目是", "项目：", "项目:",

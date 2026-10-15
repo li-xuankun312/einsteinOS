@@ -379,6 +379,23 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 	p1.WriteString(theory)
 	p1.WriteString("\n\n[TASK]\n")
 	p1.WriteString(task)
+
+	devRepos := GetDevRepos()
+	if len(devRepos) > 0 {
+		p1.WriteString("\n\n[DEV REPO]\n")
+		p1.WriteString("the dev repo is already cloned on the local machine. read it with bash_tool:\n")
+		for _, dr := range devRepos {
+			p1.WriteString(fmt.Sprintf("  repo: %s → ls /home/claude/%s/\n", dr, strings.Split(dr, "/")[1]))
+		}
+		p1.WriteString("key files to read first:\n")
+		p1.WriteString("  cat patch_ops.sh        — env vars for GPU/vllm runtime\n")
+		p1.WriteString("  cat Makefile             — build system\n")
+		p1.WriteString("  ls src/ include/         — existing code structure\n")
+		p1.WriteString("  cat *.sh                 — deployment scripts\n")
+		p1.WriteString("your code must work with the existing env vars and build system.\n")
+		p1.WriteString("write code INTO the dev repo, not /home/claude/.\n")
+	}
+
 	p1.WriteString(fmt.Sprintf(dev_draft_instruction, gpuAll, gpuUsable, gpuUsable))
 
 	feedback := pr_feedback(pid)
