@@ -435,6 +435,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 					log.Printf("claudeweb: pr_step_loop i=%d result=%q", i, truncate(stepResult, 100))
 					if stepResult == "" || strings.Contains(stepResult, "no more steps") {
 						log.Printf("claudeweb: pr_step_loop breaking at i=%d", i)
+						kernel.StopOrphanConvs(int64(kernel.Current.Pid))
 						break
 					}
 					log.Printf("claudeweb: pr_step %d: %s", i+1, truncate(stepResult, 200))
@@ -483,6 +484,13 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 
 		if textBuf.Len() > 0 {
 			st.consecutiveContinues = 0
+			yield(&model.LLMResponse{
+				Content: &genai.Content{
+					Role:  "model",
+					Parts: []*genai.Part{{Text: textBuf.String()}},
+				},
+				Partial: true,
+			}, nil)
 		} else {
 			st.consecutiveContinues++
 		}
@@ -630,6 +638,9 @@ func (m *Model) RunConversation(prompt string) (string, string) {
 
 	log.Printf("claudeweb: fork %s/chat/%s", m.client.baseURL, convID)
 	log.Printf("claudeweb: → %s prompt=%q", convID[:8], truncate(prompt, 80))
+
+	parentPid := int64(kernel.Current.Pid)
+	kernel.TrackChildConv(parentPid, convID)
 
 	webReq.Prompt = fullPrompt
 

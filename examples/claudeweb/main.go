@@ -553,6 +553,10 @@ func newConversation(name string) (*claudeweb.Model, *runner.Runner, string) {
 		return llm.RunConversation(prompt)
 	})
 
+	kernel.SetStopConvFn(func(convID string) {
+		client.StopResponse(convID)
+	})
+
 	shadow := &claudeweb.ShadowExecutor{
 		WorkDir: cfg.workDir,
 		Enabled: true,

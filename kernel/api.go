@@ -450,6 +450,38 @@ func TouchByConv(convID string) {
 	}
 }
 
+var (
+	childConvs   = make(map[int64][]string)
+	childConvsMu sync.Mutex
+	stopConvFn   func(convID string)
+)
+
+func SetStopConvFn(fn func(string)) {
+	stopConvFn = fn
+}
+
+func TrackChildConv(parentPid int64, convID string) {
+	childConvsMu.Lock()
+	childConvs[parentPid] = append(childConvs[parentPid], convID)
+	childConvsMu.Unlock()
+}
+
+func StopOrphanConvs(parentPid int64) {
+	if stopConvFn == nil {
+		return
+	}
+	childConvsMu.Lock()
+	convs := childConvs[parentPid]
+	delete(childConvs, parentPid)
+	childConvsMu.Unlock()
+	for _, c := range convs {
+		go stopConvFn(c)
+	}
+	if len(convs) > 0 {
+		log.Printf("orphan_cleanup: pid %d stopped %d child conversations", parentPid, len(convs))
+	}
+}
+
 func SetResult(pid int64, result string) {
 	m := getMeta(pid)
 	m.Result = result
