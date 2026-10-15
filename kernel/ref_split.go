@@ -57,12 +57,31 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 		child_pids = append(child_pids, child_pid)
 		Wait(child_pid)
 
+		// After Wait, goroutine is done — ConvID is now in TaskMeta.
+		// Register with proper repo/role for FindConv lookups.
+		role := fmt.Sprintf("theorize_chunk_%d", i+1)
+		if m := getMeta(child_pid); m != nil && m.ConvID != "" {
+			RegisterConv(parent_pid, m.ConvID, owner+"/"+repo, role, 0)
+		}
+
 		result := GetResult(child_pid)
+
+		// DownloadConv fallback: if GetResult is short (child wrote to
+		// Artifact/create_file instead of text), download the full
+		// conversation and extract assistant text.
 		if len(result) < 500 {
-			role := fmt.Sprintf("theorize_chunk_%d", i+1)
-			rec := FindConv(owner+"/"+repo, role, 0)
-			if rec != nil {
-				downloaded, err := DownloadConv(rec.ConvID)
+			convID := ""
+			if m := getMeta(child_pid); m != nil {
+				convID = m.ConvID
+			}
+			if convID == "" {
+				// also try registry
+				if rec := FindConv(owner+"/"+repo, role, 0); rec != nil {
+					convID = rec.ConvID
+				}
+			}
+			if convID != "" {
+				downloaded, err := DownloadConv(convID)
 				if err == nil && len(downloaded) > len(result) {
 					log.Printf("ref_split: chunk %d/%d GetResult=%d, downloaded=%d, using download",
 						i+1, len(chunks), len(result), len(downloaded))
@@ -120,23 +139,18 @@ func ref_split_fork(parent_pid int64, owner, repo, sha string, files []string, t
 	}
 
 	prompt := src_text + theorize_instruction +
-		"the repo is at " + dir + " if you need git.\n" +
+		"if you need git, the bare repo is ALREADY at " + dir + " — " +
+		"use `git --git-dir=" + dir + " show " + short_sha(sha) + ":<path>` to read files. " +
+		"do NOT clone the repo again. if " + dir + " does not exist, `git fetch` into it, never fresh clone.\n" +
 		"if any single file is too large to fully analyze, " +
 		"list its functions and produce both layers for the most important ones.\n\n" +
-		"CRITICAL: output your LAYER 1 and LAYER 2 directly as text in your response. " +
-		"do NOT use create_file, Artifact, or present_files. " +
-		"do NOT write to /mnt/user-data/outputs/. " +
-		"your text response IS the output. just print the math and templates."
+		"write your LAYER 1 and LAYER 2 however you prefer — text, Artifact, or create_file all work. " +
+		"the kernel will download the full conversation after you finish."
 
 	pid, err := Fork(prompt, ".")
 	if err != nil {
 		log.Printf("ref_split_fork: %v", err)
 		return 0
-	}
-
-	if m := getMeta(pid); m != nil && m.ConvID != "" {
-		RegisterConv(parent_pid, m.ConvID, owner+"/"+repo,
-			fmt.Sprintf("theorize_chunk_%d", chunk_idx+1), 0)
 	}
 
 	split_alloc(parent_pid, depth, owner, repo, sha, files)

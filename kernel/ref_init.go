@@ -331,11 +331,11 @@ func ref_theorize_leaf(parent int64, owner, name, sha string, files []string, ta
 	}
 
 	prompt := src.String() + extra + theorize_instruction +
-		"the repo is at " + dir + " if you need git.\n\n" +
-		"CRITICAL: output your LAYER 1 and LAYER 2 directly as text in your response. " +
-		"do NOT use create_file, Artifact, or present_files. " +
-		"do NOT write to /mnt/user-data/outputs/. " +
-		"your text response IS the output. just print the math and templates."
+		"if you need git, the bare repo is ALREADY at " + dir + " — " +
+		"use `git --git-dir=" + dir + " show " + sha[:12] + ":<path>` to read files. " +
+		"do NOT clone the repo again. if " + dir + " does not exist, `git fetch` into it, never fresh clone.\n\n" +
+		"write your LAYER 1 and LAYER 2 however you prefer — text, Artifact, or create_file all work. " +
+		"the kernel will download the full conversation after you finish."
 
 	child, err := Fork(prompt, ".")
 	if err != nil {
@@ -344,7 +344,20 @@ func ref_theorize_leaf(parent int64, owner, name, sha string, files []string, ta
 	log.Printf("ref_theorize: parent=%d child=%d %s/%s %s (%d files)",
 		parent, child, owner, name, sha[:12], len(files))
 	Wait(child)
+
 	theory := GetResult(child)
+	// DownloadConv fallback if GetResult is short
+	if len(theory) < 500 {
+		if m := getMeta(child); m != nil && m.ConvID != "" {
+			downloaded, err := DownloadConv(m.ConvID)
+			if err == nil && len(downloaded) > len(theory) {
+				log.Printf("ref_theorize: GetResult=%d, downloaded=%d, using download",
+					len(theory), len(downloaded))
+				theory = downloaded
+			}
+		}
+	}
+
 	theorem_store(owner+"/"+name, sha, theory, child)
 	return theory
 }

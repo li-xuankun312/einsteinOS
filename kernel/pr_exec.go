@@ -333,11 +333,7 @@ func ref_bind(pid int64, owner, repo string) (string, error) {
 	log.Printf("ref_bind: %s/%s %d commits, theorize=%s %d files",
 		owner, repo, len(commits), short_sha(theoryCommit.SHA), len(theoryFiles))
 
-	if len(theoryFiles) > SPLIT_CHUNK {
-		ref_split(pid, owner, repo, theoryCommit.SHA, theoryFiles, task, 0)
-	} else {
-		ref_theorize(pid, owner, repo, theoryCommit.SHA, "", len(theoryFiles), theoryCommit.Message)
-	}
+	ref_theorize(pid, owner, repo, theoryCommit.SHA, "", len(theoryFiles), theoryCommit.Message)
 
 	log.Printf("ref_bind: %s/%s done, %d subsequent commits in git (not scanned)",
 		owner, repo, len(commits)-1)

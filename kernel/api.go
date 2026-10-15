@@ -123,6 +123,19 @@ func Fork(prompt string, pwd string) (int64, error) {
 			metaMu.Lock()
 			meta.Result = stdout
 			meta.StdErr = stderr
+			// ConvID was set by RunConversation via TrackChildConv;
+			// find it in convRegistry and copy to TaskMeta so callers
+			// can read it after Wait returns.
+			if meta.ConvID == "" {
+				convRegistryMu.Lock()
+				for i := len(convRegistry) - 1; i >= 0; i-- {
+					if convRegistry[i].ParentPid == int64(pid) && convRegistry[i].ConvID != "" {
+						meta.ConvID = convRegistry[i].ConvID
+						break
+					}
+				}
+				convRegistryMu.Unlock()
+			}
 			metaMu.Unlock()
 
 			schedMu.Lock()
