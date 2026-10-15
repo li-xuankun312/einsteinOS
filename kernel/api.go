@@ -618,6 +618,23 @@ func GetStderr(pid int64) string {
 
 
 
+var (
+	convFiles   = make(map[string][]string)
+	convFilesMu sync.Mutex
+)
+
+func StoreConvFiles(convID string, files []string) {
+	convFilesMu.Lock()
+	convFiles[convID] = files
+	convFilesMu.Unlock()
+}
+
+func GetConvFiles(convID string) []string {
+	convFilesMu.Lock()
+	defer convFilesMu.Unlock()
+	return convFiles[convID]
+}
+
 func SetStartupTime(t int64) {
 	StartupTime = int32(t)
 }
