@@ -405,22 +405,10 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 	Wait(child1)
 	step.ChildPid = child1
 
-	stdout1 := GetResult(child1)
-	status1 := parse_last_status(stdout1)
-
-	if status1 == nil {
-		log.Printf("dev_from_theorems: no status block")
-		status1 = map[string]string{"compile": "fail", "compile_error": "no status block in child output"}
-	}
-
-	log.Printf("dev_from_theorems: compile=%s needs_source=%s template_fill=%s",
-		status1["compile"], status1["needs_source"], status1["template_fill"])
+	stdout1, status1 := dev_collect_child(child1, repo)
 
 	// kernel absorbs observations
 	dev_update_gpu(pid, status1, gpuAll, gpuUsable)
-	if status1["template_fill"] != "" {
-		PRFeedbackAdd(pid, fmt.Sprintf("- dev[%s]: template_fill=%s", repo, status1["template_fill"]))
-	}
 	for k, v := range status1 {
 		PRFeedbackAdd(pid, fmt.Sprintf("- dev[%s]: %s=%s", repo, k, v))
 	}
@@ -531,13 +519,7 @@ func dev_fix(pid int64, step *Step) (string, error) {
 	Wait(child)
 	step.ChildPid = child
 
-	stdout := GetResult(child)
-	status := parse_last_status(stdout)
-
-	if status == nil {
-		log.Printf("dev_fix: %s attempt=%d no status block", repo, attempt)
-		status = map[string]string{"compile": "fail", "compile_error": "no status block"}
-	}
+	stdout, status := dev_collect_child(child, repo)
 
 	dev_update_gpu(pid, status, gpuAll, gpuUsable)
 	for k, v := range status {
@@ -568,10 +550,27 @@ func dev_push_fix(pid int64, owner, repo string, status map[string]string, attem
 	sourceHints := ""
 
 	switch {
+	case status["compile"] == "no_response":
+		// API failure — child never ran. don't waste a fix attempt.
+		log.Printf("dev_push_fix: %s/%s no_response, retrying same step (not counting attempt)",
+			owner, repo)
+		pr_push_step(pid, &Step{
+			Kind:  STEP_DEV_FROM_THEOREMS,
+			Owner: owner,
+			Repo:  repo,
+		})
+		return
+
 	case status["needs_source"] == "true":
 		failureType = "needs_source"
 		errorMsg = status["needs_source_reason"]
 		sourceHints = status["needs_source_files"]
+
+	case status["compile"] == "unknown":
+		// child wrote code but didn't report compile status — kernel runs go build itself
+		failureType = "compile_unknown"
+		errorMsg = status["compile_error"]
+		filesWritten = status["files_written"]
 
 	case status["compile"] == "fail":
 		failureType = "compile_fail"
@@ -706,6 +705,99 @@ func dev_fix_attempt(step *Step) int {
 }
 
 // pr_gpu_args: read GPU config from PRProcess, with defaults.
+// dev_collect_child: kernel collects child output through system channels.
+// 1. GetResult (stdout text) — try parse_last_status
+// 2. GetConvFiles (shadow DB) — what files the child actually wrote
+// 3. DownloadConv fallback — extract tool_result (shell output) from conversation
+// child doesn't need to output a status block. kernel inspects what happened.
+func dev_collect_child(childPid int64, repo string) (string, map[string]string) {
+	stdout := GetResult(childPid)
+
+	// try text-based status first (cheapest)
+	status := parse_last_status(stdout)
+	if status != nil {
+		log.Printf("dev_collect: %s status from text: compile=%s", repo, status["compile"])
+		// also record files from shadow DB
+		if files := dev_child_files(childPid); len(files) > 0 {
+			status["files_written"] = strings.Join(files, ",")
+		}
+		return stdout, status
+	}
+
+	// no status in text — check shadow DB for what child actually did
+	files := dev_child_files(childPid)
+	log.Printf("dev_collect: %s no status in text, shadow files=%v", repo, files)
+
+	// DownloadConv: get full conversation including tool_result (shell output)
+	convID := ""
+	if m := getMeta(childPid); m != nil {
+		convID = m.ConvID
+	}
+	if convID != "" {
+		downloaded, err := DownloadConv(convID)
+		if err == nil && len(downloaded) > len(stdout) {
+			log.Printf("dev_collect: %s downloaded %d chars (stdout was %d)",
+				repo, len(downloaded), len(stdout))
+			// parse status from downloaded content (includes tool_result)
+			status = parse_last_status(downloaded)
+			if status != nil {
+				log.Printf("dev_collect: %s status from download: compile=%s", repo, status["compile"])
+				if len(files) > 0 {
+					status["files_written"] = strings.Join(files, ",")
+				}
+				return downloaded, status
+			}
+			stdout = downloaded
+		}
+	}
+
+	// still no status block — kernel builds status from system observations
+	status = map[string]string{}
+
+	if len(files) > 0 {
+		status["files_written"] = strings.Join(files, ",")
+		// child wrote files but no status → it did work, compile state unknown
+		hasCode := false
+		for _, f := range files {
+			if strings.HasSuffix(f, ".go") || strings.HasSuffix(f, ".c") ||
+				strings.HasSuffix(f, ".cu") || strings.HasSuffix(f, ".py") {
+				hasCode = true
+				break
+			}
+		}
+		if hasCode {
+			status["compile"] = "unknown"
+			status["compile_error"] = "child wrote code files but did not report compile status"
+		} else {
+			status["compile"] = "fail"
+			status["compile_error"] = "child wrote files but no code: " + strings.Join(files, ",")
+		}
+	} else if len(stdout) < 100 {
+		// child produced almost nothing — likely API failure, not a real attempt
+		status["compile"] = "no_response"
+		status["compile_error"] = fmt.Sprintf("child stdout=%d bytes, no files written", len(stdout))
+	} else {
+		status["compile"] = "fail"
+		status["compile_error"] = "no status block, no code files"
+	}
+
+	log.Printf("dev_collect: %s built status from system: compile=%s files=%d",
+		repo, status["compile"], len(files))
+	return stdout, status
+}
+
+// dev_child_files: get files written by child from shadow DB
+func dev_child_files(childPid int64) []string {
+	convID := ""
+	if m := getMeta(childPid); m != nil {
+		convID = m.ConvID
+	}
+	if convID == "" {
+		return nil
+	}
+	return GetConvFiles(convID)
+}
+
 func pr_gpu_args(pid int64) (string, string) {
 	gpuAll := "0,1,2,3"
 	gpuUsable := "0,1,2,3"
