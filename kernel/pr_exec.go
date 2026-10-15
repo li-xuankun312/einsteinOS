@@ -522,25 +522,28 @@ func dev_autonomous(pid int64, step *Step) (string, error) {
 	prompt.WriteString("- pip install z3-solver && python3 — SMT spec-vs-impl checks\n")
 	prompt.WriteString("- any test/benchmark you write and run via bash_tool\n\n")
 
-	// Strategy: you decide
-	prompt.WriteString(`[STRATEGY]
-you have reference repos (to read and learn from) and a dev repo (to write code into).
-you decide what to do and in what order. some approaches:
-- read a reference file, understand it, write corresponding code, compile, test
-- write a formal spec first, verify it, then implement
-- read the dev repo's build system first, then write code that fits
-- write code directly if the task is simple enough
-- mix theory and code as you see fit
+	// Goal: compilable code, not documents
+	prompt.WriteString(`[GOAL]
+your job is to write CODE in the dev repo that compiles and runs.
+the deliverable is files in the dev repo, not documents or analysis.
 
-there is no fixed pipeline. you read what you need, write what you need,
-verify what you need. go build exit 0 is progress. axle okay=true is progress.
-tests passing is progress. use your judgment.
+DO NOT write papers, treatises, reports, or HTML documents.
+DO NOT spend all your time reading reference repos without writing code.
+DO NOT use create_file to write .md or .html analysis files.
+
+read reference code ONLY to understand what you need to implement.
+then write .go / .c / .py files in the dev repo. compile. test. fix. repeat.
+
+every bash_tool call should move toward: go build ./... exit 0.
+
+you decide what to read and in what order — but the output is CODE.
+theory/specs are useful ONLY as intermediate steps toward working code.
+if you write a formal spec, immediately implement it.
 
 when done, output a status block:
 compile=pass|fail
-files_written=<paths>
+files_written=<paths in dev repo>
 tests=pass|fail|skipped
-theorems_verified=<count>
 `)
 
 	// Prior feedback
