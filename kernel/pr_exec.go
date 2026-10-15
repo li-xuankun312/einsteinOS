@@ -301,8 +301,6 @@ func ref_bind(pid int64, owner, repo string) (string, error) {
 		return "", fmt.Errorf("ref_bind: %s/%s no commits", owner, repo)
 	}
 
-	task := ref_theorize_task(pid)
-
 	var theoryCommit *RefCommit
 	var theoryFiles []string
 	for i := 0; i < len(commits) && i < 20; i++ {
