@@ -450,35 +450,111 @@ func TouchByConv(convID string) {
 	}
 }
 
+type ConvRecord struct {
+	ConvID    string
+	ParentPid int64
+	Repo      string
+	Role      string // "theorize_chunk_1", "dev_draft", "dev_fix", "dev_verify", "hw_probe", "ref_discover"
+	Phase     int    // for multi-phase: 1,2,3
+	Status    string // "running", "done", "error", "timeout"
+	Created   time.Time
+}
+
 var (
-	childConvs   = make(map[int64][]string)
-	childConvsMu sync.Mutex
-	stopConvFn   func(convID string)
+	convRegistry   []ConvRecord
+	convRegistryMu sync.Mutex
+	stopConvFn     func(convID string)
 )
 
 func SetStopConvFn(fn func(string)) {
 	stopConvFn = fn
 }
 
-func TrackChildConv(parentPid int64, convID string) {
-	childConvsMu.Lock()
-	childConvs[parentPid] = append(childConvs[parentPid], convID)
-	childConvsMu.Unlock()
+func RegisterConv(parentPid int64, convID, repo, role string, phase int) {
+	convRegistryMu.Lock()
+	convRegistry = append(convRegistry, ConvRecord{
+		ConvID:    convID,
+		ParentPid: parentPid,
+		Repo:      repo,
+		Role:      role,
+		Phase:     phase,
+		Status:    "running",
+		Created:   time.Now(),
+	})
+	convRegistryMu.Unlock()
+	log.Printf("conv_registry: registered %s repo=%s role=%s phase=%d",
+		convID[:8], repo, role, phase)
 }
 
+func ConvDone(convID string, status string) {
+	convRegistryMu.Lock()
+	for i := range convRegistry {
+		if convRegistry[i].ConvID == convID {
+			convRegistry[i].Status = status
+			break
+		}
+	}
+	convRegistryMu.Unlock()
+}
+
+func FindConv(repo, role string, phase int) *ConvRecord {
+	convRegistryMu.Lock()
+	defer convRegistryMu.Unlock()
+	for i := len(convRegistry) - 1; i >= 0; i-- {
+		r := &convRegistry[i]
+		if r.Repo == repo && r.Role == role && (phase == 0 || r.Phase == phase) {
+			return r
+		}
+	}
+	return nil
+}
+
+func FindConvsByRepo(repo string) []ConvRecord {
+	convRegistryMu.Lock()
+	defer convRegistryMu.Unlock()
+	var out []ConvRecord
+	for _, r := range convRegistry {
+		if r.Repo == repo {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func ConvRegistryStatus() string {
+	convRegistryMu.Lock()
+	defer convRegistryMu.Unlock()
+	if len(convRegistry) == 0 {
+		return "no conversations registered"
+	}
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("  %-8s %-20s %-20s %-3s %-8s %s\n",
+		"CONVID", "REPO", "ROLE", "PH", "STATUS", "AGE"))
+	for _, r := range convRegistry {
+		age := time.Since(r.Created).Truncate(time.Second)
+		sb.WriteString(fmt.Sprintf("  %-8s %-20s %-20s %-3d %-8s %v\n",
+			r.ConvID[:8], truncDiff(r.Repo, 20), r.Role, r.Phase, r.Status, age))
+	}
+	return sb.String()
+}
+
+// TrackChildConv — backwards compat, calls RegisterConv with generic role
+func TrackChildConv(parentPid int64, convID string) {
+	RegisterConv(parentPid, convID, "", "child", 0)
+}
+
+// StopOrphanConvs — now just logs, does NOT kill conversations
 func StopOrphanConvs(parentPid int64) {
-	if stopConvFn == nil {
-		return
+	running := 0
+	convRegistryMu.Lock()
+	for _, r := range convRegistry {
+		if r.ParentPid == parentPid && r.Status == "running" {
+			running++
+		}
 	}
-	childConvsMu.Lock()
-	convs := childConvs[parentPid]
-	delete(childConvs, parentPid)
-	childConvsMu.Unlock()
-	for _, c := range convs {
-		go stopConvFn(c)
-	}
-	if len(convs) > 0 {
-		log.Printf("orphan_cleanup: pid %d stopped %d child conversations", parentPid, len(convs))
+	convRegistryMu.Unlock()
+	if running > 0 {
+		log.Printf("conv_registry: pid %d has %d conversations still alive (preserved for reuse)", parentPid, running)
 	}
 }
 

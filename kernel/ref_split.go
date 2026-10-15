@@ -117,6 +117,11 @@ func ref_split_fork(parent_pid int64, owner, repo, sha string, files []string, t
 		return 0
 	}
 
+	if m := getMeta(pid); m != nil && m.ConvID != "" {
+		RegisterConv(parent_pid, m.ConvID, owner+"/"+repo,
+			fmt.Sprintf("theorize_chunk_%d", chunk_idx+1), 0)
+	}
+
 	split_alloc(parent_pid, depth, owner, repo, sha, files)
 
 	log.Printf("ref_split_fork: pid=%d chunk=%d/%d depth=%d files=%d",

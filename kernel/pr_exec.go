@@ -396,6 +396,9 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if m := getMeta(child1); m != nil && m.ConvID != "" {
+		RegisterConv(pid, m.ConvID, repo, "dev_draft", 1)
+	}
 	Wait(child1)
 	step.ChildPid = child1
 
@@ -542,6 +545,9 @@ func dev_phase2_selective_source(pid int64, step *Step, repo string,
 	if err != nil {
 		return phase1Output
 	}
+	if m := getMeta(child2); m != nil && m.ConvID != "" {
+		RegisterConv(pid, m.ConvID, repo, "dev_fix", 2)
+	}
 	Wait(child2)
 	step.ChildPid = child2
 
@@ -596,6 +602,9 @@ func dev_phase3_verify(pid int64, step *Step, repo, gpuAll, gpuUsable, prevOutpu
 	child3, err := Fork(p3.String(), ".")
 	if err != nil {
 		return prevOutput
+	}
+	if m := getMeta(child3); m != nil && m.ConvID != "" {
+		RegisterConv(pid, m.ConvID, repo, "dev_verify", 3)
 	}
 	Wait(child3)
 	step.ChildPid = child3

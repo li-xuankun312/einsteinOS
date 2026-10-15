@@ -443,12 +443,16 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 				}
 
 				var allResults strings.Builder
-				allResults.WriteString("[PR PIPELINE COMPLETE]\n\n")
+				allResults.WriteString("[PR PIPELINE ROUND COMPLETE]\n\n")
 				allResults.WriteString(setupResult)
 				allResults.WriteString("\n\n")
 				for i, r := range stepResults {
 					allResults.WriteString(fmt.Sprintf("[STEP %d]\n%s\n\n", i+1, r))
 				}
+				allResults.WriteString("\n[LIVE CONVERSATIONS]\n")
+				allResults.WriteString(kernel.ConvRegistryStatus())
+				allResults.WriteString("\nthese conversations are still alive and can be resumed.\n")
+				allResults.WriteString("awaiting user feedback to start next round.\n")
 
 				webReq.Prompt = fmt.Sprintf(
 					"[SYSTEM] after %d tool calls the PR pipeline ran automatically. "+
