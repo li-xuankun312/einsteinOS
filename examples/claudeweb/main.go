@@ -567,10 +567,6 @@ func newConversation(name string) (*claudeweb.Model, *runner.Runner, string) {
 		DB:      claudeweb.NewShadowDB(),
 	}
 	shadow.RegisterDriver(&kernel.PRDriver{})
-	shadow.RegisterDriver(&kernel.AxleDriver{
-		Cookie: os.Getenv("AXLE_COOKIE"),
-		CSRF:   os.Getenv("AXLE_CSRF"),
-	})
 	shadow.RegisterDriver(&vikingdb.SyncDriver{
 		Engine:    dbEngine,
 		ProjectDB: &projectDB,
