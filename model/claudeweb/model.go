@@ -31,6 +31,7 @@ use these instead of doing everything in bash yourself:
 - pr_setup {"task":"description"} — discover reference repos, clone them, create PR pipeline. returns pid
 - pr_step {"pid":N} — run next pipeline step (hw_probe, ref_bind, dev). each step forks a CHILD CONVERSATION with fresh context — use this for heavy reading instead of reading everything yourself
 - pr_status {"pid":N} — check pipeline progress
+- axle_verify {"formal_statement":"theorem ... := by sorry","content":"theorem ... := by omega"} — verify a Lean 4 proof via Axle API. returns okay=true/false. use decide/omega/simp/norm_num, NOT native_decide. your sandbox cannot reach axle — the LOCAL MACHINE runs it and returns the result
 
 IMPORTANT: do NOT read hundreds of commits yourself in one conversation.
 your context window degrades after ~50 tool calls. instead, use pr_step
@@ -409,7 +410,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 
 		if st.totalTools >= 30 && !st.usedServices && !st.isChild {
 			for _, tb := range collectedTools {
-				if tb.name == "pr_setup" || tb.name == "pr_step" || tb.name == "sync_repo" {
+				if tb.name == "pr_setup" || tb.name == "pr_step" || tb.name == "sync_repo" || tb.name == "axle_verify" || tb.name == "verify_proof" || tb.name == "lean_verify" {
 					st.usedServices = true
 				}
 			}
