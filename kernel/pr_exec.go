@@ -25,7 +25,6 @@ const (
 	STEP_DEV_FROM_THEOREMS
 	STEP_DEV_FIX // kernel-driven fix: structured args, not "fix the issues above"
 	STEP_REF_DIFF
-	STEP_DEV_AUTONOMOUS
 )
 
 type Step struct {
@@ -212,8 +211,6 @@ func PRRunNext(pid int64) (string, error) {
 			result = fmt.Sprintf("exit %d: %s", code, GetResult(childPid))
 		}
 
-	case STEP_DEV_AUTONOMOUS:
-		result, err = dev_autonomous(pid, step)
 	}
 
 	step.Finished = time.Now()
@@ -439,136 +436,7 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 	return stdout1, nil
 }
 
-func dev_autonomous(pid int64, step *Step) (string, error) {
-	pr := GetPR(pid)
-	if pr == nil {
-		return "", fmt.Errorf("dev_autonomous: no PR for pid %d", pid)
-	}
 
-	task := strip_credentials(pr.Title)
-	hw_info := pr.HWInfo
-	gpuAll := pr.GPUAll
-	if gpuAll == "" {
-		gpuAll = "0,1,2,3"
-	}
-	gpuUsable := pr.GPUUsable
-	if gpuUsable == "" {
-		gpuUsable = gpuAll
-	}
-
-	var prompt strings.Builder
-
-	// Hardware
-	if hw_info != "" {
-		prompt.WriteString("[HARDWARE]\n")
-		prompt.WriteString(hw_info)
-		prompt.WriteString("\n\n")
-	}
-
-	// Task
-	prompt.WriteString("[TASK]\n")
-	prompt.WriteString(task)
-	prompt.WriteString("\n\n")
-
-	// Reference repos — tell child where they are, not what's in them
-	prompt.WriteString("[REFERENCE REPOS]\n")
-	prompt.WriteString("these bare git repos are on the local machine. read them with bash_tool:\n")
-	for _, ref := range pr.RefRepos {
-		dir := fmt.Sprintf("/tmp/ref_%s_%s.git", ref.Owner, ref.Name)
-		commits, _ := RefListCommits(ref.Owner, ref.Name)
-		sha := ""
-		if len(commits) > 0 {
-			sha = short_sha(commits[0].SHA)
-		}
-		prompt.WriteString(fmt.Sprintf("  %s/%s → git --git-dir=%s log --oneline -5\n", ref.Owner, ref.Name, dir))
-		if sha != "" {
-			prompt.WriteString(fmt.Sprintf("    latest commit: %s\n", sha))
-			prompt.WriteString(fmt.Sprintf("    list files: git --git-dir=%s ls-tree -r --name-only %s\n", dir, sha))
-			prompt.WriteString(fmt.Sprintf("    read file:  git --git-dir=%s show %s:<path>\n", dir, sha))
-		}
-	}
-	prompt.WriteString("\n")
-
-	// Dev repo
-	devRepos := GetDevRepos()
-	if len(devRepos) > 0 {
-		prompt.WriteString("[DEV REPO]\n")
-		prompt.WriteString("the dev repo is on the local machine. read and write with bash_tool:\n")
-		for _, dr := range devRepos {
-			parts := strings.Split(dr, "/")
-			name := parts[len(parts)-1]
-			prompt.WriteString(fmt.Sprintf("  %s → ls /home/claude/%s/\n", dr, name))
-		}
-		prompt.WriteString("write your code INTO the dev repo, not /home/claude/.\n\n")
-	}
-
-	// GPU config
-	prompt.WriteString(fmt.Sprintf("[GPU]\nall: %s\nusable: %s\nuse CUDA_VISIBLE_DEVICES=%s\n\n", gpuAll, gpuUsable, gpuUsable))
-
-	// Verification tools
-	prompt.WriteString("[VERIFICATION]\n")
-	prompt.WriteString("- go build ./... — compile check (exit 0 = pass)\n")
-	prompt.WriteString("- Axle API for Lean 4 proof verification (see system prompt for curl command)\n")
-	prompt.WriteString("- pip install z3-solver && python3 — SMT spec-vs-impl checks\n")
-	prompt.WriteString("- any test/benchmark you write and run via bash_tool\n\n")
-
-	// Goal: compilable code, not documents
-	prompt.WriteString(`[GOAL]
-your job is to write CODE in the dev repo that compiles and runs.
-the deliverable is files in the dev repo, not documents or analysis.
-
-DO NOT write papers, treatises, reports, or HTML documents.
-DO NOT spend all your time reading reference repos without writing code.
-DO NOT use create_file to write .md or .html analysis files.
-
-read reference code ONLY to understand what you need to implement.
-then write .go / .c / .py files in the dev repo. compile. test. fix. repeat.
-
-every bash_tool call should move toward: go build ./... exit 0.
-
-you decide what to read and in what order — but the output is CODE.
-theory/specs are useful ONLY as intermediate steps toward working code.
-if you write a formal spec, immediately implement it.
-
-when done, output a status block:
-compile=pass|fail
-files_written=<paths in dev repo>
-tests=pass|fail|skipped
-`)
-
-	// Prior feedback
-	feedback := pr_feedback(pid)
-	if feedback != "" {
-		prompt.WriteString(fmt.Sprintf("\n[PRIOR FEEDBACK]\n%s\n", feedback))
-	}
-
-	log.Printf("dev_autonomous: pid=%d task=%q refs=%d devRepos=%d gpu=%s",
-		pid, truncate(task, 60), len(pr.RefRepos), len(devRepos), gpuUsable)
-
-	child, err := Fork(prompt.String(), ".")
-	if err != nil {
-		return "", err
-	}
-	step.ChildPid = child
-	Wait(child)
-
-	result := GetResult(child)
-
-	// DownloadConv fallback
-	if len(result) < 500 {
-		if m := getMeta(child); m != nil && m.ConvID != "" {
-			downloaded, dlErr := DownloadConv(m.ConvID)
-			if dlErr == nil && len(downloaded) > len(result) {
-				log.Printf("dev_autonomous: GetResult=%d, downloaded=%d, using download",
-					len(result), len(downloaded))
-				result = downloaded
-			}
-		}
-	}
-
-	log.Printf("dev_autonomous: child=%d done, result=%d bytes", child, len(result))
-	return result, nil
-}
 
 // dev_fix: kernel-driven fix step. Step fields carry structured args:
 //   Command = failure type (compile_fail | gpu_fail | smoke_fail | needs_source)
@@ -1104,8 +972,6 @@ func step_name(k StepKind) string {
 		return "hw_probe"
 	case STEP_REF_DIFF:
 		return "ref_diff"
-	case STEP_DEV_AUTONOMOUS:
-		return "dev_auto"
 	default:
 		return "?"
 	}
