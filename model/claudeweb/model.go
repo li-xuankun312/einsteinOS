@@ -670,6 +670,7 @@ func (m *Model) RunConversation(prompt string) (string, string) {
 
 	parentPid := int64(kernel.SysGetpid())
 	kernel.TrackChildConv(parentPid, convID)
+	kernel.SetForkConvID(convID)
 
 	webReq.Prompt = fullPrompt
 

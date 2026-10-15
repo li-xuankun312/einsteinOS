@@ -73,6 +73,19 @@ func Init() {
 
 var convExecFn func(prompt string) (string, string)
 
+// forkConvID: goroutine writes convID here before convExecFn returns.
+// Fork goroutine reads it after convExecFn returns to set TaskMeta.ConvID.
+// Protected by forkConvMu. Keyed by goroutine — only one writer at a time
+// per convExecFn call since RunConversation is synchronous within the goroutine.
+var forkConvID string
+var forkConvMu sync.Mutex
+
+func SetForkConvID(convID string) {
+	forkConvMu.Lock()
+	forkConvID = convID
+	forkConvMu.Unlock()
+}
+
 func SetConvExec(fn func(string) (string, string)) {
 	convExecFn = fn
 }
@@ -120,21 +133,17 @@ func Fork(prompt string, pwd string) (int64, error) {
 		go func() {
 			stdout, stderr := convExecFn(prompt)
 
+			// Grab the convID that RunConversation set via SetForkConvID
+			forkConvMu.Lock()
+			childConvID := forkConvID
+			forkConvID = "" // consume it
+			forkConvMu.Unlock()
+
 			metaMu.Lock()
 			meta.Result = stdout
 			meta.StdErr = stderr
-			// ConvID was set by RunConversation via TrackChildConv;
-			// find it in convRegistry and copy to TaskMeta so callers
-			// can read it after Wait returns.
-			if meta.ConvID == "" {
-				convRegistryMu.Lock()
-				for i := len(convRegistry) - 1; i >= 0; i-- {
-					if convRegistry[i].ParentPid == int64(pid) && convRegistry[i].ConvID != "" {
-						meta.ConvID = convRegistry[i].ConvID
-						break
-					}
-				}
-				convRegistryMu.Unlock()
+			if childConvID != "" {
+				meta.ConvID = childConvID
 			}
 			metaMu.Unlock()
 
