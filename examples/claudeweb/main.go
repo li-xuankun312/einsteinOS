@@ -23,12 +23,14 @@ import (
 )
 
 type appConfig struct {
-	baseURL   string
-	orgID     string
-	cookie    string
-	modelName string
-	effort    string
-	workDir   string
+	baseURL    string
+	orgID      string
+	cookie     string
+	modelName  string
+	effort     string
+	workDir    string
+	axleCookie string
+	axleCSRF   string
 }
 
 var cfg *appConfig
@@ -37,13 +39,17 @@ var projectDB *vikingdb.ProjectDB
 
 func main() {
 	cfg = &appConfig{
-		baseURL:   envOr("CLAUDE_WEB_BASE_URL", "https://c.aimonkey.plus"),
-		orgID:     envRequired("CLAUDE_WEB_ORG_ID"),
-		cookie:    envRequired("CLAUDE_WEB_COOKIE"),
-		modelName: envOr("CLAUDE_WEB_MODEL", "claude-opus-4-6"),
-		effort:    envOr("CLAUDE_WEB_EFFORT", "medium"),
-		workDir:   envOr("CLAUDE_WEB_WORKDIR", mustGetwd()),
+		baseURL:    envOr("CLAUDE_WEB_BASE_URL", "https://c.aimonkey.plus"),
+		orgID:      envRequired("CLAUDE_WEB_ORG_ID"),
+		cookie:     envRequired("CLAUDE_WEB_COOKIE"),
+		modelName:  envOr("CLAUDE_WEB_MODEL", "claude-opus-4-6"),
+		effort:     envOr("CLAUDE_WEB_EFFORT", "medium"),
+		workDir:    envOr("CLAUDE_WEB_WORKDIR", mustGetwd()),
+		axleCookie: envOr("AXLE_COOKIE", "provertools_session=eyJicm93c2VyX2FwaV9jc3JmIjogIllGYm5BZ2FQS3ZQdTgwR21KUFVaTkhWVzVHY0hfWF9ZYnhFZnhKcElDdU0ifQ==.atBFEQ.XT1vAvHEhv3QOhNsvZlJwDItLcQ"),
+		axleCSRF:   envOr("AXLE_CSRF", "YFbnAgaPKvPu80GmJPUZNHVW5GcH_X_YbxEfxJpICuM"),
 	}
+
+	claudeweb.BuildSystemPrompt(cfg.axleCookie, cfg.axleCSRF)
 
 	fmt.Println("einsteinOS v0.11-go booting...")
 

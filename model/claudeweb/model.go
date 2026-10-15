@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"iter"
 	"log"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -19,10 +18,7 @@ import (
 
 var localExecPrefix string
 
-func init() {
-	axleCookie := os.Getenv("AXLE_COOKIE")
-	axleCSRF := os.Getenv("AXLE_CSRF")
-
+func BuildSystemPrompt(axleCookie, axleCSRF string) {
 	var axleBlock string
 	if axleCookie != "" {
 		axleBlock = fmt.Sprintf(`
