@@ -207,6 +207,57 @@ func (c *Client) CreateConversation(name, modelName string) (string, error) {
 	return convID, nil
 }
 
+func (c *Client) DownloadConversation(convID string) (string, error) {
+	url := fmt.Sprintf("%s/api/organizations/%s/chat_conversations/%s",
+		c.baseURL, c.orgID, convID)
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Cookie", c.cookie)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("download %s: status %d", convID[:8], resp.StatusCode)
+	}
+
+	var conv struct {
+		ChatMessages []struct {
+			Sender  string `json:"sender"`
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"chat_messages"`
+	}
+	if err := json.Unmarshal(body, &conv); err != nil {
+		return string(body), nil
+	}
+
+	var md strings.Builder
+	for _, msg := range conv.ChatMessages {
+		if msg.Sender != "assistant" {
+			continue
+		}
+		for _, c := range msg.Content {
+			if c.Type == "text" && len(c.Text) > 0 {
+				md.WriteString(c.Text)
+				md.WriteString("\n\n")
+			}
+		}
+	}
+	log.Printf("claudeweb: downloaded %s: %d chars from %d messages",
+		convID[:8], md.Len(), len(conv.ChatMessages))
+	return md.String(), nil
+}
+
 func (c *Client) StopResponse(convID string) error {
 	url := fmt.Sprintf("%s/api/organizations/%s/chat_conversations/%s/stop_response",
 		c.baseURL, c.orgID, convID)

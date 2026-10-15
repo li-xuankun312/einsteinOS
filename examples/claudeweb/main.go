@@ -557,6 +557,10 @@ func newConversation(name string) (*claudeweb.Model, *runner.Runner, string) {
 		client.StopResponse(convID)
 	})
 
+	kernel.SetDownloadConvFn(func(convID string) (string, error) {
+		return client.DownloadConversation(convID)
+	})
+
 	shadow := &claudeweb.ShadowExecutor{
 		WorkDir: cfg.workDir,
 		Enabled: true,

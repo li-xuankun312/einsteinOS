@@ -470,6 +470,19 @@ func SetStopConvFn(fn func(string)) {
 	stopConvFn = fn
 }
 
+var downloadConvFn func(convID string) (string, error)
+
+func SetDownloadConvFn(fn func(string) (string, error)) {
+	downloadConvFn = fn
+}
+
+func DownloadConv(convID string) (string, error) {
+	if downloadConvFn == nil {
+		return "", fmt.Errorf("no download function set")
+	}
+	return downloadConvFn(convID)
+}
+
 func RegisterConv(parentPid int64, convID, repo, role string, phase int) {
 	convRegistryMu.Lock()
 	convRegistry = append(convRegistry, ConvRecord{

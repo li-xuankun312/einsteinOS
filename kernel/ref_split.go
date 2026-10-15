@@ -56,9 +56,26 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 		}
 		child_pids = append(child_pids, child_pid)
 		Wait(child_pid)
-		results = append(results, GetResult(child_pid))
-		log.Printf("ref_split: %s/%s@%s chunk %d/%d done",
-			owner, repo, short_sha(sha), i+1, len(chunks))
+
+		result := GetResult(child_pid)
+		if len(result) < 500 {
+			role := fmt.Sprintf("theorize_chunk_%d", i+1)
+			rec := FindConv(owner+"/"+repo, role, 0)
+			if rec != nil {
+				downloaded, err := DownloadConv(rec.ConvID)
+				if err == nil && len(downloaded) > len(result) {
+					log.Printf("ref_split: chunk %d/%d GetResult=%d, downloaded=%d, using download",
+						i+1, len(chunks), len(result), len(downloaded))
+					result = downloaded
+				} else if err != nil {
+					log.Printf("ref_split: chunk %d/%d download failed: %v", i+1, len(chunks), err)
+				}
+			}
+		}
+
+		results = append(results, result)
+		log.Printf("ref_split: %s/%s@%s chunk %d/%d done (%d bytes)",
+			owner, repo, short_sha(sha), i+1, len(chunks), len(result))
 	}
 
 	if node >= 0 {
