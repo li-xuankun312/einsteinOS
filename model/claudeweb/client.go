@@ -301,12 +301,16 @@ func isRateLimit(body string) bool {
 			contains(body, "rate limit") ||
 			contains(body, "usage limit") ||
 			contains(body, "为防止claude封号") ||
-			contains(body, "提问次数已达上限"))
+			contains(body, "提问次数已达上限") ||
+			contains(body, "频率过快") ||
+			contains(body, "count has reached the limit"))
 }
 
 func isProxyThrottle(body string) bool {
 	return contains(body, "为防止claude封号") ||
-		contains(body, "提问次数已达上限")
+		contains(body, "提问次数已达上限") ||
+		contains(body, "频率过快") ||
+		contains(body, "count has reached the limit")
 }
 
 func contains(s, sub string) bool {
