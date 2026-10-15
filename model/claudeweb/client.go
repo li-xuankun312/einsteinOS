@@ -240,10 +240,7 @@ func (c *Client) DownloadConversation(convID string) (string, error) {
 	var conv struct {
 		ChatMessages []struct {
 			Sender  string `json:"sender"`
-			Content []struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
-			} `json:"content"`
+			Content []json.RawMessage `json:"content"`
 		} `json:"chat_messages"`
 	}
 	if err := json.Unmarshal(body, &conv); err != nil {
@@ -252,13 +249,57 @@ func (c *Client) DownloadConversation(convID string) (string, error) {
 
 	var md strings.Builder
 	for _, msg := range conv.ChatMessages {
-		if msg.Sender != "assistant" {
-			continue
-		}
-		for _, c := range msg.Content {
-			if c.Type == "text" && len(c.Text) > 0 {
-				md.WriteString(c.Text)
-				md.WriteString("\n\n")
+		for _, raw := range msg.Content {
+			var block struct {
+				Type    string          `json:"type"`
+				Text    string          `json:"text"`
+				Name    string          `json:"name"`
+				Input   json.RawMessage `json:"input"`
+				Content json.RawMessage `json:"content"`
+			}
+			if json.Unmarshal(raw, &block) != nil {
+				continue
+			}
+
+			switch block.Type {
+			case "text":
+				if msg.Sender == "assistant" && len(block.Text) > 0 {
+					md.WriteString(block.Text)
+					md.WriteString("\n\n")
+				}
+			case "tool_use":
+				// child called a tool — extract the command
+				if block.Name == "bash_tool" || block.Name == "bash" {
+					var inp struct {
+						Command string `json:"command"`
+					}
+					if json.Unmarshal(block.Input, &inp) == nil && inp.Command != "" {
+						md.WriteString("$ " + inp.Command + "\n")
+					}
+				}
+			case "tool_result":
+				// shell execution output — this is where compile results live
+				var content string
+				if json.Unmarshal(block.Content, &content) == nil {
+					if len(content) > 0 {
+						md.WriteString(content)
+						md.WriteString("\n\n")
+					}
+				} else {
+					// content might be array of blocks
+					var parts []struct {
+						Type string `json:"type"`
+						Text string `json:"text"`
+					}
+					if json.Unmarshal(block.Content, &parts) == nil {
+						for _, p := range parts {
+							if p.Type == "text" && len(p.Text) > 0 {
+								md.WriteString(p.Text)
+								md.WriteString("\n\n")
+							}
+						}
+					}
+				}
 			}
 		}
 	}
