@@ -18,13 +18,29 @@ type theorem_entry struct {
 	read_by int64
 }
 
-const theorize_instruction = `for each function / struct / method in the code above, produce TWO layers:
+const theorize_instruction = `for each function / struct / method in the code above, produce THREE layers:
 
-[LAYER 1 — MATH]
+[LAYER 1a — MATH (LaTeX)]
 formal specification: types, preconditions, postconditions, invariants.
 use LaTeX. example:
   \text{SetPosition}: \mathcal{S} \times \mathbb{Z}_{\geq 0} \to \{\top, \bot\},
   \quad s.\text{pos} \leftarrow p \iff s.\text{handle} \neq \text{null}
+
+[LAYER 1b — VERIFY (Lean 4)]
+translate the LAYER 1a spec into a Lean 4 theorem with proof.
+the formal_statement has 'sorry', the content has the real proof.
+use omega, decide, simp, norm_num — NOT native_decide.
+example:
+  -- formal_statement
+  theorem set_position_spec (handle : Option Ptr) (pos : Nat) :
+    (handle.isSome → set_position handle pos = true) ∧
+    (handle.isNone → set_position handle pos = false) := by sorry
+  -- proof
+  theorem set_position_spec (handle : Option Ptr) (pos : Nat) :
+    (handle.isSome → set_position handle pos = true) ∧
+    (handle.isNone → set_position handle pos = false) := by
+    constructor <;> intro h <;> simp [set_position, h]
+mark each theorem with: -- axle_verify: formal_statement / content
 
 [LAYER 2 — FORM TEMPLATE]
 rewrite every identifier with its structural role:
@@ -48,7 +64,9 @@ after:
       return fseek(this->objtype, (long)position, SEEK_SET) == 0;
   }
 
-both layers are required for every semantic unit. do not skip either layer.
+all three layers are required for every semantic unit. do not skip any layer.
+LAYER 1b is verified by machine (Lean 4 kernel) — if you are unsure of the proof,
+write the formal_statement with sorry and note "proof_needed" so a later pass can fill it.
 the form template is not regex — you must understand each identifier's ROLE
 (handle vs argument vs return value vs namespace) to assign the right tag.
 `
