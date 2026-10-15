@@ -23,6 +23,7 @@ const (
 	STEP_HW_PROBE
 	STEP_REF_BIND
 	STEP_DEV_FROM_THEOREMS
+	STEP_DEV_FIX // kernel-driven retry: structured args, not text instructions
 	STEP_REF_DIFF
 )
 
@@ -194,6 +195,9 @@ func PRRunNext(pid int64) (string, error) {
 
 	case STEP_DEV_FROM_THEOREMS:
 		result, err = dev_from_theorems(pid, step)
+
+	case STEP_DEV_FIX:
+		result, err = dev_fix(pid, step)
 
 	case STEP_REF_DIFF:
 		result, err = ref_diff(pid, step)
@@ -400,16 +404,7 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 	prompt.WriteString(task)
 
 	// GPU args — kernel fills placeholders from PRProcess state
-	gpuAll := "0,1,2,3"
-	gpuUsable := "0,1,2,3"
-	if pr != nil {
-		if pr.GPUAll != "" {
-			gpuAll = pr.GPUAll
-		}
-		if pr.GPUUsable != "" {
-			gpuUsable = pr.GPUUsable
-		}
-	}
+	gpuAll, gpuUsable := pr_gpu_args(pid)
 
 	prompt.WriteString(fmt.Sprintf(dev_verify_instruction, gpuAll, gpuUsable, gpuUsable, gpuAll))
 
@@ -421,74 +416,289 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 	log.Printf("dev_from_theorems: %s %d files %d lines fed, gpu_all=%s gpu_usable=%s",
 		repo, len(files), read, gpuAll, gpuUsable)
 
-	var lastResult string
-	for attempt := 0; attempt < 3; attempt++ {
-		p := prompt.String()
-		if attempt > 0 {
-			// re-inject updated GPU usable for retry
-			prMu.Lock()
-			if pr := prTable[pid]; pr != nil && pr.GPUUsable != "" {
-				gpuUsable = pr.GPUUsable
-			}
-			prMu.Unlock()
-			p += fmt.Sprintf("\n\n[RETRY %d/3 — previous attempt failed]\n%s\n"+
-				"[UPDATED GPU CONFIG] use CUDA_VISIBLE_DEVICES=%s\n"+
-				"fix the issues above and re-verify.", attempt, lastResult, gpuUsable)
-		}
+	// single attempt — no retry loop. kernel decides next step.
+	child, err := Fork(prompt.String(), ".")
+	if err != nil {
+		return "", err
+	}
+	Wait(child)
+	step.ChildPid = child
 
-		child, err := Fork(p, ".")
-		if err != nil {
-			return lastResult, err
-		}
-		Wait(child)
-		step.ChildPid = child
+	stdout := GetResult(child)
+	status := dev_parse_status(stdout)
 
-		stdout := GetResult(child)
-		blocks := parse_kv_blocks(stdout)
-
-		var status map[string]string
-		for _, b := range blocks {
-			if _, ok := b["compile"]; ok {
-				status = b
-			}
-		}
-
-		if status != nil {
-			log.Printf("dev_from_theorems: attempt %d — compile=%s gpu_test=%s smoke=%s gpu_pairs_ok=%s gpu_pairs_fail=%s",
-				attempt+1, status["compile"], status["gpu_test"], status["smoke"],
-				status["gpu_pairs_ok"], status["gpu_pairs_fail"])
-
-			// kernel decision: compute usable GPUs from P2P test results
-			if pairsOK, ok := status["gpu_pairs_ok"]; ok && pairsOK != "" {
-				usable := computeUsableGPUs(gpuAll, pairsOK, status["gpu_pairs_fail"])
-				prMu.Lock()
-				if pr := prTable[pid]; pr != nil {
-					pr.GPUPairsOK = pairsOK
-					pr.GPUUsable = usable
-				}
-				prMu.Unlock()
-				gpuUsable = usable
-				log.Printf("dev_from_theorems: kernel computed gpu_usable=%s from pairs_ok=%s",
-					usable, pairsOK)
-			}
-
-			for k, v := range status {
-				PRFeedbackAdd(pid, fmt.Sprintf("- dev[%s]: %s=%s", repo, k, v))
-			}
-
-			if status["compile"] == "pass" && status["smoke"] == "pass" {
-				log.Printf("dev_from_theorems: %s verified on attempt %d", repo, attempt+1)
-				return stdout, nil
-			}
-		} else {
-			log.Printf("dev_from_theorems: attempt %d — no status block in output", attempt+1)
-		}
-
-		lastResult = stdout
+	if status == nil {
+		log.Printf("dev_from_theorems: no status block, treating as compile_fail")
+		status = map[string]string{"compile": "fail", "compile_error": "no status block in child output"}
 	}
 
-	log.Printf("dev_from_theorems: %s failed after 3 attempts, gpu_usable=%s", repo, gpuUsable)
-	return lastResult, nil
+	log.Printf("dev_from_theorems: compile=%s gpu_test=%s smoke=%s",
+		status["compile"], status["gpu_test"], status["smoke"])
+
+	// kernel absorbs child's observations into PRProcess
+	dev_absorb_status(pid, repo, status, gpuAll)
+
+	// kernel decides: done, or push a fix step?
+	if status["compile"] == "pass" && status["smoke"] == "pass" {
+		log.Printf("dev_from_theorems: %s verified", repo)
+		return stdout, nil
+	}
+
+	// not done — kernel pushes a STEP_DEV_FIX with structured failure args.
+	// no text instructions. the fix step gets: what failed, the error, the files written.
+	dev_push_fix(pid, step.Owner, step.Repo, status, 1)
+
+	return stdout, nil
+}
+
+// dev_fix: kernel-driven fix step. receives structured args in Step fields,
+// not a text prompt saying "fix the issues above".
+func dev_fix(pid int64, step *Step) (string, error) {
+	repo := step.Owner + "/" + step.Repo
+	attempt := dev_fix_attempt(step)
+
+	if attempt > 3 {
+		log.Printf("dev_fix: %s exceeded max attempts", repo)
+		return step.Result, nil
+	}
+
+	pr := GetPR(pid)
+	task := ""
+	hw_info := ""
+	if pr != nil {
+		task = strip_credentials(pr.Title)
+		hw_info = pr.HWInfo
+	}
+
+	theory := theorem_get(repo, "")
+	gpuAll, gpuUsable := pr_gpu_args(pid)
+
+	// structured prompt: only args the kernel computed, no "fix the issues"
+	var prompt strings.Builder
+
+	if hw_info != "" {
+		prompt.WriteString("[HARDWARE]\n")
+		prompt.WriteString(hw_info)
+		prompt.WriteString("\n\n")
+	}
+
+	if theory != "" {
+		prompt.WriteString(fmt.Sprintf("[THEORY from %s]\n%s\n\n", repo, theory))
+	}
+
+	prompt.WriteString(fmt.Sprintf("[TASK]\n%s\n\n", task))
+
+	// kernel-computed failure diagnosis — structured, not prose
+	prompt.WriteString("[PRIOR RESULT]\n")
+	prompt.WriteString(fmt.Sprintf("compile=%s\n", step.Command)) // Command holds failure_type
+	if step.Path != "" {
+		prompt.WriteString(fmt.Sprintf("error=%s\n", step.Path)) // Path holds error message
+	}
+	if step.Result != "" {
+		prompt.WriteString(fmt.Sprintf("files_written=%s\n", step.Result)) // Result holds files list
+	}
+	prompt.WriteString("\n")
+
+	// if compile failed, kernel provides the specific source files
+	// the child asked for (via needs_source) or that the error references
+	if step.Command == "compile_fail" && step.SHA != "" {
+		// SHA holds comma-separated source file hints from compile_error parsing
+		prompt.WriteString("[REFERENCE FILES — kernel-selected from compile error]\n")
+		for _, f := range strings.Split(step.SHA, ",") {
+			f = strings.TrimSpace(f)
+			if f == "" {
+				continue
+			}
+			commit, _, err := RefFirstCommit(step.Owner, step.Repo)
+			if err != nil {
+				continue
+			}
+			content, err := RefFileAt(step.Owner, step.Repo, commit.SHA, f)
+			if err != nil {
+				continue
+			}
+			lines := strings.Count(content, "\n") + 1
+			prompt.WriteString(fmt.Sprintf("=== %s (%d lines) ===\n", f, lines))
+			prompt.WriteString(content)
+			prompt.WriteString("\n\n")
+		}
+	}
+
+	prompt.WriteString(fmt.Sprintf(dev_verify_instruction, gpuAll, gpuUsable, gpuUsable, gpuAll))
+
+	feedback := pr_feedback(pid)
+	if feedback != "" {
+		prompt.WriteString(fmt.Sprintf("\n\n[PRIOR FEEDBACK]\n%s", feedback))
+	}
+
+	log.Printf("dev_fix: %s attempt=%d failure=%s gpu_usable=%s",
+		repo, attempt, step.Command, gpuUsable)
+
+	child, err := Fork(prompt.String(), ".")
+	if err != nil {
+		return "", err
+	}
+	Wait(child)
+	step.ChildPid = child
+
+	stdout := GetResult(child)
+	status := dev_parse_status(stdout)
+
+	if status == nil {
+		log.Printf("dev_fix: %s attempt=%d no status block", repo, attempt)
+		status = map[string]string{"compile": "fail", "compile_error": "no status block"}
+	}
+
+	dev_absorb_status(pid, repo, status, gpuAll)
+
+	if status["compile"] == "pass" && status["smoke"] == "pass" {
+		log.Printf("dev_fix: %s verified on attempt %d", repo, attempt)
+		return stdout, nil
+	}
+
+	// still failing — kernel pushes another fix step if under limit
+	dev_push_fix(pid, step.Owner, step.Repo, status, attempt+1)
+
+	return stdout, nil
+}
+
+// dev_parse_status: extract the last status block from child output.
+func dev_parse_status(stdout string) map[string]string {
+	blocks := parse_kv_blocks(stdout)
+	for i := len(blocks) - 1; i >= 0; i-- {
+		if _, ok := blocks[i]["compile"]; ok {
+			return blocks[i]
+		}
+	}
+	return nil
+}
+
+// dev_absorb_status: kernel reads child's observations, updates PRProcess.
+// child is eyes (reports what it saw), kernel is mouth (decides what happens).
+func dev_absorb_status(pid int64, repo string, status map[string]string, gpuAll string) {
+	// compute usable GPUs from P2P pair reports
+	if pairsOK, ok := status["gpu_pairs_ok"]; ok && pairsOK != "" {
+		usable := computeUsableGPUs(gpuAll, pairsOK, status["gpu_pairs_fail"])
+		prMu.Lock()
+		if pr := prTable[pid]; pr != nil {
+			pr.GPUPairsOK = pairsOK
+			pr.GPUUsable = usable
+		}
+		prMu.Unlock()
+		log.Printf("dev_absorb: kernel computed gpu_usable=%s from pairs_ok=%s", usable, pairsOK)
+	}
+
+	// record all status fields as feedback
+	for k, v := range status {
+		PRFeedbackAdd(pid, fmt.Sprintf("- dev[%s]: %s=%s", repo, k, v))
+	}
+}
+
+// dev_push_fix: kernel decides what kind of fix step to push based on failure type.
+// no text instructions — only structured args in Step fields.
+func dev_push_fix(pid int64, owner, repo string, status map[string]string, attempt int) {
+	if attempt > 3 {
+		log.Printf("dev_push_fix: %s/%s max attempts reached", owner, repo)
+		return
+	}
+
+	failureType := "unknown"
+	errorMsg := ""
+	filesWritten := status["files_written"]
+	sourceHints := "" // files to provide from ref repo
+
+	switch {
+	case status["compile"] == "fail":
+		failureType = "compile_fail"
+		errorMsg = status["compile_error"]
+		// parse compile error for referenced files (e.g. "undefined: TransferEngine")
+		sourceHints = dev_extract_source_hints(owner, repo, errorMsg)
+
+	case status["gpu_test"] == "fail":
+		failureType = "gpu_fail"
+		errorMsg = status["gpu_test_detail"]
+
+	case status["smoke"] == "fail":
+		failureType = "smoke_fail"
+		errorMsg = status["smoke_error"]
+	}
+
+	log.Printf("dev_push_fix: %s/%s pushing fix step: type=%s attempt=%d hints=%s",
+		owner, repo, failureType, attempt, sourceHints)
+
+	pr_push_step(pid, &Step{
+		Kind:    STEP_DEV_FIX,
+		Owner:   owner,
+		Repo:    repo,
+		Command: failureType,              // what failed
+		Path:    errorMsg,                  // the error
+		SHA:     sourceHints,              // ref files to provide
+		Result:  filesWritten,             // what was written last time
+		Dir:     fmt.Sprintf("%d", attempt), // attempt number
+	})
+}
+
+// dev_fix_attempt: read attempt number from Step.Dir
+func dev_fix_attempt(step *Step) int {
+	n := 1
+	if step.Dir != "" {
+		fmt.Sscanf(step.Dir, "%d", &n)
+	}
+	return n
+}
+
+// dev_extract_source_hints: given a compile error, find which ref files
+// might help. kernel reads the error, not the child.
+func dev_extract_source_hints(owner, repo, compileError string) string {
+	if compileError == "" {
+		return ""
+	}
+
+	commit, _, err := RefFirstCommit(owner, repo)
+	if err != nil {
+		return ""
+	}
+	files, _ := RefTreeAt(owner, repo, commit.SHA)
+
+	// look for identifiers mentioned in the error that match ref file names
+	var hints []string
+	for _, f := range files {
+		base := f
+		if idx := strings.LastIndex(f, "/"); idx >= 0 {
+			base = f[idx+1:]
+		}
+		// strip extension for matching
+		name := strings.TrimSuffix(base, ".go")
+		name = strings.TrimSuffix(name, ".h")
+		name = strings.TrimSuffix(name, ".c")
+		name = strings.TrimSuffix(name, ".py")
+
+		if name != "" && len(name) > 3 && strings.Contains(strings.ToLower(compileError), strings.ToLower(name)) {
+			hints = append(hints, f)
+		}
+	}
+
+	if len(hints) > 5 {
+		hints = hints[:5]
+	}
+	return strings.Join(hints, ",")
+}
+
+// pr_gpu_args: read GPU config from PRProcess, with defaults.
+func pr_gpu_args(pid int64) (string, string) {
+	gpuAll := "0,1,2,3"
+	gpuUsable := "0,1,2,3"
+	prMu.Lock()
+	if pr := prTable[pid]; pr != nil {
+		if pr.GPUAll != "" {
+			gpuAll = pr.GPUAll
+		}
+		if pr.GPUUsable != "" {
+			gpuUsable = pr.GPUUsable
+		}
+	}
+	prMu.Unlock()
+	return gpuAll, gpuUsable
 }
 
 // computeUsableGPUs: given all GPUs and P2P test results, find the largest
@@ -663,6 +873,8 @@ func step_name(k StepKind) string {
 		return "dev_theory"
 	case STEP_DEV_FROM_THEOREMS:
 		return "dev_thms"
+	case STEP_DEV_FIX:
+		return "dev_fix"
 	case STEP_DEV_EXEC:
 		return "dev_exec"
 	case STEP_HW_PROBE:
