@@ -147,6 +147,14 @@ func (c *Client) Completion(convID string, req *CompletionRequest) (io.ReadClose
 				return nil, lastErr
 			}
 
+			if resp.StatusCode == 403 && contains(errStr, "Just a moment") {
+				// Cloudflare challenge — IP flagged, wait and retry
+				log.Printf("claudeweb: Cloudflare challenge, waiting 3 minutes before retry")
+				time.Sleep(3 * time.Minute)
+				lastErr = fmt.Errorf("cloudflare 403: challenge page")
+				continue
+			}
+
 			if resp.StatusCode >= 500 {
 				lastErr = fmt.Errorf("API %d: %s", resp.StatusCode, truncBody(errBody))
 				continue
