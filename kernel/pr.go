@@ -97,18 +97,10 @@ func PRFork(repo, branch, title string, refs []RefRepo) (int64, error) {
 		Kind: STEP_HW_PROBE,
 	})
 
-	for _, ref := range refs {
-		pr_push_step(int64(pid), &Step{
-			Kind:  STEP_REF_BIND,
-			Owner: ref.Owner,
-			Repo:  ref.Name,
-		})
-		pr_push_step(int64(pid), &Step{
-			Kind:  STEP_DEV_FROM_THEOREMS,
-			Owner: ref.Owner,
-			Repo:  ref.Name,
-		})
-	}
+	pr_push_step(int64(pid), &Step{
+		Kind:    STEP_DEV_AUTONOMOUS,
+		Command: title,
+	})
 
 	return int64(pid), nil
 }
