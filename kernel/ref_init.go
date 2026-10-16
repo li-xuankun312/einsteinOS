@@ -357,13 +357,7 @@ func fileSurveyChild(owner, name, sha string, initHeavy []string, initLight []li
 		lines := strings.Count(content, "\n") + 1
 		allFiles[f] = lines
 
-		// show first 10 lines
-		preview := content
-		lineSlice := strings.SplitN(content, "\n", 11)
-		if len(lineSlice) > 10 {
-			preview = strings.Join(lineSlice[:10], "\n") + "\n..."
-		}
-		prompt.WriteString(fmt.Sprintf("--- %s (%d lines) ---\n%s\n\n", f, lines, preview))
+		prompt.WriteString(fmt.Sprintf("--- %s (%d lines) ---\n%s\n\n", f, lines, codePreview(content, 10)))
 	}
 	for _, lf := range initLight {
 		allFiles[lf.path] = lf.lines
@@ -371,12 +365,7 @@ func fileSurveyChild(owner, name, sha string, initHeavy []string, initLight []li
 		if err != nil {
 			continue
 		}
-		lineSlice := strings.SplitN(content, "\n", 11)
-		preview := content
-		if len(lineSlice) > 10 {
-			preview = strings.Join(lineSlice[:10], "\n") + "\n..."
-		}
-		prompt.WriteString(fmt.Sprintf("--- %s (%d lines) ---\n%s\n\n", lf.path, lf.lines, preview))
+		prompt.WriteString(fmt.Sprintf("--- %s (%d lines) ---\n%s\n\n", lf.path, lf.lines, codePreview(content, 10)))
 	}
 
 	prompt.WriteString("output ONLY two lines, nothing else:\n")
@@ -670,6 +659,51 @@ func truncDiff(s string, n int) string {
 		return s
 	}
 	return s[:n]
+}
+
+// codePreview: extract first N lines of actual code, skipping license headers,
+// comment blocks, and blank lines. shows what the file actually does.
+func codePreview(content string, n int) string {
+	lines := strings.Split(content, "\n")
+	var out []string
+	inBlockComment := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+
+		// track block comments
+		if !inBlockComment && (strings.HasPrefix(trimmed, "/*") || strings.HasPrefix(trimmed, "/**")) {
+			inBlockComment = true
+		}
+		if inBlockComment {
+			if strings.Contains(trimmed, "*/") {
+				inBlockComment = false
+			}
+			continue
+		}
+
+		// skip line comments and blanks
+		if trimmed == "" || strings.HasPrefix(trimmed, "//") ||
+			strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "--") {
+			continue
+		}
+
+		out = append(out, line)
+		if len(out) >= n {
+			break
+		}
+	}
+	if len(out) == 0 {
+		// all comments/blanks — show raw first few lines
+		if len(lines) > n {
+			return strings.Join(lines[:n], "\n") + "\n..."
+		}
+		return content
+	}
+	result := strings.Join(out, "\n")
+	if len(out) >= n {
+		result += "\n..."
+	}
+	return result
 }
 
 func isDocOnlyFile(path string) bool {
