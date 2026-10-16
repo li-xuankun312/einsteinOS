@@ -50,7 +50,7 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 	var child_pids []int64
 	var results []string
 	for i, chunk := range chunks {
-		child_pid := ref_split_fork(parent_pid, owner, repo, sha, chunk, task, depth+1, i, len(chunks), chunks)
+		child_pid := ref_split_fork(parent_pid, owner, repo, sha, chunk, task, depth+1, i, len(chunks), chunks, results)
 		if child_pid <= 0 {
 			continue
 		}
@@ -109,7 +109,7 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 	return merged
 }
 
-func ref_split_fork(parent_pid int64, owner, repo, sha string, files []string, task string, depth int, chunk_idx int, chunk_total int, allChunks [][]string) int64 {
+func ref_split_fork(parent_pid int64, owner, repo, sha string, files []string, task string, depth int, chunk_idx int, chunk_total int, allChunks [][]string, priorResults []string) int64 {
 	dir := fmt.Sprintf("/tmp/ref_%s_%s.git", owner, repo)
 
 	var src strings.Builder
@@ -118,29 +118,19 @@ func ref_split_fork(parent_pid int64, owner, repo, sha string, files []string, t
 	src.WriteString(fmt.Sprintf("[CHUNK %d/%d] %d files (depth %d)\n", chunk_idx+1, chunk_total, len(files), depth))
 	src.WriteString("produce LAYER 1/2 ONLY for YOUR files below.\n\n")
 
-	// show sibling chunks so child knows what others handle
-	if len(allChunks) > 1 {
-		src.WriteString("[OTHER CHUNKS — handled by sibling conversations, do NOT theorize these]\n")
-		for j, ch := range allChunks {
-			if j == chunk_idx {
-				continue
+	// inject prior chunk results — child sees what siblings already produced
+	if len(priorResults) > 0 {
+		src.WriteString("[PRIOR CHUNKS — already completed by sibling conversations]\n")
+		for j, pr := range priorResults {
+			// truncate to keep prompt manageable — just the summary, not full theory
+			summary := pr
+			if len(summary) > 3000 {
+				summary = summary[:3000] + fmt.Sprintf("\n... (%d more bytes)\n", len(pr)-3000)
 			}
-			src.WriteString(fmt.Sprintf("  chunk %d/%d: ", j+1, chunk_total))
-			shown := 0
-			for _, f := range ch {
-				if shown >= 5 {
-					src.WriteString(fmt.Sprintf("... +%d more", len(ch)-5))
-					break
-				}
-				if shown > 0 {
-					src.WriteString(", ")
-				}
-				src.WriteString(f)
-				shown++
-			}
-			src.WriteString("\n")
+			src.WriteString(fmt.Sprintf("--- chunk %d/%d output (%d bytes) ---\n%s\n\n",
+				j+1, chunk_total, len(pr), summary))
 		}
-		src.WriteString("\n")
+		src.WriteString("the above is already done. do NOT redo it. produce theory for YOUR files only.\n\n")
 	}
 
 	for _, f := range files {
