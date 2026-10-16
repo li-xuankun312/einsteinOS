@@ -97,7 +97,20 @@ func GetConvExec() func(string) (string, string) {
 func Fork(prompt string, pwd string) (int64, error) {
 	nr := FindEmptyProcess()
 	if nr < 0 {
-		return 0, fmt.Errorf("fork: no free task slots")
+		// reap zombies and retry
+		for retry := 0; retry < 10; retry++ {
+			ReapZombies()
+			nr = FindEmptyProcess()
+			if nr >= 0 {
+				log.Printf("fork: slot freed after reap (retry %d)", retry)
+				break
+			}
+			log.Printf("fork: no free slots, waiting 30s (retry %d/10)", retry)
+			time.Sleep(30 * time.Second)
+		}
+		if nr < 0 {
+			return 0, fmt.Errorf("fork: no free task slots after 10 retries")
+		}
 	}
 
 	pid := CopyProcess(nr, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
@@ -624,6 +637,22 @@ func GetConvFiles(convID string) []string {
 	convFilesMu.Lock()
 	defer convFilesMu.Unlock()
 	return convFiles[convID]
+}
+
+// ReapZombies: force-release all zombie task slots.
+func ReapZombies() {
+	schedMu.Lock()
+	reaped := 0
+	for i := 1; i < NR_TASKS; i++ {
+		if Task[i] != nil && Task[i].State == TASK_ZOMBIE {
+			Task[i] = nil
+			reaped++
+		}
+	}
+	schedMu.Unlock()
+	if reaped > 0 {
+		log.Printf("ReapZombies: freed %d slots", reaped)
+	}
 }
 
 func SetStartupTime(t int64) {
