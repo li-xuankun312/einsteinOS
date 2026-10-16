@@ -139,9 +139,8 @@ func ref_split_fork(parent_pid int64, owner, repo, sha string, files []string, t
 	}
 
 	prompt := src_text + theorize_instruction +
-		"if you need git, the bare repo is ALREADY at " + dir + " — " +
-		"use `git --git-dir=" + dir + " show " + short_sha(sha) + ":<path>` to read files. " +
-		"do NOT clone the repo again. if " + dir + " does not exist, `git fetch` into it, never fresh clone.\n" +
+		"analyze ONLY the files above. they are your complete assignment.\n" +
+		"do NOT use git or bash_tool to read other files — the kernel has already given you everything.\n" +
 		"if any single file is too large to fully analyze, " +
 		"list its functions and produce both layers for the most important ones.\n\n" +
 		"write your LAYER 1 and LAYER 2 however you prefer — text, Artifact, or create_file all work. " +
