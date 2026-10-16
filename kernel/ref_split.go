@@ -3,6 +3,7 @@ package kernel
 import (
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"sync"
 )
@@ -118,19 +119,27 @@ func ref_split_fork(parent_pid int64, owner, repo, sha string, files []string, t
 	src.WriteString(fmt.Sprintf("[CHUNK %d/%d] %d files (depth %d)\n", chunk_idx+1, chunk_total, len(files), depth))
 	src.WriteString("produce LAYER 1/2 ONLY for YOUR files below.\n\n")
 
-	// inject prior chunk results — child sees what siblings already produced
+	// prior chunks: write to disk, give child the paths and conv links
 	if len(priorResults) > 0 {
-		src.WriteString("[PRIOR CHUNKS — already completed by sibling conversations]\n")
+		src.WriteString("[PRIOR CHUNKS — already completed]\n")
+		theoryDir := fmt.Sprintf("/tmp/ref_%s_%s_theory", owner, repo)
 		for j, pr := range priorResults {
-			// truncate to keep prompt manageable — just the summary, not full theory
-			summary := pr
-			if len(summary) > 3000 {
-				summary = summary[:3000] + fmt.Sprintf("\n... (%d more bytes)\n", len(pr)-3000)
+			if len(pr) < 50 {
+				continue
 			}
-			src.WriteString(fmt.Sprintf("--- chunk %d/%d output (%d bytes) ---\n%s\n\n",
-				j+1, chunk_total, len(pr), summary))
+			// kernel writes prior theory to disk
+			path := fmt.Sprintf("%s/chunk_%d.md", theoryDir, j+1)
+			os.MkdirAll(theoryDir, 0755)
+			os.WriteFile(path, []byte(pr), 0644)
+			src.WriteString(fmt.Sprintf("  chunk %d/%d: %s (%d bytes)\n", j+1, chunk_total, path, len(pr)))
+
+			// add conversation link if available in registry
+			role := fmt.Sprintf("theorize_chunk_%d", j+1)
+			if rec := FindConv(owner+"/"+repo, role, 0); rec != nil {
+				src.WriteString(fmt.Sprintf("    conversation: %s\n", rec.ConvID))
+			}
 		}
-		src.WriteString("the above is already done. do NOT redo it. produce theory for YOUR files only.\n\n")
+		src.WriteString("read these with bash_tool if you need context. produce theory for YOUR files only.\n\n")
 	}
 
 	for _, f := range files {
