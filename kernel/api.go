@@ -316,28 +316,19 @@ func WaitTimeout(pid int64, idleTimeout time.Duration) (int64, int, error) {
 	}
 waited:
 
+	// SysWaitpid requires Current.Pid == Father, which fails in goroutines.
+	// force-release the zombie slot directly instead.
+	exitCode := int32(0)
 	schedMu.Lock()
-	wpid := int32(-1)
-	if pid >= 0 {
-		wpid = int32(pid)
-	}
-	var stat int32
-	ret := SysWaitpid(wpid, &stat, 0)
-	schedMu.Unlock()
-
-	if ret < 0 {
-		if pid >= 0 && int(ret) == -ECHILD {
-			metaMu.Lock()
-			meta := taskMeta[pid]
-			metaMu.Unlock()
-			if meta != nil {
-				exitCode := 0
-				return pid, exitCode, nil
-			}
+	for i := 1; i < NR_TASKS; i++ {
+		if Task[i] != nil && int64(Task[i].Pid) == pid && Task[i].State == TASK_ZOMBIE {
+			exitCode = Task[i].ExitCode
+			Task[i] = nil
+			break
 		}
-		return 0, 0, fmt.Errorf("wait: %s", errName(int(ret)))
 	}
-	return int64(ret), int(stat >> 8), nil
+	schedMu.Unlock()
+	return pid, int(exitCode >> 8), nil
 }
 
 func sendSigint(pid int64) {
