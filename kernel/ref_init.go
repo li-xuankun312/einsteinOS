@@ -291,10 +291,20 @@ func ref_theorize(parent int64, owner, name, sha, diff string, nfiles int, msg s
 
 	task := ref_theorize_task(parent)
 
-	// kernel surveys files: wc -l + extension → separate heavy from light
+	// step 1: kernel does static survey (wc -l + extensions)
 	heavy, light := fileSurvey(owner, name, sha, files)
 
-	// heavy files get full LAYER 1a+1b+2
+	// step 2: fork a lightweight survey child to refine classification
+	// child sees file listing + first 10 lines of each, outputs heavy=/light= lines
+	surveyResult := fileSurveyChild(owner, name, sha, heavy, light, task)
+	if surveyResult != nil {
+		heavy = surveyResult.heavy
+		light = surveyResult.light
+		log.Printf("ref_theorize: survey child refined → %d heavy, %d light",
+			len(heavy), len(surveyResult.light))
+	}
+
+	// step 3: heavy files get full LAYER 1a+1b+2
 	var result string
 	if len(heavy) > SPLIT_CHUNK {
 		log.Printf("ref_theorize: %s/%s %s: %d heavy files -> split (skipped %d light)",
@@ -304,7 +314,7 @@ func ref_theorize(parent int64, owner, name, sha, diff string, nfiles int, msg s
 		result = ref_theorize_leaf(parent, owner, name, sha, heavy, task)
 	}
 
-	// light files: kernel appends listing (no child conversation needed)
+	// step 4: light files → kernel appends listing, no child needed
 	if len(light) > 0 {
 		var sb strings.Builder
 		sb.WriteString("\n\n[LIGHT FILES — structure only, no LAYER 1a/1b]\n")
@@ -318,6 +328,124 @@ func ref_theorize(parent int64, owner, name, sha, diff string, nfiles int, msg s
 		theorem_store(owner+"/"+name, sha, result, 0)
 	}
 	return result
+}
+
+type surveyOutput struct {
+	heavy []string
+	light []lightFile
+}
+
+// fileSurveyChild: fork a child that sees the file listing + first 10 lines
+// of each file, and outputs which files need full mathematical analysis.
+// child outputs kv format: heavy=path1,path2,... and light=path3,path4,...
+// kernel parses the output. child conversation is tiny — one round, no tools.
+func fileSurveyChild(owner, name, sha string, initHeavy []string, initLight []lightFile, task string) *surveyOutput {
+	// build a compact listing: path | lines | first 10 lines
+	var prompt strings.Builder
+	prompt.WriteString(fmt.Sprintf("[TASK] %s\n\n", task))
+	prompt.WriteString(fmt.Sprintf("[FILE SURVEY] %s/%s commit %s\n", owner, name, sha[:12]))
+	prompt.WriteString("classify each file: does it need mathematical specification (LAYER 1a/1b)?\n")
+	prompt.WriteString("files with algorithms, state machines, concurrency, retry logic, invariants → heavy\n")
+	prompt.WriteString("simple wrappers, RAII, getters/setters, configs, constants, tests → light\n\n")
+
+	allFiles := make(map[string]int) // path → lines
+	for _, f := range initHeavy {
+		content, err := RefFileAt(owner, name, sha, f)
+		if err != nil {
+			continue
+		}
+		lines := strings.Count(content, "\n") + 1
+		allFiles[f] = lines
+
+		// show first 10 lines
+		preview := content
+		lineSlice := strings.SplitN(content, "\n", 11)
+		if len(lineSlice) > 10 {
+			preview = strings.Join(lineSlice[:10], "\n") + "\n..."
+		}
+		prompt.WriteString(fmt.Sprintf("--- %s (%d lines) ---\n%s\n\n", f, lines, preview))
+	}
+	for _, lf := range initLight {
+		allFiles[lf.path] = lf.lines
+		content, err := RefFileAt(owner, name, sha, lf.path)
+		if err != nil {
+			continue
+		}
+		lineSlice := strings.SplitN(content, "\n", 11)
+		preview := content
+		if len(lineSlice) > 10 {
+			preview = strings.Join(lineSlice[:10], "\n") + "\n..."
+		}
+		prompt.WriteString(fmt.Sprintf("--- %s (%d lines) ---\n%s\n\n", lf.path, lf.lines, preview))
+	}
+
+	prompt.WriteString("output ONLY two lines, nothing else:\n")
+	prompt.WriteString("heavy=comma,separated,paths\n")
+	prompt.WriteString("light=comma,separated,paths\n")
+
+	child, err := Fork(prompt.String(), ".")
+	if err != nil {
+		log.Printf("fileSurveyChild: fork failed: %v", err)
+		return nil
+	}
+	Wait(child)
+
+	stdout := GetResult(child)
+	log.Printf("fileSurveyChild: %s/%s child returned %d bytes", owner, name, len(stdout))
+
+	// parse heavy= and light= lines
+	var heavyPaths, lightPaths []string
+	for _, line := range strings.Split(stdout, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "heavy=") {
+			for _, p := range strings.Split(line[6:], ",") {
+				p = strings.TrimSpace(p)
+				if p != "" && allFiles[p] > 0 {
+					heavyPaths = append(heavyPaths, p)
+				}
+			}
+		} else if strings.HasPrefix(line, "light=") {
+			for _, p := range strings.Split(line[6:], ",") {
+				p = strings.TrimSpace(p)
+				if p != "" && allFiles[p] > 0 {
+					lightPaths = append(lightPaths, p)
+				}
+			}
+		}
+	}
+
+	if len(heavyPaths) == 0 && len(lightPaths) == 0 {
+		log.Printf("fileSurveyChild: no parseable output, keeping kernel classification")
+		return nil
+	}
+
+	// build output, defaulting unmentioned files to kernel's classification
+	mentioned := make(map[string]bool)
+	for _, p := range heavyPaths {
+		mentioned[p] = true
+	}
+	for _, p := range lightPaths {
+		mentioned[p] = true
+	}
+
+	// unmentioned heavy files stay heavy
+	for _, f := range initHeavy {
+		if !mentioned[f] {
+			heavyPaths = append(heavyPaths, f)
+		}
+	}
+	// unmentioned light files stay light
+	var lightOut []lightFile
+	for _, p := range lightPaths {
+		lightOut = append(lightOut, lightFile{p, allFiles[p]})
+	}
+	for _, lf := range initLight {
+		if !mentioned[lf.path] {
+			lightOut = append(lightOut, lf)
+		}
+	}
+
+	return &surveyOutput{heavy: heavyPaths, light: lightOut}
 }
 
 type lightFile struct {
