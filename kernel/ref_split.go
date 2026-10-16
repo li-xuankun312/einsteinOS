@@ -279,7 +279,7 @@ func ref_split_commit(parent_pid int64, owner, repo string, commits []RefCommit,
 			continue
 		}
 
-		pid := ref_split_fork(parent_pid, owner, repo, c.SHA, changed_files, task, 0, 0, 1)
+		pid := ref_split_fork(parent_pid, owner, repo, c.SHA, changed_files, task, 0, 0, 1, nil, nil)
 		if pid > 0 {
 			pids = append(pids, pid)
 		}
