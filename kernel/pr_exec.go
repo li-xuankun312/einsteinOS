@@ -733,6 +733,16 @@ func dev_collect_child(childPid int64, repo string) (string, map[string]string) 
 	if m := getMeta(childPid); m != nil {
 		convID = m.ConvID
 	}
+	// fallback: FindConv from registry (survives zombie reap)
+	if convID == "" {
+		for _, role := range []string{"dev_draft", "dev_fix_1", "dev_fix_2", "dev_fix_3"} {
+			if rec := FindConv(repo, role, 0); rec != nil {
+				convID = rec.ConvID
+				log.Printf("dev_collect: %s convID from registry role=%s", repo, role)
+				break
+			}
+		}
+	}
 	if convID != "" {
 		downloaded, err := DownloadConv(convID)
 		if err == nil && len(downloaded) > len(stdout) {
