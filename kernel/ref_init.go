@@ -291,17 +291,92 @@ func ref_theorize(parent int64, owner, name, sha, diff string, nfiles int, msg s
 
 	task := ref_theorize_task(parent)
 
-	if len(files) > SPLIT_CHUNK {
-		log.Printf("ref_theorize: %s/%s %s: %d files -> split",
-			owner, name, sha[:12], len(files))
-		result := ref_split(parent, owner, name, sha, files, task, 0)
-		if len(strings.TrimSpace(result)) > 10 {
-			theorem_store(owner+"/"+name, sha, result, 0)
-		}
-		return result
+	// kernel surveys files: wc -l + extension → separate heavy from light
+	heavy, light := fileSurvey(owner, name, sha, files)
+
+	// heavy files get full LAYER 1a+1b+2
+	var result string
+	if len(heavy) > SPLIT_CHUNK {
+		log.Printf("ref_theorize: %s/%s %s: %d heavy files -> split (skipped %d light)",
+			owner, name, sha[:12], len(heavy), len(light))
+		result = ref_split(parent, owner, name, sha, heavy, task, 0)
+	} else if len(heavy) > 0 {
+		result = ref_theorize_leaf(parent, owner, name, sha, heavy, task)
 	}
 
-	return ref_theorize_leaf(parent, owner, name, sha, files, task)
+	// light files: kernel appends listing (no child conversation needed)
+	if len(light) > 0 {
+		var sb strings.Builder
+		sb.WriteString("\n\n[LIGHT FILES — structure only, no LAYER 1a/1b]\n")
+		for _, lf := range light {
+			sb.WriteString(fmt.Sprintf("  %s (%d lines)\n", lf.path, lf.lines))
+		}
+		result = result + sb.String()
+	}
+
+	if len(strings.TrimSpace(result)) > 10 {
+		theorem_store(owner+"/"+name, sha, result, 0)
+	}
+	return result
+}
+
+type lightFile struct {
+	path  string
+	lines int
+}
+
+// fileSurvey: kernel reads file sizes and extensions to decide what needs
+// full mathematical analysis vs what's just structural boilerplate.
+// no hardcoded rules per extension — uses line count + content signals.
+func fileSurvey(owner, name, sha string, files []string) (heavy []string, light []lightFile) {
+	// pass 1: collect stats
+	type fstat struct {
+		path  string
+		lines int
+		ext   string
+	}
+	var stats []fstat
+	extCount := make(map[string]int)
+	extLines := make(map[string]int)
+
+	for _, f := range files {
+		if isBinaryFile(f) || isDocOnlyFile(f) {
+			continue
+		}
+		content, err := RefFileAt(owner, name, sha, f)
+		if err != nil {
+			continue
+		}
+		lines := strings.Count(content, "\n") + 1
+		ext := ""
+		if idx := strings.LastIndex(f, "."); idx >= 0 {
+			ext = f[idx:]
+		}
+		stats = append(stats, fstat{f, lines, ext})
+		extCount[ext]++
+		extLines[ext] += lines
+	}
+
+	// pass 2: classify
+	for _, s := range stats {
+		if s.lines < 30 {
+			light = append(light, lightFile{s.path, s.lines})
+			continue
+		}
+		// short files of types that have many instances → likely boilerplate
+		if s.lines < 80 && extCount[s.ext] > 5 {
+			light = append(light, lightFile{s.path, s.lines})
+			continue
+		}
+		heavy = append(heavy, s.path)
+	}
+
+	log.Printf("fileSurvey: %s/%s %d total → %d heavy, %d light",
+		owner, name, len(stats), len(heavy), len(light))
+	for ext, cnt := range extCount {
+		log.Printf("fileSurvey:   %s: %d files, %d lines", ext, cnt, extLines[ext])
+	}
+	return
 }
 
 func ref_theorize_task(pid int64) string {
