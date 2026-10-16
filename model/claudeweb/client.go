@@ -2,6 +2,7 @@ package claudeweb
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -95,10 +96,15 @@ func (c *Client) Completion(convID string, req *CompletionRequest) (io.ReadClose
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequest("POST", url, bytes.NewReader(body))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
+		cancel()
 		return nil, fmt.Errorf("create request: %w", err)
 	}
+	// cancel is NOT deferred here — caller reads resp.Body which needs the context alive.
+	// context auto-cancels after 10min, killing a stuck SSE stream.
+	_ = cancel
 
 	httpReq.Header.Set("Accept", "text/event-stream")
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -115,7 +121,9 @@ func (c *Client) Completion(convID string, req *CompletionRequest) (io.ReadClose
 			wait := backoffs[attempt-1]
 			log.Printf("claudeweb: retry %d/%d after %v", attempt, maxRetries, wait)
 			time.Sleep(wait)
-			httpReq, _ = http.NewRequest("POST", url, bytes.NewReader(body))
+			ctx, cancel = context.WithTimeout(context.Background(), 10*time.Minute)
+			_ = cancel
+			httpReq, _ = http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 			httpReq.Header.Set("Accept", "text/event-stream")
 			httpReq.Header.Set("Content-Type", "application/json")
 			httpReq.Header.Set("anthropic-client-platform", "web_claude_ai")
