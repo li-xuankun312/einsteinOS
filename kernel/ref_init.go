@@ -551,8 +551,10 @@ func ref_theorize_leaf(parent int64, owner, name, sha string, files []string, ta
 	}
 
 	prompt := src.String() + extra + theorize_instruction +
-		"analyze ONLY the files above. they are your complete assignment.\n" +
-		"do NOT use git or bash_tool to read other files — the kernel has already given you everything.\n\n" +
+		"you may use git to read other files for CONTEXT (understanding types, interfaces, dependencies).\n" +
+		"the bare repo is at " + dir + " — use `git --git-dir=" + dir + " show " + sha[:12] + ":<path>`.\n" +
+		"do NOT clone the repo again.\n" +
+		"produce LAYER 1/2 ONLY for the files listed above.\n\n" +
 		"write your LAYER 1 and LAYER 2 however you prefer — text, Artifact, or create_file all work. " +
 		"the kernel will download the full conversation after you finish."
 
