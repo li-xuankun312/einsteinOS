@@ -189,7 +189,7 @@ func ForkExec(command string, workDir string) (int64, error) {
 		return 0, fmt.Errorf("fork: copy_process failed (%d)", pid)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	cmd := exec.CommandContext(ctx, "bash", "-c", command)
 	if workDir != "" {
 		cmd.Dir = workDir
