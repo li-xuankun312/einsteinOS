@@ -122,25 +122,50 @@ func GetDevRepos() []string {
 }
 
 func detect_dev_repos(task string) {
-	markers := []string{
-		"项目在", "项目是", "项目：", "项目:",
-		"project at", "project in", "project is",
-		"我们的仓库", "我们的项目", "our repo",
-		"要开发的", "需要开发",
+	repos := extractRepoMentions(task)
+	if len(repos) <= 1 {
+		// only one repo mentioned — it could be either dev or ref,
+		// can't tell without context. let ref_discover's child decide.
+		return
 	}
-	for _, marker := range markers {
-		idx := strings.Index(task, marker)
-		if idx < 0 {
-			continue
-		}
-		after := task[idx+len(marker):]
-		repos := extractRepoMentions(after)
-		if len(repos) > 0 {
-			r := repos[0]
-			RegisterDevRepo(r.Owner, r.Name)
-			return
+
+	// multiple repos mentioned. fork a lightweight child to identify the dev target.
+	var repoList strings.Builder
+	for _, r := range repos {
+		repoList.WriteString(fmt.Sprintf("  %s/%s\n", r.Owner, r.Name))
+	}
+
+	prompt := fmt.Sprintf(
+		"[TASK] identify which repo below is the DEVELOPMENT TARGET (where new code will be written),\n"+
+			"and which are REFERENCE repos (to learn from).\n\n"+
+			"repos mentioned:\n%s\n"+
+			"user's request:\n%s\n\n"+
+			"reply with EXACTLY one line: dev=owner/name\n"+
+			"pick the repo that the user wants to BUILD or DEVELOP, not the one they want to STUDY.\n",
+		repoList.String(), truncDiff(task, 1000),
+	)
+
+	child, err := Fork(prompt, ".")
+	if err != nil {
+		log.Printf("detect_dev_repos: fork failed: %v", err)
+		return
+	}
+	Wait(child)
+	result := strings.TrimSpace(GetResult(child))
+
+	// parse "dev=owner/name"
+	for _, line := range strings.Split(result, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "dev=") {
+			key := strings.TrimPrefix(line, "dev=")
+			parts := strings.SplitN(key, "/", 2)
+			if len(parts) == 2 {
+				RegisterDevRepo(parts[0], parts[1])
+				return
+			}
 		}
 	}
+	log.Printf("detect_dev_repos: child did not identify dev repo, result=%q", result)
 }
 
 func ref_discover(task string) []RefRepo {
