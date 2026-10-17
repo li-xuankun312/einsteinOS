@@ -23,8 +23,10 @@ const (
 	STEP_HW_PROBE
 	STEP_REF_BIND
 	STEP_DEV_FROM_THEOREMS
-	STEP_DEV_FIX // kernel-driven fix: structured args, not "fix the issues above"
+	STEP_DEV_FIX    // kernel-driven fix: structured args, not "fix the issues above"
 	STEP_REF_DIFF
+	STEP_VLLM_UP   // child A: start vllm server, output port + pid
+	STEP_VLLM_BENCH // child B: benchmark against running vllm, output tok_s
 )
 
 type Step struct {
@@ -214,6 +216,12 @@ func PRRunNext(pid int64) (string, error) {
 			step.ChildPid = childPid
 			result = fmt.Sprintf("exit %d: %s", code, GetResult(childPid))
 		}
+
+	case STEP_VLLM_UP:
+		result, err = vllm_up(pid, step)
+
+	case STEP_VLLM_BENCH:
+		result, err = vllm_bench(pid, step)
 
 	}
 
@@ -469,43 +477,163 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 		PRFeedbackAdd(pid, fmt.Sprintf("- dev[%s]: %s=%s", repo, k, v))
 	}
 
-	// quantitative eval: compile → smoke → tok/s ≥ 40
-	if status1["compile"] != "pass" {
-		dev_push_fix(pid, step.Owner, step.Repo, status1, 1)
-		return stdout1, nil
-	}
-	if status1["smoke"] != "pass" {
+	// compile or smoke failed → fix loop
+	if status1["compile"] != "pass" || status1["smoke"] != "pass" {
 		dev_push_fix(pid, step.Owner, step.Repo, status1, 1)
 		return stdout1, nil
 	}
 
-	// compile + smoke passed. check tok/s.
+	// compile + smoke passed → push vllm benchmark steps
+	log.Printf("dev_from_theorems: %s compile+smoke pass, pushing vllm benchmark", repo)
+
+	_, gpuUsable := pr_gpu_args(pid)
+	pr_push_step(pid, &Step{
+		Kind:    STEP_VLLM_UP,
+		Owner:   step.Owner,
+		Repo:    step.Repo,
+		Command: gpuUsable, // which GPUs to use
+	})
+	pr_push_step(pid, &Step{
+		Kind:  STEP_VLLM_BENCH,
+		Owner: step.Owner,
+		Repo:  step.Repo,
+	})
+	return stdout1, nil
+}
+
+
+
+// vllm_up: child A starts vllm server, outputs port and pid.
+// kernel polls health endpoint until ready, then advances to STEP_VLLM_BENCH.
+// Step.Command = GPU list (e.g. "0,1,2,3")
+func vllm_up(pid int64, step *Step) (string, error) {
+	repo := step.Owner + "/" + step.Repo
+	gpus := step.Command
+	if gpus == "" {
+		gpus = "0"
+	}
+
+	prompt := fmt.Sprintf(
+		"[TASK] start vllm inference server for benchmarking.\n\n"+
+			"CUDA_VISIBLE_DEVICES=%s\n"+
+			"find the model in the dev repo and start vllm:\n"+
+			"  python3 -m vllm.entrypoints.openai.api_server --model <path> --port 8919 --trust-remote-code &\n"+
+			"then wait for it to be ready:\n"+
+			"  for i in $(seq 1 60); do curl -s http://localhost:8919/health && break; sleep 5; done\n\n"+
+			"[OUTPUT FORMAT]\n"+
+			"vllm_status=ready|fail\n"+
+			"vllm_port=8919\n"+
+			"vllm_pid=<pid of the server process>\n"+
+			"vllm_error=<one line if fail>\n"+
+			"model_path=<path to the model used>\n\n"+
+			"do NOT exit the conversation after starting — the server must stay alive.\n"+
+			"after confirming health check passes, output the status block and stop.\n",
+		gpus,
+	)
+
+	child, err := Fork(prompt, ".")
+	if err != nil {
+		return "", fmt.Errorf("vllm_up: fork failed: %w", err)
+	}
+	RegisterConv(pid, "", repo, "vllm_server", 0)
+	if m := getMeta(child); m != nil && m.ConvID != "" {
+		RegisterConv(pid, m.ConvID, repo, "vllm_server", 0)
+	}
+	Wait(child)
+	step.ChildPid = child
+
+	stdout := GetResult(child)
+	status := parse_last_status(stdout)
+	if status == nil || status["vllm_status"] != "ready" {
+		errMsg := "unknown"
+		if status != nil {
+			errMsg = status["vllm_error"]
+		}
+		log.Printf("vllm_up: %s failed: %s", repo, errMsg)
+		return stdout, fmt.Errorf("vllm_up: server not ready: %s", errMsg)
+	}
+
+	// store port for bench step
+	step.Result = status["vllm_port"]
+	log.Printf("vllm_up: %s ready on port %s", repo, status["vllm_port"])
+	return stdout, nil
+}
+
+// vllm_bench: child B benchmarks against running vllm server.
+// measures tok/s. if < 40, pushes more ref_bind + dev_from_theorems.
+func vllm_bench(pid int64, step *Step) (string, error) {
+	repo := step.Owner + "/" + step.Repo
+
+	// find vllm port from previous step result
+	port := "8919"
+	prStepsMu.Lock()
+	for _, s := range prSteps[pid] {
+		if s.Kind == STEP_VLLM_UP && s.Owner == step.Owner && s.Repo == step.Repo && s.Result != "" {
+			port = s.Result
+		}
+	}
+	prStepsMu.Unlock()
+
+	prompt := fmt.Sprintf(
+		"[TASK] benchmark the running vllm server and measure tokens per second.\n\n"+
+			"the server is at http://localhost:%s\n\n"+
+			"run a benchmark:\n"+
+			"  curl -s http://localhost:%s/v1/completions -H 'Content-Type: application/json' \\\n"+
+			"    -d '{\"model\":\"default\",\"prompt\":\"Hello world\",\"max_tokens\":128}'\n\n"+
+			"or use vllm's benchmark script if available:\n"+
+			"  python3 -m vllm.entrypoints.openai.run_benchmark ... \n\n"+
+			"measure output tokens / elapsed seconds. run at least 3 requests, take the average.\n\n"+
+			"[OUTPUT FORMAT]\n"+
+			"tok_s=<average tokens per second, number only>\n"+
+			"requests=<number of benchmark requests run>\n"+
+			"tok_s_error=<one line if measurement failed>\n",
+		port, port,
+	)
+
+	child, err := Fork(prompt, ".")
+	if err != nil {
+		return "", fmt.Errorf("vllm_bench: fork failed: %w", err)
+	}
+	if m := getMeta(child); m != nil && m.ConvID != "" {
+		RegisterConv(pid, m.ConvID, repo, "vllm_bench", 0)
+	}
+	Wait(child)
+	step.ChildPid = child
+
+	stdout := GetResult(child)
+	status := parse_last_status(stdout)
+
 	tokS := 0.0
-	if v, ok := status1["tok_s"]; ok {
-		fmt.Sscanf(v, "%f", &tokS)
+	if status != nil {
+		fmt.Sscanf(status["tok_s"], "%f", &tokS)
 	}
 
 	if tokS >= 40.0 {
-		log.Printf("dev_from_theorems: %s PASS tok/s=%.1f ≥ 40", repo, tokS)
-		return stdout1, nil
+		log.Printf("vllm_bench: %s PASS tok/s=%.1f ≥ 40", repo, tokS)
+		PRFeedbackAdd(pid, fmt.Sprintf("- vllm_bench: tok/s=%.1f PASS", tokS))
+		return stdout, nil
 	}
 
-	// tok/s below threshold (or not measured). need more theory.
-	// find current commit cursor from the last ref_bind step for this repo
+	// tok/s below threshold — need more theory
 	commits, _ := RefListCommits(step.Owner, step.Repo)
 	nextIdx := ref_bind_cursor(pid, step.Owner, step.Repo) + 1
 	remaining := len(commits) - nextIdx
 
-	if remaining <= 0 || tokS == 0 {
-		// no more commits to scan, or tok/s wasn't even measured — accept what we have
-		log.Printf("dev_from_theorems: %s compile+smoke pass, tok/s=%.1f (no more commits or not measured), accepting",
-			repo, tokS)
-		return stdout1, nil
+	if remaining <= 0 {
+		log.Printf("vllm_bench: %s tok/s=%.1f < 40 but no more commits, accepting", repo, tokS)
+		PRFeedbackAdd(pid, fmt.Sprintf("- vllm_bench: tok/s=%.1f < 40, no more commits", tokS))
+		return stdout, nil
 	}
 
-	log.Printf("dev_from_theorems: %s tok/s=%.1f < 40, pushing ref_bind(start=%d) for more theory (%d commits remaining)",
+	if tokS == 0 {
+		log.Printf("vllm_bench: %s tok/s not measured, accepting", repo)
+		PRFeedbackAdd(pid, fmt.Sprintf("- vllm_bench: tok/s not measured"))
+		return stdout, nil
+	}
+
+	log.Printf("vllm_bench: %s tok/s=%.1f < 40, pushing ref_bind(start=%d) for more theory (%d remaining)",
 		repo, tokS, nextIdx, remaining)
-	PRFeedbackAdd(pid, fmt.Sprintf("- tok/s=%.1f < 40, need more theory from commits %d+", tokS, nextIdx))
+	PRFeedbackAdd(pid, fmt.Sprintf("- vllm_bench: tok/s=%.1f < 40, looping back for more theory", tokS))
 
 	pr_push_step(pid, &Step{
 		Kind:    STEP_REF_BIND,
@@ -518,10 +646,8 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 		Owner: step.Owner,
 		Repo:  step.Repo,
 	})
-	return stdout1, nil
+	return stdout, nil
 }
-
-
 
 // dev_fix: kernel-driven fix step. Step fields carry structured args:
 //   Command = failure type (compile_fail | gpu_fail | smoke_fail | needs_source)
@@ -1176,6 +1302,10 @@ func step_name(k StepKind) string {
 		return "hw_probe"
 	case STEP_REF_DIFF:
 		return "ref_diff"
+	case STEP_VLLM_UP:
+		return "vllm_up"
+	case STEP_VLLM_BENCH:
+		return "vllm_bench"
 	default:
 		return "?"
 	}
