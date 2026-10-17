@@ -486,7 +486,7 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 	// compile + smoke passed → push vllm benchmark steps
 	log.Printf("dev_from_theorems: %s compile+smoke pass, pushing vllm benchmark", repo)
 
-	_, gpuUsable := pr_gpu_args(pid)
+	_, gpuUsable = pr_gpu_args(pid)
 	pr_push_step(pid, &Step{
 		Kind:    STEP_VLLM_UP,
 		Owner:   step.Owner,
