@@ -370,63 +370,37 @@ func ref_bind_at(pid int64, owner, repo string, startIdx int) (string, error) {
 		return result, nil
 	}
 
-	// fork a lightweight eval child: "is this theory sufficient for the task?"
-	// child sees: theory so far + remaining commit count + task
-	// child outputs: "sufficient" or "continue"
-	theory := theorem_get(owner+"/"+repo, "")
-	evalPrompt := fmt.Sprintf(
-		"[EVAL] you are evaluating whether the theory below is sufficient for the task.\n\n"+
-			"[THEORY so far — %d theorems from %s/%s commit %s]\n%s\n\n"+
-			"[REMAINING] %d more commits in this repo not yet scanned.\n\n"+
-			"[TASK] %s\n\n"+
-			"reply with EXACTLY one word on the first line:\n"+
-			"  sufficient — if the theory covers enough structure to write code\n"+
-			"  continue — if critical functionality is still missing and more commits should be scanned\n"+
-			"then on the second line, a one-sentence reason.\n",
-		count, owner, repo, short_sha(theoryCommit.SHA),
-		truncDiff(theory, 3000),
-		remaining,
-		strip_credentials(ref_theorize_task(pid)),
-	)
-
-	evalPid, evalErr := Fork(evalPrompt, ".")
-	if evalErr != nil {
-		log.Printf("ref_bind: %s/%s eval fork failed: %v, stopping", owner, repo, evalErr)
-	} else {
-		Wait(evalPid)
-		verdict := strings.TrimSpace(GetResult(evalPid))
-		firstLine := verdict
-		if idx := strings.Index(verdict, "\n"); idx > 0 {
-			firstLine = verdict[:idx]
-		}
-		firstLine = strings.ToLower(strings.TrimSpace(firstLine))
-
-		log.Printf("ref_bind: %s/%s eval verdict=%q (%d remaining)",
-			owner, repo, firstLine, remaining)
-
-		if strings.HasPrefix(firstLine, "continue") {
-			// push a new ref_bind step starting from the next commit
-			nextIdx := theoryIdx + 1
-			log.Printf("ref_bind: %s/%s pushing next batch from index %d", owner, repo, nextIdx)
-			pr_push_step(pid, &Step{
-				Kind:    STEP_REF_BIND,
-				Owner:   owner,
-				Repo:    repo,
-				Command: fmt.Sprintf("start=%d", nextIdx),
-			})
-			// also push corresponding dev_from_theorems after it
-			pr_push_step(pid, &Step{
-				Kind:  STEP_DEV_FROM_THEOREMS,
-				Owner: owner,
-				Repo:  repo,
-			})
-		}
-	}
+	// don't eval theory quality here — that's subjective.
+	// dev_from_theorems will build code, run vllm, measure tok/s.
+	// if tok/s < threshold, dev_from_theorems pushes STEP_REF_BIND(start=next)
+	// to come back for more theory. quantitative eval drives the loop.
+	log.Printf("ref_bind: %s/%s theorized commit %d, %d remaining (dev_from_theorems will eval)",
+		owner, repo, theoryIdx, remaining)
 
 	result := fmt.Sprintf("%s/%s: %d commits %d theorems (%d remaining)",
 		owner, repo, len(commits), count, remaining)
 	log.Printf("ref_bind: %s", result)
 	return result, nil
+}
+
+// ref_bind_cursor: find the highest commit index that ref_bind processed for this repo.
+// scans the step queue for the last STEP_REF_BIND with matching owner/repo.
+func ref_bind_cursor(pid int64, owner, repo string) int {
+	prStepsMu.Lock()
+	defer prStepsMu.Unlock()
+	best := 0
+	for _, s := range prSteps[pid] {
+		if s.Kind == STEP_REF_BIND && s.Owner == owner && s.Repo == repo {
+			idx := 0
+			if strings.HasPrefix(s.Command, "start=") {
+				fmt.Sscanf(s.Command, "start=%d", &idx)
+			}
+			if idx > best {
+				best = idx
+			}
+		}
+	}
+	return best
 }
 
 func dev_from_theorems(pid int64, step *Step) (string, error) {
@@ -495,14 +469,55 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 		PRFeedbackAdd(pid, fmt.Sprintf("- dev[%s]: %s=%s", repo, k, v))
 	}
 
-	// done?
-	if status1["compile"] == "pass" && status1["smoke"] == "pass" {
-		log.Printf("dev_from_theorems: %s verified", repo)
+	// quantitative eval: compile → smoke → tok/s ≥ 40
+	if status1["compile"] != "pass" {
+		dev_push_fix(pid, step.Owner, step.Repo, status1, 1)
+		return stdout1, nil
+	}
+	if status1["smoke"] != "pass" {
+		dev_push_fix(pid, step.Owner, step.Repo, status1, 1)
 		return stdout1, nil
 	}
 
-	// not done — kernel pushes a fix step with structured args
-	dev_push_fix(pid, step.Owner, step.Repo, status1, 1)
+	// compile + smoke passed. check tok/s.
+	tokS := 0.0
+	if v, ok := status1["tok_s"]; ok {
+		fmt.Sscanf(v, "%f", &tokS)
+	}
+
+	if tokS >= 40.0 {
+		log.Printf("dev_from_theorems: %s PASS tok/s=%.1f ≥ 40", repo, tokS)
+		return stdout1, nil
+	}
+
+	// tok/s below threshold (or not measured). need more theory.
+	// find current commit cursor from the last ref_bind step for this repo
+	commits, _ := RefListCommits(step.Owner, step.Repo)
+	nextIdx := ref_bind_cursor(pid, step.Owner, step.Repo) + 1
+	remaining := len(commits) - nextIdx
+
+	if remaining <= 0 || tokS == 0 {
+		// no more commits to scan, or tok/s wasn't even measured — accept what we have
+		log.Printf("dev_from_theorems: %s compile+smoke pass, tok/s=%.1f (no more commits or not measured), accepting",
+			repo, tokS)
+		return stdout1, nil
+	}
+
+	log.Printf("dev_from_theorems: %s tok/s=%.1f < 40, pushing ref_bind(start=%d) for more theory (%d commits remaining)",
+		repo, tokS, nextIdx, remaining)
+	PRFeedbackAdd(pid, fmt.Sprintf("- tok/s=%.1f < 40, need more theory from commits %d+", tokS, nextIdx))
+
+	pr_push_step(pid, &Step{
+		Kind:    STEP_REF_BIND,
+		Owner:   step.Owner,
+		Repo:    step.Repo,
+		Command: fmt.Sprintf("start=%d", nextIdx),
+	})
+	pr_push_step(pid, &Step{
+		Kind:  STEP_DEV_FROM_THEOREMS,
+		Owner: step.Owner,
+		Repo:  step.Repo,
+	})
 	return stdout1, nil
 }
 
@@ -1017,6 +1032,8 @@ gpu_pairs_fail=<pairs that fail>
 gpu_test=pass|fail
 smoke=pass|fail
 smoke_error=<one line if fail>
+tok_s=<number: tokens/second from vllm benchmark, 0 if not measured>
+tok_s_error=<one line if measurement failed>
 files_written=<comma-separated paths>
 
 if compile fails and you believe seeing specific source files would help,
@@ -1029,6 +1046,9 @@ VERIFICATION STEPS:
 3. compile — if fail after 2 tries, set needs_source=true with the files you need
 4. if compile passes, test GPU P2P on all pairs
 5. smoke test end to end
+6. if smoke passes, start vllm and measure tok/s (tokens per second)
+   run: python3 -m vllm.entrypoints.openai.api_server ... then benchmark
+   the kernel needs tok_s >= 40 to consider this sufficient
 `
 
 const dev_verify_instruction = `
