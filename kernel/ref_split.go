@@ -1,0 +1,315 @@
+package kernel
+
+import (
+	"fmt"
+	"log"
+	"strings"
+	"sync"
+)
+
+type SplitNode struct {
+	Pid      int64
+	Parent   int64
+	Depth    int
+	Files    []string
+	SHA      string
+	Owner    string
+	Repo     string
+	Result   string
+	Children []int64
+}
+
+var (
+	split_table [NR_SPLITS]SplitNode
+	nr_splits   int
+	split_mu    sync.Mutex
+)
+
+const NR_SPLITS = 256
+const SPLIT_CHUNK = 40
+
+func ref_split(parent_pid int64, owner, repo, sha string, files []string, task string, depth int) string {
+	if len(files) <= SPLIT_CHUNK {
+		return ref_split_leaf(parent_pid, owner, repo, sha, files, task, depth)
+	}
+
+	var chunks [][]string
+	for i := 0; i < len(files); i += SPLIT_CHUNK {
+		end := i + SPLIT_CHUNK
+		if end > len(files) {
+			end = len(files)
+		}
+		chunks = append(chunks, files[i:end])
+	}
+
+	log.Printf("ref_split: %s/%s@%s depth=%d %d files -> %d chunks",
+		owner, repo, short_sha(sha), depth, len(files), len(chunks))
+
+	node := split_alloc(parent_pid, depth, owner, repo, sha, files)
+
+	var child_pids []int64
+	var results []string
+	for i, chunk := range chunks {
+		child_pid := ref_split_fork(parent_pid, owner, repo, sha, chunk, task, depth+1, i, len(chunks), chunks, results)
+		if child_pid <= 0 {
+			continue
+		}
+		child_pids = append(child_pids, child_pid)
+		Wait(child_pid)
+
+		// After Wait, goroutine is done — ConvID is now in TaskMeta.
+		// Register with proper repo/role for FindConv lookups.
+		role := fmt.Sprintf("theorize_chunk_%d", i+1)
+		if m := getMeta(child_pid); m != nil && m.ConvID != "" {
+			RegisterConv(parent_pid, m.ConvID, owner+"/"+repo, role, 0)
+		}
+
+		result := GetResult(child_pid)
+
+		// DownloadConv fallback: if GetResult is short (child wrote to
+		// Artifact/create_file instead of text), download the full
+		// conversation and extract assistant text.
+		if len(result) < 500 {
+			convID := ""
+			if m := getMeta(child_pid); m != nil {
+				convID = m.ConvID
+			}
+			if convID == "" {
+				// also try registry
+				if rec := FindConv(owner+"/"+repo, role, 0); rec != nil {
+					convID = rec.ConvID
+				}
+			}
+			if convID != "" {
+				downloaded, err := DownloadConv(convID)
+				if err == nil && len(downloaded) > len(result) {
+					log.Printf("ref_split: chunk %d/%d GetResult=%d, downloaded=%d, using download",
+						i+1, len(chunks), len(result), len(downloaded))
+					result = downloaded
+				} else if err != nil {
+					log.Printf("ref_split: chunk %d/%d download failed: %v", i+1, len(chunks), err)
+				}
+			}
+		}
+
+		results = append(results, result)
+		log.Printf("ref_split: %s/%s@%s chunk %d/%d done (%d bytes)",
+			owner, repo, short_sha(sha), i+1, len(chunks), len(result))
+	}
+
+	if node >= 0 {
+		split_mu.Lock()
+		split_table[node].Children = child_pids
+		split_mu.Unlock()
+	}
+
+	merged := strings.Join(results, "\n\n")
+	log.Printf("ref_split: %s/%s@%s depth=%d merged %d children -> %d bytes",
+		owner, repo, short_sha(sha), depth, len(child_pids), len(merged))
+	return merged
+}
+
+func ref_split_fork(parent_pid int64, owner, repo, sha string, files []string, task string, depth int, chunk_idx int, chunk_total int, allChunks [][]string, priorResults []string) int64 {
+	dir := fmt.Sprintf("/tmp/ref_%s_%s.git", owner, repo)
+
+	var src strings.Builder
+	src.WriteString(fmt.Sprintf("[TASK] %s\n\n", task))
+	src.WriteString(fmt.Sprintf("[REFERENCE] %s/%s commit %s\n", owner, repo, short_sha(sha)))
+	src.WriteString(fmt.Sprintf("[CHUNK %d/%d] %d files (depth %d)\n", chunk_idx+1, chunk_total, len(files), depth))
+	src.WriteString("produce LAYER 1/2 ONLY for YOUR files below.\n\n")
+
+	// prior chunks: give child the conversation links to download
+	if len(priorResults) > 0 {
+		hasPrior := false
+		for j := range priorResults {
+			role := fmt.Sprintf("theorize_chunk_%d", j+1)
+			rec := FindConv(owner+"/"+repo, role, 0)
+			if rec == nil {
+				continue
+			}
+			if !hasPrior {
+				src.WriteString("[PRIOR CHUNKS — already completed by sibling conversations]\n")
+				hasPrior = true
+			}
+			src.WriteString(fmt.Sprintf("  chunk %d/%d: conv=%s (%d bytes output)\n",
+				j+1, chunk_total, rec.ConvID, len(priorResults[j])))
+		}
+		if hasPrior {
+			src.WriteString("download their artifacts if you need context. produce theory for YOUR files only.\n\n")
+		}
+	}
+
+	for _, f := range files {
+		if isBinaryFile(f) {
+			continue
+		}
+		content, err := RefFileAt(owner, repo, sha, f)
+		if err != nil {
+			continue
+		}
+		if len(content) > 30000 {
+			content = content[:30000]
+		}
+		src.WriteString(fmt.Sprintf("=== %s (%d lines) ===\n", f, strings.Count(content, "\n")+1))
+		src.WriteString(content)
+		src.WriteString("\n\n")
+	}
+
+	src_text := src.String()
+	if len(src_text) > 100000 {
+		src_text = src_text[:100000]
+	}
+
+	prompt := src_text + theorize_instruction +
+		"you may use git to read other files for CONTEXT (understanding types, interfaces, dependencies).\n" +
+		"the bare repo is at " + dir + " — use `git --git-dir=" + dir + " show " + short_sha(sha) + ":<path>`.\n" +
+		"but produce LAYER 1/2 ONLY for YOUR files listed above. other chunks handle the rest.\n" +
+		"if any single file is too large to fully analyze, " +
+		"list its functions and produce both layers for the most important ones.\n\n" +
+		"write your LAYER 1 and LAYER 2 however you prefer — text, Artifact, or create_file all work. " +
+		"the kernel will download the full conversation after you finish."
+
+	pid, err := Fork(prompt, ".")
+	if err != nil {
+		log.Printf("ref_split_fork: %v", err)
+		return 0
+	}
+
+	split_alloc(parent_pid, depth, owner, repo, sha, files)
+
+	log.Printf("ref_split_fork: pid=%d chunk=%d/%d depth=%d files=%d",
+		pid, chunk_idx+1, chunk_total, depth, len(files))
+	return pid
+}
+
+func ref_split_leaf(parent_pid int64, owner, repo, sha string, files []string, task string, depth int) string {
+	dir := fmt.Sprintf("/tmp/ref_%s_%s.git", owner, repo)
+
+	var src strings.Builder
+	src.WriteString(fmt.Sprintf("[TASK] %s\n\n", task))
+	src.WriteString(fmt.Sprintf("[REFERENCE] %s/%s commit %s\n", owner, repo, short_sha(sha)))
+	src.WriteString(fmt.Sprintf("[LEAF] %d files (depth %d)\n\n", len(files), depth))
+
+	for _, f := range files {
+		if isBinaryFile(f) {
+			continue
+		}
+		content, err := RefFileAt(owner, repo, sha, f)
+		if err != nil {
+			continue
+		}
+		if len(content) > 50000 {
+			content = content[:50000]
+		}
+		src.WriteString(fmt.Sprintf("=== %s (%d lines) ===\n", f, strings.Count(content, "\n")+1))
+		src.WriteString(content)
+		src.WriteString("\n\n")
+	}
+
+	src_text := src.String()
+	if len(src_text) > 120000 {
+		src_text = src_text[:120000]
+	}
+
+	prompt := src_text + theorize_instruction +
+		"the repo is at " + dir + " if you need git.\n\n" +
+		"CRITICAL: output your LAYER 1 and LAYER 2 directly as text in your response. " +
+		"do NOT use create_file, Artifact, or present_files. " +
+		"do NOT write to /mnt/user-data/outputs/. " +
+		"your text response IS the output. just print the math and templates."
+
+	pid, err := Fork(prompt, ".")
+	if err != nil {
+		return fmt.Sprintf("ref_split_leaf: %v", err)
+	}
+
+	log.Printf("ref_split_leaf: pid=%d depth=%d files=%d", pid, depth, len(files))
+	Wait(pid)
+	result := GetResult(pid)
+	theorem_store(owner+"/"+repo, sha, result, pid)
+	return result
+}
+
+func split_alloc(parent int64, depth int, owner, repo, sha string, files []string) int {
+	split_mu.Lock()
+	defer split_mu.Unlock()
+	if nr_splits >= NR_SPLITS {
+		return -1
+	}
+	idx := nr_splits
+	split_table[idx] = SplitNode{
+		Parent: parent,
+		Depth:  depth,
+		Owner:  owner,
+		Repo:   repo,
+		SHA:    sha,
+		Files:  files,
+	}
+	nr_splits++
+	return idx
+}
+
+func ref_split_commit(parent_pid int64, owner, repo string, commits []RefCommit, task string) string {
+	if len(commits) <= 1 {
+		if len(commits) == 0 {
+			return ""
+		}
+		c := commits[0]
+		files, _ := RefTreeAt(owner, repo, c.SHA)
+		if len(files) > SPLIT_CHUNK {
+			return ref_split(parent_pid, owner, repo, c.SHA, files, task, 0)
+		}
+		return ref_split_leaf(parent_pid, owner, repo, c.SHA, files, task, 0)
+	}
+
+	log.Printf("ref_split_commit: %s/%s %d commits", owner, repo, len(commits))
+
+	var pids []int64
+	for _, c := range commits {
+		_, changed_files, _ := RefReadCommit(owner, repo, c.SHA)
+		if len(changed_files) == 0 {
+			files, _ := RefTreeAt(owner, repo, c.SHA)
+			changed_files = files
+		}
+
+		if len(changed_files) > SPLIT_CHUNK {
+			go func(commit RefCommit, files []string) {
+				ref_split(parent_pid, owner, repo, commit.SHA, files, task, 0)
+			}(c, changed_files)
+			continue
+		}
+
+		pid := ref_split_fork(parent_pid, owner, repo, c.SHA, changed_files, task, 0, 0, 1, nil, nil)
+		if pid > 0 {
+			pids = append(pids, pid)
+		}
+	}
+
+	var results []string
+	for _, pid := range pids {
+		Wait(pid)
+		results = append(results, GetResult(pid))
+	}
+
+	merged := strings.Join(results, "\n\n")
+	log.Printf("ref_split_commit: %s/%s merged %d commits -> %d bytes",
+		owner, repo, len(commits), len(merged))
+	return merged
+}
+
+func SplitStatus() string {
+	split_mu.Lock()
+	defer split_mu.Unlock()
+	if nr_splits == 0 {
+		return "no splits"
+	}
+	out := fmt.Sprintf("  %-6s %-6s %-5s %-30s %-6s %s\n",
+		"IDX", "PARENT", "DEPTH", "REPO", "FILES", "CHILDREN")
+	for i := 0; i < nr_splits; i++ {
+		s := split_table[i]
+		out += fmt.Sprintf("  %-6d %-6d %-5d %-30s %-6d %v\n",
+			i, s.Parent, s.Depth,
+			s.Owner+"/"+s.Repo, len(s.Files), s.Children)
+	}
+	return out
+}
