@@ -132,7 +132,11 @@ func PRRunNext(pid int64) (string, error) {
 		}
 
 	case STEP_REF_BIND:
-		result, err = ref_bind(pid, step.Owner, step.Repo)
+		startIdx := 0
+		if strings.HasPrefix(step.Command, "start=") {
+			fmt.Sscanf(step.Command, "start=%d", &startIdx)
+		}
+		result, err = ref_bind_at(pid, step.Owner, step.Repo, startIdx)
 
 	case STEP_REF_READ:
 		diff, files, e := RefReadCommit(step.Owner, step.Repo, step.SHA)
@@ -298,6 +302,13 @@ func parseGPUList(hwText string) string {
 }
 
 func ref_bind(pid int64, owner, repo string) (string, error) {
+	return ref_bind_at(pid, owner, repo, 0)
+}
+
+// ref_bind_at: theorize starting from commit index startIdx.
+// after theorizing one batch, fork an eval child to decide "continue or sufficient".
+// if continue, push a new STEP_REF_BIND with SHA=cursor so kernel picks up next batch.
+func ref_bind_at(pid int64, owner, repo string, startIdx int) (string, error) {
 	commits, err := RefListCommits(owner, repo)
 	if err != nil {
 		return "", err
@@ -306,9 +317,10 @@ func ref_bind(pid int64, owner, repo string) (string, error) {
 		return "", fmt.Errorf("ref_bind: %s/%s no commits", owner, repo)
 	}
 
+	// find first source-heavy commit at or after startIdx
 	var theoryCommit *RefCommit
-	var theoryFiles []string
-	for i := 0; i < len(commits) && i < 20; i++ {
+	var theoryIdx int
+	for i := startIdx; i < len(commits) && i < startIdx+20; i++ {
 		c := commits[i]
 		files, _ := RefTreeAt(owner, repo, c.SHA)
 		src_count := 0
@@ -321,28 +333,98 @@ func ref_bind(pid int64, owner, repo string) (string, error) {
 			owner, repo, short_sha(c.SHA), len(files), src_count)
 		if src_count >= 2 {
 			theoryCommit = &commits[i]
-			theoryFiles = files
+			theoryIdx = i
 			break
 		}
 	}
 
 	if theoryCommit == nil {
-		theoryCommit = &commits[0]
-		theoryFiles, _ = RefTreeAt(owner, repo, theoryCommit.SHA)
-		log.Printf("ref_bind: %s/%s no source-heavy commit in first 20, using first",
-			owner, repo)
+		if startIdx == 0 {
+			theoryCommit = &commits[0]
+			theoryIdx = 0
+			log.Printf("ref_bind: %s/%s no source-heavy commit in first 20, using first",
+				owner, repo)
+		} else {
+			// no more source commits after startIdx — done
+			log.Printf("ref_bind: %s/%s no more source commits after index %d, done",
+				owner, repo, startIdx)
+			count := theorem_count(owner + "/" + repo)
+			return fmt.Sprintf("%s/%s: %d commits %d theorems (exhausted)",
+				owner, repo, len(commits), count), nil
+		}
 	}
 
-	log.Printf("ref_bind: %s/%s %d commits, theorize=%s %d files",
-		owner, repo, len(commits), short_sha(theoryCommit.SHA), len(theoryFiles))
+	theoryFiles, _ := RefTreeAt(owner, repo, theoryCommit.SHA)
+	log.Printf("ref_bind: %s/%s %d commits, theorize=%s (index %d) %d files",
+		owner, repo, len(commits), short_sha(theoryCommit.SHA), theoryIdx, len(theoryFiles))
 
 	ref_theorize(pid, owner, repo, theoryCommit.SHA, "", len(theoryFiles), theoryCommit.Message)
 
-	log.Printf("ref_bind: %s/%s done, %d subsequent commits in git (not scanned)",
-		owner, repo, len(commits)-1)
-
 	count := theorem_count(owner + "/" + repo)
-	result := fmt.Sprintf("%s/%s: %d commits %d theorems", owner, repo, len(commits), count)
+	remaining := len(commits) - theoryIdx - 1
+
+	if remaining <= 0 {
+		log.Printf("ref_bind: %s/%s all commits processed", owner, repo)
+		result := fmt.Sprintf("%s/%s: %d commits %d theorems", owner, repo, len(commits), count)
+		log.Printf("ref_bind: %s", result)
+		return result, nil
+	}
+
+	// fork a lightweight eval child: "is this theory sufficient for the task?"
+	// child sees: theory so far + remaining commit count + task
+	// child outputs: "sufficient" or "continue"
+	theory := theorem_get(owner+"/"+repo, "")
+	evalPrompt := fmt.Sprintf(
+		"[EVAL] you are evaluating whether the theory below is sufficient for the task.\n\n"+
+			"[THEORY so far — %d theorems from %s/%s commit %s]\n%s\n\n"+
+			"[REMAINING] %d more commits in this repo not yet scanned.\n\n"+
+			"[TASK] %s\n\n"+
+			"reply with EXACTLY one word on the first line:\n"+
+			"  sufficient — if the theory covers enough structure to write code\n"+
+			"  continue — if critical functionality is still missing and more commits should be scanned\n"+
+			"then on the second line, a one-sentence reason.\n",
+		count, owner, repo, short_sha(theoryCommit.SHA),
+		truncDiff(theory, 3000),
+		remaining,
+		strip_credentials(ref_theorize_task(pid)),
+	)
+
+	evalPid, evalErr := Fork(evalPrompt, ".")
+	if evalErr != nil {
+		log.Printf("ref_bind: %s/%s eval fork failed: %v, stopping", owner, repo, evalErr)
+	} else {
+		Wait(evalPid)
+		verdict := strings.TrimSpace(GetResult(evalPid))
+		firstLine := verdict
+		if idx := strings.Index(verdict, "\n"); idx > 0 {
+			firstLine = verdict[:idx]
+		}
+		firstLine = strings.ToLower(strings.TrimSpace(firstLine))
+
+		log.Printf("ref_bind: %s/%s eval verdict=%q (%d remaining)",
+			owner, repo, firstLine, remaining)
+
+		if strings.HasPrefix(firstLine, "continue") {
+			// push a new ref_bind step starting from the next commit
+			nextIdx := theoryIdx + 1
+			log.Printf("ref_bind: %s/%s pushing next batch from index %d", owner, repo, nextIdx)
+			pr_push_step(pid, &Step{
+				Kind:    STEP_REF_BIND,
+				Owner:   owner,
+				Repo:    repo,
+				Command: fmt.Sprintf("start=%d", nextIdx),
+			})
+			// also push corresponding dev_from_theorems after it
+			pr_push_step(pid, &Step{
+				Kind:  STEP_DEV_FROM_THEOREMS,
+				Owner: owner,
+				Repo:  repo,
+			})
+		}
+	}
+
+	result := fmt.Sprintf("%s/%s: %d commits %d theorems (%d remaining)",
+		owner, repo, len(commits), count, remaining)
 	log.Printf("ref_bind: %s", result)
 	return result, nil
 }
