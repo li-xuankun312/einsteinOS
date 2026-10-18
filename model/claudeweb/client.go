@@ -146,8 +146,17 @@ func (c *Client) Completion(convID string, req *CompletionRequest) (io.ReadClose
 
 			if isRateLimit(errStr) {
 				if isProxyThrottle(errStr) {
-					log.Printf("claudeweb: proxy throttle, waiting 2 minutes before retry")
-					time.Sleep(2 * time.Minute)
+					if waitDur := parseRetryAfter(errStr); waitDur > 0 {
+						if waitDur > 30*time.Minute {
+							log.Printf("claudeweb: proxy throttle, retry after %v — too long, returning error", waitDur)
+							return nil, &RateLimitError{Body: errStr, RetryAfter: waitDur}
+						}
+						log.Printf("claudeweb: proxy throttle, waiting %v (parsed from response)", waitDur)
+						time.Sleep(waitDur)
+					} else {
+						log.Printf("claudeweb: proxy throttle, waiting 2 minutes before retry")
+						time.Sleep(2 * time.Minute)
+					}
 					lastErr = &RateLimitError{Body: errStr}
 					continue
 				}
@@ -345,11 +354,39 @@ func truncBody(b []byte) string {
 }
 
 type RateLimitError struct {
-	Body string
+	Body       string
+	RetryAfter time.Duration
 }
 
 func (e *RateLimitError) Error() string {
+	if e.RetryAfter > 0 {
+		return fmt.Sprintf("rate limit: retry after %v", e.RetryAfter)
+	}
 	return "rate limit: " + truncBody([]byte(e.Body))
+}
+
+// parseRetryAfter: extract "请 2026-10-18 13:40:00 后重试" or "try again after 2026-10-18 13:40:00"
+// returns duration until that time, or 0 if not parseable.
+func parseRetryAfter(body string) time.Duration {
+	// look for YYYY-MM-DD HH:MM:SS pattern
+	for i := 0; i+18 < len(body); i++ {
+		if body[i] >= '2' && body[i] <= '2' && body[i+4] == '-' && body[i+7] == '-' && body[i+10] == ' ' && body[i+13] == ':' && body[i+16] == ':' {
+			ts := body[i : i+19]
+			// try parsing with Shanghai timezone (proxy is Chinese)
+			loc, _ := time.LoadLocation("Asia/Shanghai")
+			if loc == nil {
+				loc = time.FixedZone("CST", 8*3600)
+			}
+			t, err := time.ParseInLocation("2006-01-02 15:04:05", ts, loc)
+			if err == nil {
+				dur := time.Until(t)
+				if dur > 0 {
+					return dur
+				}
+			}
+		}
+	}
+	return 0
 }
 
 func isRateLimit(body string) bool {

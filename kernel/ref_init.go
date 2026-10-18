@@ -424,14 +424,11 @@ func dirSurveyChild(owner, name, sha string, heavy []string, light []lightFile, 
 		dirs[dir].lines += lf.lines
 	}
 
-	// build prompt with dir listing
+	// build a VERY short prompt — child must output exactly "keep=..." and nothing else
 	var prompt strings.Builder
-	prompt.WriteString(fmt.Sprintf("[TASK] %s\n\n", truncDiff(task, 500)))
-	prompt.WriteString(fmt.Sprintf("[DIR SURVEY] %s/%s commit %s — %d files total\n\n",
-		owner, name, sha[:12], len(allFiles)))
-	prompt.WriteString("directories:\n")
+	prompt.WriteString(fmt.Sprintf("%d directories in %s/%s. which have core algorithms?\n\n",
+		len(dirs), owner, name))
 
-	// sort dirs for stable output
 	var sortedDirs []string
 	for d := range dirs {
 		sortedDirs = append(sortedDirs, d)
@@ -440,14 +437,10 @@ func dirSurveyChild(owner, name, sha string, heavy []string, light []lightFile, 
 
 	for _, d := range sortedDirs {
 		s := dirs[d]
-		prompt.WriteString(fmt.Sprintf("  %-60s %3d files  %5d lines\n", d, s.files, s.lines))
+		prompt.WriteString(fmt.Sprintf("%s  %d files %d lines\n", d, s.files, s.lines))
 	}
 
-	prompt.WriteString("\nwhich directories contain the CORE architecture that needs mathematical specification?\n")
-	prompt.WriteString("skip: tests, benchmarks, examples, tools, build scripts, CI, docs, third-party vendored code.\n")
-	prompt.WriteString("keep: transport, protocol, memory management, scheduler, collective operations, kernels, core algorithms.\n\n")
-	prompt.WriteString("output EXACTLY one line: keep=dir1,dir2,dir3,...\n")
-	prompt.WriteString("list only the directories whose files should be theorized.\n")
+	prompt.WriteString("\nreply ONLY: keep=dir1,dir2,dir3\nskip tests, benchmarks, examples, docs, CI, vendored, build scripts.\n")
 
 	child, err := Fork(prompt.String(), ".")
 	if err != nil {
