@@ -213,8 +213,7 @@ func ref_discover(task string) []RefRepo {
 	prompt := fmt.Sprintf("[USER TASK]\n%s\n\n"+
 		"based on the task above, list %d relevant open-source "+
 		"reference repositories on github.\n"+
-		"reply with ONLY owner/name lines, one per line, nothing else.\n"+
-		"example:\nNVIDIA/nccl\nkvcache-ai/Mooncake\n",
+		"reply with ONLY owner/name lines, one per line, nothing else.\n",
 		truncDiff(task, 3000), need)
 
 	var tried int
@@ -241,7 +240,7 @@ func ref_discover(task string) []RefRepo {
 				"your previous response did not contain valid owner/name pairs.\n"+
 					"the task is:\n%s\n\n"+
 					"reply with ONLY lines like: owner/name\n"+
-					"example:\nNVIDIA/nccl\n", truncDiff(task, 2000))
+					"one per line, nothing else.\n", truncDiff(task, 2000))
 			continue
 		}
 
