@@ -95,18 +95,29 @@ func ref_clone(owner, name string) {
 const MAX_REFS = 3
 
 var (
-	dev_repos    = make(map[string]bool)
+	dev_repos    = make(map[string]string) // key=owner/name, value=branch (empty="main")
 	dev_repos_mu sync.Mutex
 )
 
-func RegisterDevRepo(owner, name string) {
+func RegisterDevRepo(owner, name, branch string) {
 	dev_repos_mu.Lock()
-	dev_repos[owner+"/"+name] = true
+	dev_repos[owner+"/"+name] = branch
 	dev_repos_mu.Unlock()
-	log.Printf("ref_init: registered dev repo %s/%s", owner, name)
+	if branch != "" {
+		log.Printf("ref_init: registered dev repo %s/%s branch=%s", owner, name, branch)
+	} else {
+		log.Printf("ref_init: registered dev repo %s/%s", owner, name)
+	}
 }
 
 func is_dev_repo(owner, name string) bool {
+	dev_repos_mu.Lock()
+	defer dev_repos_mu.Unlock()
+	_, ok := dev_repos[owner+"/"+name]
+	return ok
+}
+
+func DevRepoBranch(owner, name string) string {
 	dev_repos_mu.Lock()
 	defer dev_repos_mu.Unlock()
 	return dev_repos[owner+"/"+name]
@@ -137,12 +148,9 @@ func detect_dev_repos(task string) {
 	}
 
 	prompt := fmt.Sprintf(
-		"[TASK] identify which repo below is the DEVELOPMENT TARGET (where new code will be written),\n"+
-			"and which are REFERENCE repos (to learn from).\n\n"+
-			"repos mentioned:\n%s\n"+
-			"user's request:\n%s\n\n"+
-			"reply with EXACTLY one line: dev=owner/name\n"+
-			"pick the repo that the user wants to BUILD or DEVELOP, not the one they want to STUDY.\n",
+		"repos mentioned:\n%s\nuser request:\n%s\n\n"+
+			"reply ONLY two lines:\ndev=owner/name\nbranch=branch_name\n"+
+			"dev = the repo to BUILD. branch = target branch mentioned by user (or main if not mentioned).\n",
 		repoList.String(), truncDiff(task, 1000),
 	)
 
@@ -154,17 +162,23 @@ func detect_dev_repos(task string) {
 	Wait(child)
 	result := strings.TrimSpace(GetResult(child))
 
-	// parse "dev=owner/name"
+	var devOwner, devName, devBranch string
 	for _, line := range strings.Split(result, "\n") {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "dev=") {
 			key := strings.TrimPrefix(line, "dev=")
 			parts := strings.SplitN(key, "/", 2)
 			if len(parts) == 2 {
-				RegisterDevRepo(parts[0], parts[1])
-				return
+				devOwner = parts[0]
+				devName = parts[1]
 			}
+		} else if strings.HasPrefix(line, "branch=") {
+			devBranch = strings.TrimPrefix(line, "branch=")
 		}
+	}
+	if devOwner != "" && devName != "" {
+		RegisterDevRepo(devOwner, devName, devBranch)
+		return
 	}
 	log.Printf("detect_dev_repos: child did not identify dev repo, result=%q", result)
 }

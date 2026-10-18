@@ -10,7 +10,7 @@ import (
 type SyncDriver struct {
 	Engine          *Engine
 	ProjectDB       **ProjectDB
-	RegisterDevRepo func(string, string)
+	RegisterDevRepo func(string, string, string)
 	Token     string
 	Roots     map[string]string
 }
@@ -54,7 +54,7 @@ func (d *SyncDriver) Execute(name string, inputJSON string, workDir string) stri
 	}
 
 	if d.RegisterDevRepo != nil {
-		d.RegisterDevRepo(parts[0], parts[1])
+		d.RegisterDevRepo(parts[0], parts[1], "")
 	}
 
 	summary := (*d.ProjectDB).ProjectSummary(input.Repo)

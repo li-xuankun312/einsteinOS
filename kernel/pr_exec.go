@@ -699,15 +699,21 @@ func open_pr(pid int64, step *Step) (string, error) {
 
 	log.Printf("open_pr: %s verify pass, preparing clean PR", repo)
 
+	// get target branch from dev repo registration (user said "分支是 infccl-0.1")
+	baseBranch := DevRepoBranch(step.Owner, step.Repo)
+	if baseBranch == "" {
+		baseBranch = "main"
+	}
+
 	// step 2: fresh clone → copy new code → single commit → push
-	branch := fmt.Sprintf("einsteinOS/infccl-%d", pid)
+	branch := fmt.Sprintf("einsteinOS/%s-%d", baseBranch, pid)
 	prDir := fmt.Sprintf("/tmp/pr_%s_%d", step.Repo, pid)
 
 	script := fmt.Sprintf(`set -e
 rm -rf %s
 git clone https://$(cat /tmp/.gh_token 2>/dev/null)@github.com/%s/%s.git %s
 cd %s
-git checkout infccl-0.1 2>/dev/null || git checkout -b infccl-0.1
+git checkout %s 2>/dev/null || git checkout -b %s
 git checkout -b %s
 
 # copy new code from dev repo, overwrite
@@ -715,11 +721,12 @@ rsync -a --exclude='.git' %s/ %s/
 
 git add -A
 git diff --cached --stat
-git commit -m "feat(infccl): %s"
+git commit -m "feat: %s"
 git push origin %s 2>&1`,
 		prDir,
 		step.Owner, step.Repo, prDir,
 		prDir,
+		baseBranch, baseBranch,
 		branch,
 		devRepo, prDir,
 		tokS,
@@ -738,14 +745,14 @@ git push origin %s 2>&1`,
 		-H "Accept: application/vnd.github.v3+json" \
 		"https://api.github.com/repos/%s/%s/pulls" \
 		-d '{
-			"title": "feat(infccl): %s",
+			"title": "feat: %s",
 			"body": "einsteinOS pipeline pid=%d\n%s",
 			"head": "%s",
-			"base": "infccl-0.1"
+			"base": "%s"
 		}' 2>&1`,
 		step.Owner, step.Repo,
 		tokS, pid, tokS,
-		branch)
+		branch, baseBranch)
 
 	prPid, err := ForkExec(prScript, ".")
 	if err != nil {
@@ -755,11 +762,10 @@ git push origin %s 2>&1`,
 	_, _, _ = Wait(prPid)
 	prResult := GetResult(prPid)
 
-	// cleanup
 	ForkExec(fmt.Sprintf("rm -rf %s", prDir), "/tmp")
 
-	log.Printf("open_pr: %s PR opened %s → infccl-0.1", repo, branch)
-	return fmt.Sprintf("PR: %s → infccl-0.1\n%s\n%s", branch, pushResult, prResult), nil
+	log.Printf("open_pr: %s PR opened %s → %s", repo, branch, baseBranch)
+	return fmt.Sprintf("PR: %s → %s\n%s\n%s", branch, baseBranch, pushResult, prResult), nil
 }
 
 // dev_fix: kernel-driven fix step. Step fields carry structured args:
@@ -1281,7 +1287,7 @@ do NOT guess at source structure you haven't seen — ask the kernel for it.
 
 GIT: you may git add, commit, and push to a TEMP branch only.
 use branch name: einsteinOS/auto-{your conv id or any unique suffix}
-do NOT push to main, infccl-0.1, or any target branch directly.
+do NOT push to main or the target branch directly.
 the kernel will open a PR from your temp branch after verification.
 
 VERIFICATION STEPS:
