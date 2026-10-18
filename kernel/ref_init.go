@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -319,13 +320,28 @@ func ref_theorize(parent int64, owner, name, sha, diff string, nfiles int, msg s
 	// step 1: kernel does static survey (wc -l + extensions)
 	heavy, light := fileSurvey(owner, name, sha, files)
 
-	// step 2: fork a lightweight survey child to refine classification
+	// step 2a: if too many files, fork a dir-level survey child first.
+	// child sees directory tree + file counts per dir, decides which dirs
+	// are core (keep) vs peripheral (skip: tests, benchmarks, examples, tools, docs).
+	// child decides — no hardcoded dir names in kernel.
+	totalFiles := len(heavy) + len(light)
+	if totalFiles > 200 {
+		kept := dirSurveyChild(owner, name, sha, heavy, light, task)
+		if kept != nil {
+			heavy = kept.heavy
+			light = kept.light
+			log.Printf("ref_theorize: dir survey pruned → %d heavy, %d light (from %d total)",
+				len(heavy), len(kept.light), totalFiles)
+		}
+	}
+
+	// step 2b: fork a lightweight survey child to refine file-level classification
 	// child sees file listing + first 10 lines of each, outputs heavy=/light= lines
 	surveyResult := fileSurveyChild(owner, name, sha, heavy, light, task)
 	if surveyResult != nil {
 		heavy = surveyResult.heavy
 		light = surveyResult.light
-		log.Printf("ref_theorize: survey child refined → %d heavy, %d light",
+		log.Printf("ref_theorize: file survey refined → %d heavy, %d light",
 			len(heavy), len(surveyResult.light))
 	}
 
@@ -358,6 +374,136 @@ func ref_theorize(parent int64, owner, name, sha, diff string, nfiles int, msg s
 type surveyOutput struct {
 	heavy []string
 	light []lightFile
+}
+
+// dirSurveyChild: when a commit has >200 files, fork a child to prune at directory level.
+// child sees: directory tree with file counts and total lines per dir.
+// child outputs: keep=dir1,dir2,dir3 (dirs whose files need theorizing)
+// everything NOT in a keep dir becomes light.
+func dirSurveyChild(owner, name, sha string, heavy []string, light []lightFile, task string) *surveyOutput {
+	// build dir → file count + total lines
+	type dirStat struct {
+		files int
+		lines int
+	}
+	dirs := make(map[string]*dirStat)
+
+	allFiles := make(map[string]int) // path → lines
+	for _, f := range heavy {
+		content, err := RefFileAt(owner, name, sha, f)
+		lines := 0
+		if err == nil {
+			lines = strings.Count(content, "\n") + 1
+		}
+		allFiles[f] = lines
+
+		dir := f
+		if idx := strings.LastIndex(f, "/"); idx >= 0 {
+			dir = f[:idx]
+		} else {
+			dir = "."
+		}
+		if dirs[dir] == nil {
+			dirs[dir] = &dirStat{}
+		}
+		dirs[dir].files++
+		dirs[dir].lines += lines
+	}
+	for _, lf := range light {
+		allFiles[lf.path] = lf.lines
+		dir := lf.path
+		if idx := strings.LastIndex(lf.path, "/"); idx >= 0 {
+			dir = lf.path[:idx]
+		} else {
+			dir = "."
+		}
+		if dirs[dir] == nil {
+			dirs[dir] = &dirStat{}
+		}
+		dirs[dir].files++
+		dirs[dir].lines += lf.lines
+	}
+
+	// build prompt with dir listing
+	var prompt strings.Builder
+	prompt.WriteString(fmt.Sprintf("[TASK] %s\n\n", truncDiff(task, 500)))
+	prompt.WriteString(fmt.Sprintf("[DIR SURVEY] %s/%s commit %s — %d files total\n\n",
+		owner, name, sha[:12], len(allFiles)))
+	prompt.WriteString("directories:\n")
+
+	// sort dirs for stable output
+	var sortedDirs []string
+	for d := range dirs {
+		sortedDirs = append(sortedDirs, d)
+	}
+	sort.Strings(sortedDirs)
+
+	for _, d := range sortedDirs {
+		s := dirs[d]
+		prompt.WriteString(fmt.Sprintf("  %-60s %3d files  %5d lines\n", d, s.files, s.lines))
+	}
+
+	prompt.WriteString("\nwhich directories contain the CORE architecture that needs mathematical specification?\n")
+	prompt.WriteString("skip: tests, benchmarks, examples, tools, build scripts, CI, docs, third-party vendored code.\n")
+	prompt.WriteString("keep: transport, protocol, memory management, scheduler, collective operations, kernels, core algorithms.\n\n")
+	prompt.WriteString("output EXACTLY one line: keep=dir1,dir2,dir3,...\n")
+	prompt.WriteString("list only the directories whose files should be theorized.\n")
+
+	child, err := Fork(prompt.String(), ".")
+	if err != nil {
+		log.Printf("dirSurveyChild: fork failed: %v", err)
+		return nil
+	}
+	Wait(child)
+
+	stdout := GetResult(child)
+	log.Printf("dirSurveyChild: child returned %d bytes", len(stdout))
+
+	// parse keep= line
+	var keepDirs []string
+	for _, line := range strings.Split(stdout, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "keep=") {
+			for _, d := range strings.Split(line[5:], ",") {
+				d = strings.TrimSpace(d)
+				if d != "" {
+					keepDirs = append(keepDirs, d)
+				}
+			}
+		}
+	}
+
+	if len(keepDirs) == 0 {
+		log.Printf("dirSurveyChild: no keep dirs parsed, skipping prune")
+		return nil
+	}
+
+	log.Printf("dirSurveyChild: keeping %d dirs: %v", len(keepDirs), keepDirs)
+
+	// filter: files in keep dirs stay heavy, rest become light
+	isKept := func(path string) bool {
+		for _, d := range keepDirs {
+			if strings.HasPrefix(path, d+"/") || path == d || d == "." {
+				return true
+			}
+		}
+		return false
+	}
+
+	var newHeavy []string
+	var newLight []lightFile
+	for _, f := range heavy {
+		if isKept(f) {
+			newHeavy = append(newHeavy, f)
+		} else {
+			newLight = append(newLight, lightFile{f, allFiles[f]})
+		}
+	}
+	for _, lf := range light {
+		newLight = append(newLight, lf) // already light, stays light
+	}
+
+	return &surveyOutput{heavy: newHeavy, light: newLight}
 }
 
 // fileSurveyChild: fork a child that sees the file listing + first 10 lines
