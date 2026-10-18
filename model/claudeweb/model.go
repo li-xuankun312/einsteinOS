@@ -265,12 +265,8 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 					webReq.ThinkingMode = "extended"
 					continue
 				}
-				if rle.RetryAfter > 30*time.Minute {
-					doExit(exitError, fmt.Sprintf("[Rate Limit] both medium and high exhausted, retry after %v", rle.RetryAfter))
-					return
-				}
 				if rle.RetryAfter > 0 {
-					log.Printf("claudeweb: rate limit on effort=high, waiting %v (parsed)", rle.RetryAfter)
+					log.Printf("claudeweb: rate limit on effort=high, sleeping %v until quota resets", rle.RetryAfter)
 					time.Sleep(rle.RetryAfter)
 					continue
 				}

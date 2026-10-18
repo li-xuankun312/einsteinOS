@@ -147,11 +147,7 @@ func (c *Client) Completion(convID string, req *CompletionRequest) (io.ReadClose
 			if isRateLimit(errStr) {
 				if isProxyThrottle(errStr) {
 					if waitDur := parseRetryAfter(errStr); waitDur > 0 {
-						if waitDur > 30*time.Minute {
-							log.Printf("claudeweb: proxy throttle, retry after %v — too long, returning error", waitDur)
-							return nil, &RateLimitError{Body: errStr, RetryAfter: waitDur}
-						}
-						log.Printf("claudeweb: proxy throttle, waiting %v (parsed from response)", waitDur)
+						log.Printf("claudeweb: proxy throttle, sleeping %v until quota resets", waitDur)
 						time.Sleep(waitDur)
 					} else {
 						log.Printf("claudeweb: proxy throttle, waiting 2 minutes before retry")
