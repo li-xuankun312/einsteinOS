@@ -294,6 +294,7 @@ func extractRepoMentions(text string) []RefRepo {
 				if len(parts) >= 2 && parts[0] != "" && parts[1] != "" {
 					owner := parts[0]
 					name := strings.TrimRight(parts[1], ".,;:!?\u3002\uff0c\u3001\uff1b\uff1a\uff01\uff1f")
+					name = strings.TrimSuffix(name, ".git")
 					if !skip[name] {
 						key := owner + "/" + name
 						if !seen[key] && len(owner) > 1 && len(name) > 1 {
