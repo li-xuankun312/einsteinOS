@@ -659,53 +659,107 @@ func vllm_bench(pid int64, step *Step) (string, error) {
 	return stdout, nil
 }
 
-// open_pr: child already pushed to a temp branch. kernel finds it and opens PR.
-// follows ef92bb70: child writes however it wants, kernel downloads/routes the result.
-// Step.Command = "tok_s=42.3" (benchmark result for PR body)
+// open_pr: three steps, all kernel-driven.
+//   1. fork verify child: re-run numeric checks, output pass/fail
+//   2. if pass: fresh clone, copy new code in, single squashed commit, push
+//   3. open PR via GitHub API
+//
+// follows ef92bb70: child does the judgment, kernel routes.
+// Step.Command = "tok_s=42.3"
 func open_pr(pid int64, step *Step) (string, error) {
 	repo := step.Owner + "/" + step.Repo
 	tokS := step.Command
-
-	// find the temp branch child pushed to
 	devRepo := fmt.Sprintf("/home/claude/%s", step.Repo)
-	findBranch := fmt.Sprintf(`cd %s && git branch -r --sort=-committerdate | grep -i 'einsteinOS\|auto' | head -1 | sed 's|origin/||;s/^[ ]*//'`,
-		devRepo)
 
-	branchPid, err := ForkExec(findBranch, devRepo)
+	// step 1: fork a verify child — re-check the numbers are real
+	verifyPrompt := fmt.Sprintf(
+		"[TASK] verify the build in %s is working.\n"+
+			"run: cd %s && make so 2>&1 | tail -5\n"+
+			"run: ls -la %s/build/*.so 2>/dev/null\n"+
+			"check the .so exists and was built recently.\n\n"+
+			"[OUTPUT FORMAT]\n"+
+			"verify=pass|fail\n"+
+			"verify_error=<one line if fail>\n",
+		devRepo, devRepo, devRepo,
+	)
+
+	verifyChild, err := Fork(verifyPrompt, ".")
 	if err != nil {
-		return "", fmt.Errorf("open_pr: find branch failed: %w", err)
+		return "", fmt.Errorf("open_pr: verify fork failed: %w", err)
 	}
-	_, _, _ = Wait(branchPid)
-	branch := strings.TrimSpace(GetResult(branchPid))
+	Wait(verifyChild)
+	verifyResult := GetResult(verifyChild)
+	verifyStatus := parse_last_status(verifyResult)
 
-	if branch == "" {
-		log.Printf("open_pr: %s no temp branch found, child may not have pushed", repo)
-		return "no temp branch found", fmt.Errorf("open_pr: no temp branch")
+	if verifyStatus != nil && verifyStatus["verify"] != "pass" {
+		errMsg := verifyStatus["verify_error"]
+		log.Printf("open_pr: %s verify failed: %s", repo, errMsg)
+		return verifyResult, fmt.Errorf("open_pr: verify failed: %s", errMsg)
 	}
 
-	// open PR via GitHub API
+	log.Printf("open_pr: %s verify pass, preparing clean PR", repo)
+
+	// step 2: fresh clone → copy new code → single commit → push
+	branch := fmt.Sprintf("einsteinOS/infccl-%d", pid)
+	prDir := fmt.Sprintf("/tmp/pr_%s_%d", step.Repo, pid)
+
+	script := fmt.Sprintf(`set -e
+rm -rf %s
+git clone https://$(cat /tmp/.gh_token 2>/dev/null)@github.com/%s/%s.git %s
+cd %s
+git checkout infccl-0.1 2>/dev/null || git checkout -b infccl-0.1
+git checkout -b %s
+
+# copy new code from dev repo, overwrite
+rsync -a --exclude='.git' %s/ %s/
+
+git add -A
+git diff --cached --stat
+git commit -m "feat(infccl): %s"
+git push origin %s 2>&1`,
+		prDir,
+		step.Owner, step.Repo, prDir,
+		prDir,
+		branch,
+		devRepo, prDir,
+		tokS,
+		branch)
+
+	pushPid, err := ForkExec(script, "/tmp")
+	if err != nil {
+		return "", fmt.Errorf("open_pr: push failed: %w", err)
+	}
+	_, _, _ = Wait(pushPid)
+	pushResult := GetResult(pushPid)
+
+	// step 3: open PR via GitHub API
 	prScript := fmt.Sprintf(`curl -s -X POST \
 		-H "Authorization: token $(cat /tmp/.gh_token 2>/dev/null)" \
 		-H "Accept: application/vnd.github.v3+json" \
 		"https://api.github.com/repos/%s/%s/pulls" \
 		-d '{
-			"title": "feat(infccl): einsteinOS pipeline — %s",
-			"body": "## einsteinOS Pipeline Result\n\n%s\n\npid=%d\nReview before merging.",
+			"title": "feat(infccl): %s",
+			"body": "einsteinOS pipeline pid=%d\n%s",
 			"head": "%s",
 			"base": "infccl-0.1"
 		}' 2>&1`,
-		step.Owner, step.Repo, tokS, tokS, pid, branch)
+		step.Owner, step.Repo,
+		tokS, pid, tokS,
+		branch)
 
 	prPid, err := ForkExec(prScript, ".")
 	if err != nil {
-		log.Printf("open_pr: PR API call failed: %v, branch %s exists", err, branch)
-		return branch, nil
+		log.Printf("open_pr: PR API failed but branch %s pushed: %v", branch, err)
+		return pushResult, nil
 	}
 	_, _, _ = Wait(prPid)
 	prResult := GetResult(prPid)
 
-	log.Printf("open_pr: %s PR opened from %s → infccl-0.1", repo, branch)
-	return fmt.Sprintf("PR opened: %s → infccl-0.1\n%s", branch, prResult), nil
+	// cleanup
+	ForkExec(fmt.Sprintf("rm -rf %s", prDir), "/tmp")
+
+	log.Printf("open_pr: %s PR opened %s → infccl-0.1", repo, branch)
+	return fmt.Sprintf("PR: %s → infccl-0.1\n%s\n%s", branch, pushResult, prResult), nil
 }
 
 // dev_fix: kernel-driven fix step. Step fields carry structured args:
