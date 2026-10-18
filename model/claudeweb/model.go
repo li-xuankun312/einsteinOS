@@ -267,7 +267,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 				}
 				if rle.RetryAfter > 0 {
 					log.Printf("claudeweb: rate limit on effort=high, sleeping %v until quota resets", rle.RetryAfter)
-					time.Sleep(rle.RetryAfter)
+					sleepWithHeartbeat(rle.RetryAfter)
 					continue
 				}
 				log.Printf("claudeweb: rate limit on effort=high, waiting 3 minutes")
@@ -710,4 +710,25 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "..."
+}
+
+// sleepWithHeartbeat: sleep for duration but print a log line every 2 minutes.
+// keeps SSH alive and lets the user know the process isn't dead.
+func sleepWithHeartbeat(d time.Duration) {
+	deadline := time.Now().Add(d)
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return
+		}
+		chunk := 2 * time.Minute
+		if remaining < chunk {
+			chunk = remaining
+		}
+		time.Sleep(chunk)
+		remaining = time.Until(deadline)
+		if remaining > 0 {
+			log.Printf("claudeweb: rate limit wait, %v remaining", remaining.Truncate(time.Second))
+		}
+	}
 }
