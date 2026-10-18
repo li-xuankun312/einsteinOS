@@ -255,7 +255,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 
 		body, err := m.client.Completion(convID, webReq)
 		if err != nil {
-			if _, ok := err.(*RateLimitError); ok {
+			if rle, ok := err.(*RateLimitError); ok {
 				if m.effort != "high" {
 					log.Printf("claudeweb: rate limit on effort=%s, escalating to high+thinking", m.effort)
 					m.mu.Lock()
@@ -263,6 +263,15 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 					m.mu.Unlock()
 					webReq.Effort = "high"
 					webReq.ThinkingMode = "extended"
+					continue
+				}
+				if rle.RetryAfter > 30*time.Minute {
+					doExit(exitError, fmt.Sprintf("[Rate Limit] both medium and high exhausted, retry after %v", rle.RetryAfter))
+					return
+				}
+				if rle.RetryAfter > 0 {
+					log.Printf("claudeweb: rate limit on effort=high, waiting %v (parsed)", rle.RetryAfter)
+					time.Sleep(rle.RetryAfter)
 					continue
 				}
 				log.Printf("claudeweb: rate limit on effort=high, waiting 3 minutes")
