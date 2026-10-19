@@ -416,6 +416,63 @@ func ref_bind_cursor(pid int64, owner, repo string) int {
 	return best
 }
 
+// dev_split_theory splits the merged theory blob into discrete units.
+// splits on "## FILE" / "=== " / "### " section headers.
+// each unit is one conceptual piece (one file's LAYER 1+2, or one function group).
+func dev_split_theory(theory string) []string {
+	lines := strings.Split(theory, "\n")
+	var units []string
+	var cur strings.Builder
+
+	flush := func() {
+		s := strings.TrimSpace(cur.String())
+		if len(s) > 100 { // skip trivially empty chunks
+			units = append(units, s)
+		}
+		cur.Reset()
+	}
+
+	for _, line := range lines {
+		isHeader := strings.HasPrefix(line, "## FILE") ||
+			strings.HasPrefix(line, "=== ") ||
+			(strings.HasPrefix(line, "### ") && cur.Len() > 500)
+		if isHeader && cur.Len() > 0 {
+			flush()
+		}
+		cur.WriteString(line)
+		cur.WriteString("\n")
+	}
+	flush()
+
+	// if no clear headers found, split by size (~3000 bytes per unit)
+	if len(units) <= 1 && len(theory) > 5000 {
+		units = nil
+		cur.Reset()
+		for _, line := range lines {
+			cur.WriteString(line)
+			cur.WriteString("\n")
+			if cur.Len() > 3000 {
+				// try to split at a blank line
+				s := cur.String()
+				last := strings.LastIndex(s, "\n\n")
+				if last > 1000 {
+					units = append(units, strings.TrimSpace(s[:last]))
+					cur.Reset()
+					cur.WriteString(s[last+2:])
+				} else {
+					flush()
+				}
+			}
+		}
+		flush()
+	}
+
+	if len(units) == 0 {
+		units = []string{theory}
+	}
+	return units
+}
+
 func dev_from_theorems(pid int64, step *Step) (string, error) {
 	repo := step.Owner + "/" + step.Repo
 
@@ -433,82 +490,140 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 		hw_info = pr.HWInfo
 	}
 
-	// extract GitHub token from original task and write to file for child
 	if pr != nil {
 		writeGHToken(pr.Title)
 	}
 
-	log.Printf("dev_from_theorems: %s (theory only, no source), gpu_all=%s gpu_usable=%s",
-		repo, gpuAll, gpuUsable)
+	units := dev_split_theory(theory)
+	log.Printf("dev_from_theorems: %s %d theory units, total %d bytes, gpu_all=%s gpu_usable=%s",
+		repo, len(units), len(theory), gpuAll, gpuUsable)
 
-	var p1 strings.Builder
-	if hw_info != "" {
-		p1.WriteString("[HARDWARE]\n")
-		p1.WriteString(hw_info)
-		p1.WriteString("\n\n")
-	}
-	p1.WriteString(fmt.Sprintf("[THEORY from %s — LAYER 1 (math) + LAYER 2 (form template)]\n", repo))
-	p1.WriteString(theory)
-	p1.WriteString("\n\n[TASK]\n")
-	p1.WriteString(task)
+	// shared branch for all incremental children
+	branch := fmt.Sprintf("einsteinOS/dev-%d", pid)
 
 	devRepos := GetDevRepos()
+	var devRepoBlock string
 	if len(devRepos) > 0 {
-		p1.WriteString("\n\n[DEV REPO]\n")
+		var drb strings.Builder
+		drb.WriteString("[DEV REPO]\n")
 		for _, dr := range devRepos {
 			parts := strings.Split(dr, "/")
-			p1.WriteString(fmt.Sprintf("  %s → /home/claude/%s/\n", dr, parts[len(parts)-1]))
+			drb.WriteString(fmt.Sprintf("  %s → /home/claude/%s/\n", dr, parts[len(parts)-1]))
 		}
+		devRepoBlock = drb.String()
 	}
 
-	p1.WriteString(fmt.Sprintf(dev_draft_instruction, gpuAll, gpuUsable, gpuUsable))
+	var lastStdout string
+	var lastStatus map[string]string
 
-	feedback := pr_feedback(pid)
-	if feedback != "" {
-		p1.WriteString(fmt.Sprintf("\n\n[PRIOR FEEDBACK]\n%s", feedback))
+	for i, unit := range units {
+		var p strings.Builder
+
+		if hw_info != "" {
+			p.WriteString("[HARDWARE]\n")
+			p.WriteString(hw_info)
+			p.WriteString("\n\n")
+		}
+
+		// accumulated theories: all up to and including this unit
+		// but only current unit in full — prior units as one-line summaries
+		// to avoid context bloat
+		if i > 0 {
+			p.WriteString(fmt.Sprintf("[PRIOR THEORIES 1..%d — already implemented on branch %s]\n", i, branch))
+			for j := 0; j < i; j++ {
+				// first line of each prior unit as a summary
+				first := units[j]
+				if idx := strings.Index(first, "\n"); idx > 0 {
+					first = first[:idx]
+				}
+				if len(first) > 120 {
+					first = first[:120]
+				}
+				p.WriteString(fmt.Sprintf("  %d. %s\n", j+1, first))
+			}
+			p.WriteString("\n")
+		}
+
+		p.WriteString(fmt.Sprintf("[THEORY %d/%d — your task: implement THIS unit]\n", i+1, len(units)))
+		p.WriteString(unit)
+		p.WriteString("\n\n")
+
+		if i > 0 {
+			// tell child to read existing code from the branch
+			p.WriteString(fmt.Sprintf("[EXISTING CODE]\n"+
+				"branch %s has code from prior units. read it:\n"+
+				"  cd /home/claude/<repo> && git fetch origin && git checkout %s\n"+
+				"  find . -name '*.cu' -o -name '*.hpp' -o -name '*.h' -o -name '*.cpp' | head -50\n"+
+				"do NOT rewrite existing files unless theory %d requires changing them.\n"+
+				"ADD your new code, then compile the WHOLE project.\n\n",
+				branch, branch, i+1))
+		}
+
+		p.WriteString(fmt.Sprintf("[TASK]\n%s\n\n", task))
+
+		if devRepoBlock != "" {
+			p.WriteString(devRepoBlock)
+			p.WriteString("\n")
+		}
+
+		// use the incremental instruction (shared branch, not own branch)
+		p.WriteString(fmt.Sprintf(dev_incremental_instruction, branch, gpuAll, gpuUsable, gpuUsable, i+1, len(units)))
+
+		feedback := pr_feedback(pid)
+		if feedback != "" {
+			p.WriteString(fmt.Sprintf("\n\n[PRIOR FEEDBACK]\n%s", feedback))
+		}
+
+		log.Printf("dev_from_theorems: %s unit %d/%d forking (prompt %d bytes)",
+			repo, i+1, len(units), p.Len())
+
+		child, err := Fork(p.String(), ".")
+		if err != nil {
+			return lastStdout, fmt.Errorf("dev_from_theorems: unit %d fork: %w", i+1, err)
+		}
+		if m := getMeta(child); m != nil && m.ConvID != "" {
+			RegisterConv(pid, m.ConvID, repo, fmt.Sprintf("dev_unit_%d", i+1), i+1)
+		}
+		Wait(child)
+		step.ChildPid = child
+
+		lastStdout, lastStatus = dev_collect_child(child, repo)
+
+		dev_update_gpu(pid, lastStatus, gpuAll, gpuUsable)
+		PRFeedbackAdd(pid, fmt.Sprintf("- dev[%s] unit %d/%d: compile=%s smoke=%s",
+			repo, i+1, len(units), lastStatus["compile"], lastStatus["smoke"]))
+
+		if lastStatus["compile"] != "pass" || lastStatus["smoke"] != "pass" {
+			log.Printf("dev_from_theorems: %s unit %d/%d failed, pushing fix", repo, i+1, len(units))
+			dev_push_fix(pid, step.Owner, step.Repo, lastStatus, i+1)
+			// remaining units become new dev_thms steps to resume later
+			if i+1 < len(units) {
+				log.Printf("dev_from_theorems: %s %d units remaining after fix",
+					repo, len(units)-i-1)
+			}
+			return lastStdout, nil
+		}
+
+		log.Printf("dev_from_theorems: %s unit %d/%d pass, branch %s updated",
+			repo, i+1, len(units), branch)
 	}
 
-	// single attempt — kernel decides what comes next
-	child1, err := Fork(p1.String(), ".")
-	if err != nil {
-		return "", err
-	}
-	if m := getMeta(child1); m != nil && m.ConvID != "" {
-		RegisterConv(pid, m.ConvID, repo, "dev_draft", 1)
-	}
-	Wait(child1)
-	step.ChildPid = child1
-
-	stdout1, status1 := dev_collect_child(child1, repo)
-
-	// kernel absorbs observations
-	dev_update_gpu(pid, status1, gpuAll, gpuUsable)
-	for k, v := range status1 {
-		PRFeedbackAdd(pid, fmt.Sprintf("- dev[%s]: %s=%s", repo, k, v))
-	}
-
-	// compile or smoke failed → fix loop
-	if status1["compile"] != "pass" || status1["smoke"] != "pass" {
-		dev_push_fix(pid, step.Owner, step.Repo, status1, 1)
-		return stdout1, nil
-	}
-
-	// compile + smoke passed → push vllm benchmark steps
-	log.Printf("dev_from_theorems: %s compile+smoke pass, pushing vllm benchmark", repo)
+	// all units passed → push vllm benchmark
+	log.Printf("dev_from_theorems: %s all %d units pass, pushing vllm benchmark", repo, len(units))
 
 	_, gpuUsable = pr_gpu_args(pid)
 	pr_push_step(pid, &Step{
 		Kind:    STEP_VLLM_UP,
 		Owner:   step.Owner,
 		Repo:    step.Repo,
-		Command: gpuUsable, // which GPUs to use
+		Command: gpuUsable,
 	})
 	pr_push_step(pid, &Step{
 		Kind:  STEP_VLLM_BENCH,
 		Owner: step.Owner,
 		Repo:  step.Repo,
 	})
-	return stdout1, nil
+	return lastStdout, nil
 }
 
 
@@ -1307,6 +1422,50 @@ VERIFICATION STEPS:
 3. compile — if fail after 2 tries, set needs_source=true with the files you need
 4. if compile passes, test GPU P2P on all pairs
 5. smoke test end to end
+`
+
+const dev_incremental_instruction = `
+
+[INCREMENTAL BUILD — unit %[5]d of %[6]d]
+you are building ONE unit of a multi-unit project. each unit is a NEW conversation.
+the shared branch is: %[1]s
+
+[GPU CONFIGURATION]
+all GPUs on this machine: %[2]s
+usable GPUs: %[3]s
+CUDA_VISIBLE_DEVICES=%[4]s
+
+[WHAT YOU HAVE]
+- the THEORY for your unit above (LAYER 1 math + LAYER 2 form templates)
+- if unit > 1: prior code already on the branch — git checkout and READ it first
+- you do NOT have the original source code. this is intentional.
+
+[RULES]
+1. if this is unit 1: clone the dev repo, create branch %[1]s, start coding
+2. if this is unit > 1: git fetch && git checkout %[1]s, read existing code, then ADD your unit
+3. do NOT rewrite code from prior units unless your theory REQUIRES changing it
+4. compile the WHOLE project after adding your code
+5. push to branch %[1]s (NOT main)
+
+for git auth: TOKEN=$(cat /tmp/.gh_token 2>/dev/null)
+  git push https://${TOKEN}@github.com/OWNER/REPO.git %[1]s
+
+[THEORY → CODE]
+LAYER 2 form templates use placeholder identifiers:
+  prjname, adj, Obj, typenameType, objtype, argname
+fill them with YOUR project's names. you are creating NEW code, not copying.
+the math in LAYER 1 defines WHAT the code must do. HOW you implement it
+(data structures, control flow, error handling) is YOUR choice for YOUR hardware.
+
+[OUTPUT FORMAT]
+write code, compile, test. then output:
+
+compile=pass|fail
+compile_error=<one line if fail>
+smoke=pass|fail
+smoke_error=<one line if fail>
+files_written=<comma-separated paths you added or changed>
+unit=%[5]d
 `
 
 const dev_verify_instruction = `
