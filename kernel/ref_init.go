@@ -92,24 +92,6 @@ func ref_clone(owner, name string) {
 	}
 }
 
-func ref_clone_shallow(owner, name string) {
-	dir := fmt.Sprintf("/tmp/ref_%s_%s.git", owner, name)
-	// remove failed clone attempt
-	os.RemoveAll(dir)
-	url := fmt.Sprintf("https://github.com/%s/%s.git", owner, name)
-	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", "clone", "--bare", "--depth", "1", url, dir)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		log.Printf("ref_clone_shallow: %s/%s failed: %v\n%s", owner, name, err, string(out))
-		return
-	}
-	log.Printf("ref_clone_shallow: %s/%s OK", owner, name)
-	// register in refRepos
-	RefClone(owner, name, dir)
-}
-
 const MAX_REFS = 3
 
 var (
@@ -207,13 +189,11 @@ func ref_discover(task string) []RefRepo {
 	var good []RefRepo
 
 	direct := extractRepoMentions(task)
-	var userMentioned []RefRepo
 	for _, r := range direct {
 		if is_dev_repo(r.Owner, r.Name) {
 			log.Printf("ref_discover: skip dev repo %s/%s", r.Owner, r.Name)
 			continue
 		}
-		userMentioned = append(userMentioned, r)
 		ref_clone(r.Owner, r.Name)
 		refMu.Lock()
 		_, ok := refRepos[r.Owner+"/"+r.Name]
@@ -222,27 +202,14 @@ func ref_discover(task string) []RefRepo {
 			good = append(good, r)
 			log.Printf("ref_discover: direct mention %s/%s cloned", r.Owner, r.Name)
 		} else {
-			// clone failed — retry with shallow clone
-			log.Printf("ref_discover: direct mention %s/%s clone failed, retrying shallow", r.Owner, r.Name)
-			ref_clone_shallow(r.Owner, r.Name)
-			refMu.Lock()
-			_, ok = refRepos[r.Owner+"/"+r.Name]
-			refMu.Unlock()
-			if ok {
-				good = append(good, r)
-				log.Printf("ref_discover: direct mention %s/%s shallow clone OK", r.Owner, r.Name)
-			} else {
-				log.Printf("ref_discover: direct mention %s/%s still failed after shallow", r.Owner, r.Name)
-			}
+			log.Printf("ref_discover: direct mention %s/%s clone failed", r.Owner, r.Name)
 		}
 	}
 	if len(good) >= MAX_REFS {
 		return good[:MAX_REFS]
 	}
 
-	// user mentioned N repos — even if some failed to clone, they count toward the limit.
-	// don't let the child fill those slots with unrelated repos.
-	need := MAX_REFS - len(userMentioned)
+	need := MAX_REFS - len(good)
 	prompt := fmt.Sprintf("[USER TASK]\n%s\n\n"+
 		"based on the task above, list %d relevant open-source "+
 		"reference repositories on github.\n"+
