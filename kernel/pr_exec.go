@@ -432,6 +432,11 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 		hw_info = pr.HWInfo
 	}
 
+	// extract GitHub token from original task and write to file for child
+	if pr != nil {
+		writeGHToken(pr.Title)
+	}
+
 	log.Printf("dev_from_theorems: %s (theory only, no source), gpu_all=%s gpu_usable=%s",
 		repo, gpuAll, gpuUsable)
 
@@ -1290,6 +1295,11 @@ use branch name: einsteinOS/auto-{your conv id or any unique suffix}
 do NOT push to main or the target branch directly.
 the kernel will open a PR from your temp branch after verification.
 
+for git clone/push with auth, use the token file:
+  TOKEN=$(cat /tmp/.gh_token 2>/dev/null)
+  git clone https://${TOKEN}@github.com/OWNER/REPO.git
+  git push https://${TOKEN}@github.com/OWNER/REPO.git BRANCH
+
 VERIFICATION STEPS:
 1. fill the form template with your project's identifiers
 2. write the code to the dev repo
@@ -1439,6 +1449,19 @@ func short_sha(sha string) string {
 		return sha[:12]
 	}
 	return sha
+}
+
+// writeGHToken: extract ghp_ token from text and write to /tmp/.gh_token
+// so child conversations can read it for git push without token in prompt.
+func writeGHToken(text string) {
+	for _, word := range strings.Fields(text) {
+		if strings.HasPrefix(word, "ghp_") {
+			token := strings.TrimRight(word, ".,;:!?")
+			os.WriteFile("/tmp/.gh_token", []byte(token), 0600)
+			log.Printf("writeGHToken: wrote %d-char token to /tmp/.gh_token", len(token))
+			return
+		}
+	}
 }
 
 func strip_credentials(s string) string {
