@@ -1452,8 +1452,9 @@ func short_sha(sha string) string {
 	return sha
 }
 
-// writeGHToken: extract ghp_ token from text and write to /tmp/.gh_token
+// WriteGHTokenFromTask: extract ghp_ token from text and write to /tmp/.gh_token
 // so child conversations can read it for git push without token in prompt.
+func WriteGHTokenFromTask(text string) { writeGHToken(text) }
 func writeGHToken(text string) {
 	for _, word := range strings.Fields(text) {
 		if strings.HasPrefix(word, "ghp_") {

@@ -455,6 +455,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 				if len(task) > 4000 {
 					task = task[:4000]
 				}
+				kernel.WriteGHTokenFromTask(task) // make token available before pipeline
 				setupResult := kernel.PRDriverSetup(task)
 				log.Printf("claudeweb: pr_setup done: %s", truncate(setupResult, 200))
 
