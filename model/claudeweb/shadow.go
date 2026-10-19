@@ -91,6 +91,13 @@ func (s *ShadowExecutor) Execute(toolName string, inputJSON string) string {
 		return ""
 	}
 
+	// don't shadow-exec Axle proof verification locally.
+	// remote sandbox runs it; local machine has no business re-running curl to axiommath.
+	if strings.Contains(command, "axle.axiommath.ai") || strings.Contains(command, "verify_proof") {
+		log.Printf("[shadow] skip axle verify_proof")
+		return ""
+	}
+
 	pid, err := kernel.ForkExec(command, s.WorkDir)
 	if err != nil {
 		return fmt.Sprintf("[pid -1] fork: %v", err)
