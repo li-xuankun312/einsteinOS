@@ -433,9 +433,12 @@ func dev_split_theory(theory string) []string {
 	}
 
 	for _, line := range lines {
-		isHeader := strings.HasPrefix(line, "## FILE") ||
-			strings.HasPrefix(line, "=== ") ||
-			(strings.HasPrefix(line, "### ") && cur.Len() > 500)
+		trimmed := strings.TrimSpace(line) // strip \r, leading spaces
+		isHeader := strings.HasPrefix(trimmed, "## FILE") ||
+			strings.HasPrefix(trimmed, "=== ") ||
+			strings.HasPrefix(trimmed, "## file") ||
+			strings.Contains(trimmed, "## FILE:") ||
+			(strings.HasPrefix(trimmed, "### ") && cur.Len() > 500)
 		if isHeader && cur.Len() > 0 {
 			flush()
 		}
@@ -447,8 +450,25 @@ func dev_split_theory(theory string) []string {
 	if len(units) == 0 {
 		units = []string{theory}
 	}
+
+	log.Printf("dev_split_theory: %d bytes -> %d units (scanned %d lines)", len(theory), len(units), len(lines))
+	if len(units) <= 1 && len(theory) > 3000 {
+		// debug: show first few lines that look like headers
+		for i, l := range lines {
+			t := strings.TrimSpace(l)
+			if strings.HasPrefix(t, "##") || strings.HasPrefix(t, "===") {
+				log.Printf("dev_split_theory: potential header line %d: %q", i, t[:min(len(t), 80)])
+			}
+			if i > 200 {
+				break
+			}
+		}
+	}
+
 	return units
 }
+
+
 
 func dev_from_theorems(pid int64, step *Step) (string, error) {
 	repo := step.Owner + "/" + step.Repo
