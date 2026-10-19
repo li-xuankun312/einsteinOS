@@ -433,6 +433,7 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 		hw_info = pr.HWInfo
 	}
 
+	// extract GitHub token from original task and write to file for child
 	if pr != nil {
 		writeGHToken(pr.Title)
 	}
@@ -440,180 +441,16 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 	log.Printf("dev_from_theorems: %s (theory only, no source), gpu_all=%s gpu_usable=%s",
 		repo, gpuAll, gpuUsable)
 
-	// STEP 1: fork a planner child that reads theory and outputs a file plan.
-	// planner sees ONLY the theory, outputs: file=path|section lines.
-	// each line is one file to create and which theory section it needs.
-	// planner does NOT write code — only plans.
-	var planPrompt strings.Builder
-	planPrompt.WriteString(fmt.Sprintf("[THEORY from %s]\n%s\n\n", repo, theory))
-	planPrompt.WriteString(fmt.Sprintf("[TASK]\n%s\n\n", task))
-
-	devRepos := GetDevRepos()
-	devDir := "/home/claude/dev"
-	if len(devRepos) > 0 {
-		parts := strings.Split(devRepos[0], "/")
-		devDir = fmt.Sprintf("/home/claude/%s", parts[len(parts)-1])
-	}
-
-	planPrompt.WriteString(fmt.Sprintf(
-		"[PLAN INSTRUCTION]\n"+
-			"you are a PLANNER. read the theory above and output a file plan.\n"+
-			"dev repo root: %s\n\n"+
-			"output ONLY lines in this format, nothing else:\n"+
-			"file=path/to/file.cu|theory_section_name\n"+
-			"file=path/to/file.hpp|theory_section_name\n\n"+
-			"each line = one source file to create.\n"+
-			"theory_section_name = which part of the theory this file implements.\n"+
-			"include: headers, kernels, core logic, Makefile, one test file.\n"+
-			"do NOT write any code. do NOT run any commands. ONLY output the plan.\n",
-		devDir))
-
-	planChild, err := Fork(planPrompt.String(), ".")
-	if err != nil {
-		return "", fmt.Errorf("dev_from_theorems: planner fork failed: %w", err)
-	}
-	Wait(planChild)
-	planResult := GetResult(planChild)
-	log.Printf("dev_from_theorems: planner returned %d bytes", len(planResult))
-
-	// parse file=path|section lines
-	type filePlan struct {
-		path    string
-		section string
-	}
-	var plans []filePlan
-	for _, line := range strings.Split(planResult, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "file=") {
-			rest := line[5:]
-			parts := strings.SplitN(rest, "|", 2)
-			if len(parts) == 2 {
-				plans = append(plans, filePlan{parts[0], parts[1]})
-			}
-		}
-	}
-
-	if len(plans) == 0 {
-		log.Printf("dev_from_theorems: planner output no file= lines, falling back to single child")
-		// fallback: one child does everything (old behavior)
-		return dev_from_theorems_single(pid, step, theory, task, hw_info, gpuAll, gpuUsable)
-	}
-
-	log.Printf("dev_from_theorems: %d files planned, forking writers", len(plans))
-
-	// STEP 2: fork one child per file (or per small batch).
-	// each child sees ONLY its theory section + file path + ENV.md context.
-	// child writes ONE file and outputs it. no compilation, no git.
-	var allFiles []string
-	for i, fp := range plans {
-		// extract the relevant theory section
-		section := extractTheorySection(theory, fp.section)
-		if section == "" {
-			section = truncDiff(theory, 3000) // fallback: give truncated full theory
-		}
-
-		var writerPrompt strings.Builder
-		if hw_info != "" {
-			writerPrompt.WriteString(fmt.Sprintf("[HARDWARE]\n%s\n\n", truncDiff(hw_info, 500)))
-		}
-		writerPrompt.WriteString(fmt.Sprintf("[THEORY SECTION: %s]\n%s\n\n", fp.section, section))
-		writerPrompt.WriteString(fmt.Sprintf("[FILE TO WRITE]\n%s/%s\n\n", devDir, fp.path))
-		writerPrompt.WriteString(
-			"[INSTRUCTION]\n" +
-				"write ONLY this one file. output it using create_file or cat > path << 'EOF'.\n" +
-				"do NOT compile, do NOT git push, do NOT write other files.\n" +
-				"do NOT explore the filesystem or search for compilers.\n" +
-				"the kernel will compile and test after all files are written.\n")
-
-		child, ferr := Fork(writerPrompt.String(), ".")
-		if ferr != nil {
-			log.Printf("dev_from_theorems: writer %d fork failed: %v", i, ferr)
-			continue
-		}
-		if m := getMeta(child); m != nil && m.ConvID != "" {
-			RegisterConv(pid, m.ConvID, repo, fmt.Sprintf("dev_write_%d", i), 1)
-		}
-		Wait(child)
-		allFiles = append(allFiles, fp.path)
-		log.Printf("dev_from_theorems: writer %d/%d done: %s", i+1, len(plans), fp.path)
-	}
-
-	// STEP 3: fork a build child that compiles + tests everything.
-	// this child has a clean context — no theory bloat.
-	var buildPrompt strings.Builder
-	buildPrompt.WriteString(fmt.Sprintf("[DEV REPO] %s\n", devDir))
-	buildPrompt.WriteString(fmt.Sprintf("[FILES WRITTEN]\n%s\n\n", strings.Join(allFiles, "\n")))
-	if hw_info != "" {
-		buildPrompt.WriteString(fmt.Sprintf("[HARDWARE]\n%s\n\n", truncDiff(hw_info, 500)))
-	}
-	buildPrompt.WriteString(fmt.Sprintf(
-		"[INSTRUCTION]\n"+
-			"compile and test the code in %s.\n"+
-			"use the token file for git: TOKEN=$(cat /tmp/.gh_token 2>/dev/null)\n"+
-			"branch: einsteinOS/auto-dev\n\n"+
-			"STEPS:\n"+
-			"1. cd %s && ls -la to see what's there\n"+
-			"2. make all (or write a Makefile if missing)\n"+
-			"3. run tests\n"+
-			"4. git add -A, commit, push to temp branch\n\n"+
-			"[OUTPUT FORMAT]\n"+
-			"compile=pass|fail\n"+
-			"compile_error=<one line if fail>\n"+
-			"smoke=pass|fail\n"+
-			"smoke_error=<one line if fail>\n"+
-			"files_written=<comma-separated paths>\n",
-		devDir, devDir))
-
-	buildChild, err := Fork(buildPrompt.String(), ".")
-	if err != nil {
-		return "", fmt.Errorf("dev_from_theorems: build fork failed: %w", err)
-	}
-	if m := getMeta(buildChild); m != nil && m.ConvID != "" {
-		RegisterConv(pid, m.ConvID, repo, "dev_build", 1)
-	}
-	Wait(buildChild)
-	step.ChildPid = buildChild
-
-	stdout1, status1 := dev_collect_child(buildChild, repo)
-
-	dev_update_gpu(pid, status1, gpuAll, gpuUsable)
-	for k, v := range status1 {
-		PRFeedbackAdd(pid, fmt.Sprintf("- dev[%s]: %s=%s", repo, k, v))
-	}
-
-	if status1["compile"] != "pass" || status1["smoke"] != "pass" {
-		dev_push_fix(pid, step.Owner, step.Repo, status1, 1)
-		return stdout1, nil
-	}
-
-	log.Printf("dev_from_theorems: %s compile+smoke pass, pushing vllm benchmark", repo)
-
-	_, gpuUsable = pr_gpu_args(pid)
-	pr_push_step(pid, &Step{
-		Kind:    STEP_VLLM_UP,
-		Owner:   step.Owner,
-		Repo:    step.Repo,
-		Command: gpuUsable,
-	})
-	pr_push_step(pid, &Step{
-		Kind:  STEP_VLLM_BENCH,
-		Owner: step.Owner,
-		Repo:  step.Repo,
-	})
-	return stdout1, nil
-}
-
-// dev_from_theorems_single: fallback when planner produces no file plan.
-func dev_from_theorems_single(pid int64, step *Step, theory, task, hw_info, gpuAll, gpuUsable string) (string, error) {
-	repo := step.Owner + "/" + step.Repo
-
 	var p1 strings.Builder
 	if hw_info != "" {
 		p1.WriteString("[HARDWARE]\n")
 		p1.WriteString(hw_info)
 		p1.WriteString("\n\n")
 	}
-	p1.WriteString(fmt.Sprintf("[THEORY from %s]\n%s\n\n[TASK]\n%s", repo, theory, task))
+	p1.WriteString(fmt.Sprintf("[THEORY from %s — LAYER 1 (math) + LAYER 2 (form template)]\n", repo))
+	p1.WriteString(theory)
+	p1.WriteString("\n\n[TASK]\n")
+	p1.WriteString(task)
 
 	devRepos := GetDevRepos()
 	if len(devRepos) > 0 {
@@ -626,6 +463,12 @@ func dev_from_theorems_single(pid int64, step *Step, theory, task, hw_info, gpuA
 
 	p1.WriteString(fmt.Sprintf(dev_draft_instruction, gpuAll, gpuUsable, gpuUsable))
 
+	feedback := pr_feedback(pid)
+	if feedback != "" {
+		p1.WriteString(fmt.Sprintf("\n\n[PRIOR FEEDBACK]\n%s", feedback))
+	}
+
+	// single attempt — kernel decides what comes next
 	child1, err := Fork(p1.String(), ".")
 	if err != nil {
 		return "", err
@@ -637,23 +480,28 @@ func dev_from_theorems_single(pid int64, step *Step, theory, task, hw_info, gpuA
 	step.ChildPid = child1
 
 	stdout1, status1 := dev_collect_child(child1, repo)
+
+	// kernel absorbs observations
 	dev_update_gpu(pid, status1, gpuAll, gpuUsable)
 	for k, v := range status1 {
 		PRFeedbackAdd(pid, fmt.Sprintf("- dev[%s]: %s=%s", repo, k, v))
 	}
 
+	// compile or smoke failed → fix loop
 	if status1["compile"] != "pass" || status1["smoke"] != "pass" {
 		dev_push_fix(pid, step.Owner, step.Repo, status1, 1)
 		return stdout1, nil
 	}
 
+	// compile + smoke passed → push vllm benchmark steps
 	log.Printf("dev_from_theorems: %s compile+smoke pass, pushing vllm benchmark", repo)
+
 	_, gpuUsable = pr_gpu_args(pid)
 	pr_push_step(pid, &Step{
 		Kind:    STEP_VLLM_UP,
 		Owner:   step.Owner,
 		Repo:    step.Repo,
-		Command: gpuUsable,
+		Command: gpuUsable, // which GPUs to use
 	})
 	pr_push_step(pid, &Step{
 		Kind:  STEP_VLLM_BENCH,
@@ -661,31 +509,6 @@ func dev_from_theorems_single(pid int64, step *Step, theory, task, hw_info, gpuA
 		Repo:  step.Repo,
 	})
 	return stdout1, nil
-}
-
-// extractTheorySection: find a named section in theory text.
-// looks for "## section_name" or "### section_name" headers.
-func extractTheorySection(theory, sectionName string) string {
-	lower := strings.ToLower(sectionName)
-	lines := strings.Split(theory, "\n")
-	var inSection bool
-	var result strings.Builder
-	for _, line := range lines {
-		if strings.HasPrefix(line, "##") {
-			headerText := strings.ToLower(strings.TrimLeft(line, "# "))
-			if strings.Contains(headerText, lower) {
-				inSection = true
-				result.WriteString(line + "\n")
-				continue
-			} else if inSection {
-				break // next section starts
-			}
-		}
-		if inSection {
-			result.WriteString(line + "\n")
-		}
-	}
-	return result.String()
 }
 
 
