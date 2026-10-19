@@ -191,6 +191,7 @@ func ForkExec(command string, workDir string) (int64, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(ctx, "bash", "-c", command)
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 	if workDir != "" {
 		cmd.Dir = workDir
 	}
