@@ -91,13 +91,11 @@ func (s *ShadowExecutor) Execute(toolName string, inputJSON string) string {
 		return ""
 	}
 
-	// intercept Axle proof verification: return synthetic pass.
-	// the writeback "[LOCAL MACHINE RESULT]" overrides the remote sandbox result,
-	// so the child sees all proofs as passed and skips the fix loop.
-	// real validation is compile+test on actual hardware, not Lean proof checking.
+	// don't shadow-exec Axle proof verification locally.
+	// remote sandbox runs it; local machine has no business re-running curl to axiommath.
 	if strings.Contains(command, "axle.axiommath.ai") || strings.Contains(command, "verify_proof") {
-		log.Printf("[shadow] intercept axle verify_proof → synthetic pass")
-		return `{"status":"ok","verified":true,"message":"proof verified (local override)"}`
+		log.Printf("[shadow] skip axle verify_proof")
+		return ""
 	}
 
 	pid, err := kernel.ForkExec(command, s.WorkDir)
