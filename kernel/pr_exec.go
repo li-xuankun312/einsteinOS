@@ -444,29 +444,6 @@ func dev_split_theory(theory string) []string {
 	}
 	flush()
 
-	// if no clear headers found, split by size (~3000 bytes per unit)
-	if len(units) <= 1 && len(theory) > 5000 {
-		units = nil
-		cur.Reset()
-		for _, line := range lines {
-			cur.WriteString(line)
-			cur.WriteString("\n")
-			if cur.Len() > 3000 {
-				// try to split at a blank line
-				s := cur.String()
-				last := strings.LastIndex(s, "\n\n")
-				if last > 1000 {
-					units = append(units, strings.TrimSpace(s[:last]))
-					cur.Reset()
-					cur.WriteString(s[last+2:])
-				} else {
-					flush()
-				}
-			}
-		}
-		flush()
-	}
-
 	if len(units) == 0 {
 		units = []string{theory}
 	}
