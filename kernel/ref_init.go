@@ -314,6 +314,24 @@ func extractRepoMentions(text string) []RefRepo {
 				idx = strings.Index(line, prefix)
 			}
 		}
+
+		// match bare Owner/Repo (e.g. "参考Niko1221/Strata")
+		for _, word := range strings.Fields(line) {
+			word = strings.TrimRight(word, ".,;:!?\u3002\uff0c\u3001\uff1b\uff1a\uff01\uff1f")
+			word = strings.TrimSuffix(word, ".git")
+			parts := strings.SplitN(word, "/", 3)
+			if len(parts) == 2 && len(parts[0]) > 1 && len(parts[1]) > 1 {
+				owner, name := parts[0], parts[1]
+				if !strings.Contains(owner, ".") && !strings.Contains(owner, ":") &&
+					!skip[name] && owner[0] >= 'A' && owner[0] <= 'z' {
+					key := owner + "/" + name
+					if !seen[key] {
+						seen[key] = true
+						repos = append(repos, RefRepo{Owner: owner, Name: name})
+					}
+				}
+			}
+		}
 	}
 	return repos
 }
