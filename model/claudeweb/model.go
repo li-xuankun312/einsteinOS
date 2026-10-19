@@ -226,6 +226,14 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 	isChild := len(opts) > 0 && opts[0]
 	st := &loopState{convID: convID, isChild: isChild}
 
+	// save the original user prompt BEFORE webReq.Prompt gets mutated by
+	// writeback Continue loops. the 30-tool switch needs the user's original
+	// input for extractRepoMentions, not the writeback continuation text.
+	originalPrompt := webReq.Prompt
+	if strings.HasPrefix(originalPrompt, localExecPrefix) {
+		originalPrompt = originalPrompt[len(localExecPrefix):]
+	}
+
 	doExit := func(code int, text string) {
 		if text == "" {
 			text = fmt.Sprintf("[%s]", exitCodeStr(code))
@@ -448,10 +456,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 				m.client.StopResponse(st.convID)
 				st.usedServices = true
 
-				task := webReq.Prompt
-				if strings.HasPrefix(task, localExecPrefix) {
-					task = task[len(localExecPrefix):]
-				}
+				task := originalPrompt
 				if len(task) > 4000 {
 					task = task[:4000]
 				}
