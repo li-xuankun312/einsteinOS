@@ -91,6 +91,14 @@ func (s *ShadowExecutor) Execute(toolName string, inputJSON string) string {
 		return ""
 	}
 
+	// skip Axle proof verification — don't shadow-exec curl to axiommath.
+	// child writes theorems but verification doesn't block the pipeline.
+	// real validation comes from compile+test on actual hardware.
+	if strings.Contains(command, "axle.axiommath.ai") || strings.Contains(command, "verify_proof") {
+		log.Printf("[shadow] skip axle verify_proof (not blocking pipeline)")
+		return ""
+	}
+
 	pid, err := kernel.ForkExec(command, s.WorkDir)
 	if err != nil {
 		return fmt.Sprintf("[pid -1] fork: %v", err)
