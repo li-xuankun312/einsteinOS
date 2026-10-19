@@ -19,7 +19,11 @@ type theorem_entry struct {
 	read_by int64
 }
 
-const theorize_instruction = `for each function / struct / method in the code above, produce THREE layers:
+const theorize_instruction = `OUTPUT FORMAT: for each source file, emit a section headed by:
+
+## FILE: <exact/path/from/repo>
+
+under that header, produce THREE layers for every function / struct / method in that file.
 
 [LAYER 1a — MATH (LaTeX)]
 formal specification: types, preconditions, postconditions, invariants.
@@ -64,6 +68,10 @@ after:
       if (!this->objtype) return false;
       return fseek(this->objtype, (long)position, SEEK_SET) == 0;
   }
+
+CRITICAL: every ## FILE section must use the EXACT path from the repository.
+do NOT invent paths. do NOT reorganize files. the downstream code generator
+reads each ## FILE section independently and must know which real file it maps to.
 
 all three layers are required for every semantic unit. do not skip any layer.
 LAYER 1b is verified by machine (Lean 4 kernel) — if you are unsure of the proof,
