@@ -209,25 +209,19 @@ func ref_discover(task string) []RefRepo {
 		return good[:MAX_REFS]
 	}
 
-	need := MAX_REFS - len(good)
+	// if user already mentioned ref repos, use those — don't add more
+	if len(good) > 0 {
+		log.Printf("ref_discover: user mentioned %d ref repos, using those only", len(good))
+		return good
+	}
 
-	// build example from user-mentioned repos (even if clone failed)
-	var example string
-	mentioned := extractRepoMentions(task)
-	for _, r := range mentioned {
-		if !is_dev_repo(r.Owner, r.Name) {
-			example += r.Owner + "/" + r.Name + "\n"
-		}
-	}
-	if example == "" {
-		example = "owner/repo\n"
-	}
+	need := MAX_REFS
 
 	prompt := fmt.Sprintf("[USER TASK]\n%s\n\n"+
 		"based on the task above, list %d relevant open-source "+
 		"reference repositories on github.\n"+
-		"reply with ONLY owner/name lines, example:\n%s",
-		truncDiff(task, 3000), need, example)
+		"reply with ONLY owner/name lines, one per line, nothing else.\n",
+		truncDiff(task, 3000), need)
 
 	var tried int
 	for tried < 3 && len(good) < MAX_REFS {
