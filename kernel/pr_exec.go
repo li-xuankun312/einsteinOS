@@ -937,16 +937,11 @@ func dev_fix(pid int64, step *Step) (string, error) {
 	}
 	prompt.WriteString("\n")
 
-	// kernel provides ref source files based on failure type
-	needsSource := step.Command == "compile_fail" || step.Command == "needs_source"
-	if needsSource {
-		sourceFiles := dev_select_source_files(step.Owner, step.Repo, step.SHA, step.Path)
-		if sourceFiles != "" {
-			prompt.WriteString(fmt.Sprintf("[SELECTIVE SOURCE from %s — kernel-provided]\n", repo))
-			prompt.WriteString(sourceFiles)
-			prompt.WriteString("\n")
-		}
-	}
+	// NO ref source files. the dev child must work from theory + existing dev
+	// repo code + compile errors. reading the ref source is "looking at the answer"
+	// — it produces code with K(I₂|I₁) ≈ 0 (identical structure, renamed identifiers).
+	// the theory (LAYER 1 math + LAYER 2 form template) is the specification;
+	// the implementation must be independently derived from it.
 
 	// dev repo listing
 	devRepos := GetDevRepos()
@@ -1007,11 +1002,9 @@ func dev_push_fix(pid int64, owner, repo string, status map[string]string, attem
 	failureType := "unknown"
 	errorMsg := ""
 	filesWritten := status["files_written"]
-	sourceHints := ""
 
 	switch {
 	case status["compile"] == "no_response":
-		// API failure — child never ran. don't waste a fix attempt.
 		log.Printf("dev_push_fix: %s/%s no_response, retrying same step (not counting attempt)",
 			owner, repo)
 		pr_push_step(pid, &Step{
@@ -1021,13 +1014,7 @@ func dev_push_fix(pid int64, owner, repo string, status map[string]string, attem
 		})
 		return
 
-	case status["needs_source"] == "true":
-		failureType = "needs_source"
-		errorMsg = status["needs_source_reason"]
-		sourceHints = status["needs_source_files"]
-
 	case status["compile"] == "unknown":
-		// child wrote code but didn't report compile status — kernel runs go build itself
 		failureType = "compile_unknown"
 		errorMsg = status["compile_error"]
 		filesWritten = status["files_written"]
@@ -1035,7 +1022,7 @@ func dev_push_fix(pid int64, owner, repo string, status map[string]string, attem
 	case status["compile"] == "fail":
 		failureType = "compile_fail"
 		errorMsg = status["compile_error"]
-		sourceHints = dev_extract_source_hints(owner, repo, errorMsg)
+		// NO source hints. fix child works from theory + compile error + existing dev code.
 
 	case status["gpu_test"] == "fail":
 		failureType = "gpu_fail"
@@ -1046,8 +1033,8 @@ func dev_push_fix(pid int64, owner, repo string, status map[string]string, attem
 		errorMsg = status["smoke_error"]
 	}
 
-	log.Printf("dev_push_fix: %s/%s type=%s attempt=%d hints=%q",
-		owner, repo, failureType, attempt, sourceHints)
+	log.Printf("dev_push_fix: %s/%s type=%s attempt=%d",
+		owner, repo, failureType, attempt)
 
 	pr_push_step(pid, &Step{
 		Kind:    STEP_DEV_FIX,
@@ -1055,7 +1042,6 @@ func dev_push_fix(pid int64, owner, repo string, status map[string]string, attem
 		Repo:    repo,
 		Command: failureType,
 		Path:    errorMsg,
-		SHA:     sourceHints,
 		Result:  filesWritten,
 		Dir:     fmt.Sprintf("%d", attempt),
 	})
@@ -1399,9 +1385,8 @@ tok_s=<number: tokens/second from vllm benchmark, 0 if not measured>
 tok_s_error=<one line if measurement failed>
 files_written=<comma-separated paths>
 
-if compile fails and you believe seeing specific source files would help,
-set needs_source=true and list the files. the kernel will decide what to provide.
-do NOT guess at source structure you haven't seen — ask the kernel for it.
+if compile fails, fix it using the theory + compile error message + your existing code.
+you will NEVER receive the reference source code. the theory is your only spec.
 
 GIT: you may git add, commit, and push to a TEMP branch only.
 use branch name: einsteinOS/auto-{your conv id or any unique suffix}
