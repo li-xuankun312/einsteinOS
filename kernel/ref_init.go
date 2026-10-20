@@ -811,13 +811,17 @@ func theorem_store(repo, sha, theory string, child int64) {
 func theorem_get(repo, sha string) string {
 	theorem_mu.Lock()
 	defer theorem_mu.Unlock()
+	// return the LAST match: leaf chunks store first (GetResult, no ## FILE headers),
+	// then ref_bind stores the merged result (with DownloadConv content including headers).
+	// last match = merged = most complete theory.
+	best := ""
 	for i := 0; i < nr_theorems; i++ {
 		t := theorem_table[i]
 		if t.repo == repo && (sha == "" || strings.HasPrefix(t.sha, sha)) {
-			return t.theory
+			best = t.theory
 		}
 	}
-	return ""
+	return best
 }
 
 func theorem_get_all(repo string) string {
