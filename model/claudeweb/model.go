@@ -293,8 +293,15 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 		var parentMsgUUID string
 		_ = parentMsgUUID
 		var stopReason string
+		lastLogTime := time.Now()
 
 		for event := range events {
+			// heartbeat: if no log output for 60s (e.g. large create_file streaming),
+			// print a keepalive line so SSH/NAT doesn't kill the connection.
+			if time.Since(lastLogTime) > 60*time.Second {
+				log.Printf("[remote] streaming... (%ds since last output)", int(time.Since(lastLogTime).Seconds()))
+				lastLogTime = time.Now()
+			}
 			select {
 			case <-ctx.Done():
 				body.Close()
@@ -326,6 +333,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 						name: ev.ContentBlock.Name,
 					}
 					log.Printf("[remote] tool_use start: %s (id=%s)", ev.ContentBlock.Name, ev.ContentBlock.ID)
+					lastLogTime = time.Now()
 				}
 
 			case "content_block_delta":
