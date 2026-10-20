@@ -419,50 +419,114 @@ func ref_bind_cursor(pid int64, owner, repo string) int {
 // dev_split_theory splits the merged theory blob into discrete units.
 // splits on "## FILE" / "=== " / "### " section headers.
 // each unit is one conceptual piece (one file's LAYER 1+2, or one function group).
+// dev_split_theory splits theory into units grouped by directory.
+// individual ## FILE sections are too small (a few dozen lines each).
+// group all files under the same directory into one unit:
+//   src/core/*.cpp → one unit
+//   src/kernels/*.cu → one unit
+//   include/strata/core/*.hpp → one unit
+// if no ## FILE headers found, return as single unit.
 func dev_split_theory(theory string) []string {
 	lines := strings.Split(theory, "\n")
-	var units []string
+
+	// first pass: split into per-file sections
+	type fileSection struct {
+		path    string
+		dir     string
+		content string
+	}
+	var sections []fileSection
 	var cur strings.Builder
+	curPath := ""
 
 	flush := func() {
 		s := strings.TrimSpace(cur.String())
-		if len(s) > 100 { // skip trivially empty chunks
-			units = append(units, s)
+		if len(s) > 50 {
+			dir := ""
+			if idx := strings.LastIndex(curPath, "/"); idx > 0 {
+				dir = curPath[:idx]
+			}
+			sections = append(sections, fileSection{path: curPath, dir: dir, content: s})
 		}
 		cur.Reset()
+		curPath = ""
 	}
 
 	for _, line := range lines {
-		trimmed := strings.TrimSpace(line) // strip \r, leading spaces
-		isHeader := strings.HasPrefix(trimmed, "## FILE") ||
-			strings.HasPrefix(trimmed, "=== ") ||
-			strings.HasPrefix(trimmed, "## file") ||
-			strings.Contains(trimmed, "## FILE:") ||
-			(strings.HasPrefix(trimmed, "### ") && cur.Len() > 500)
+		trimmed := strings.TrimSpace(line)
+		// detect ## FILE: <path> header
+		isHeader := false
+		newPath := ""
+		if strings.Contains(trimmed, "## FILE:") {
+			isHeader = true
+			idx := strings.Index(trimmed, "## FILE:")
+			newPath = strings.TrimSpace(trimmed[idx+len("## FILE:"):])
+		} else if strings.HasPrefix(trimmed, "## FILE") {
+			isHeader = true
+			newPath = strings.TrimSpace(trimmed[len("## FILE"):])
+			newPath = strings.TrimLeft(newPath, ": ")
+		}
+
 		if isHeader && cur.Len() > 0 {
 			flush()
+		}
+		if isHeader {
+			curPath = newPath
 		}
 		cur.WriteString(line)
 		cur.WriteString("\n")
 	}
 	flush()
 
+	if len(sections) <= 1 {
+		// no splitting possible
+		log.Printf("dev_split_theory: %d bytes -> 1 unit (found %d ## FILE sections)", len(theory), len(sections))
+		return []string{theory}
+	}
+
+	// second pass: group sections by directory
+	dirOrder := []string{}
+	dirSections := map[string][]fileSection{}
+	for _, sec := range sections {
+		d := sec.dir
+		if d == "" {
+			d = "/"
+		}
+		if _, ok := dirSections[d]; !ok {
+			dirOrder = append(dirOrder, d)
+		}
+		dirSections[d] = append(dirSections[d], sec)
+	}
+
+	// build units from directory groups
+	var units []string
+	for _, d := range dirOrder {
+		secs := dirSections[d]
+		var unit strings.Builder
+		unit.WriteString(fmt.Sprintf("# Directory: %s (%d files)\n\n", d, len(secs)))
+		for _, sec := range secs {
+			unit.WriteString(sec.content)
+			unit.WriteString("\n\n")
+		}
+		s := strings.TrimSpace(unit.String())
+		if len(s) > 100 {
+			units = append(units, s)
+		}
+	}
+
 	if len(units) == 0 {
 		units = []string{theory}
 	}
 
-	log.Printf("dev_split_theory: %d bytes -> %d units (scanned %d lines)", len(theory), len(units), len(lines))
-	if len(units) <= 1 && len(theory) > 3000 {
-		// debug: show first few lines that look like headers
-		for i, l := range lines {
-			t := strings.TrimSpace(l)
-			if strings.HasPrefix(t, "##") || strings.HasPrefix(t, "===") {
-				log.Printf("dev_split_theory: potential header line %d: %q", i, t[:min(len(t), 80)])
-			}
-			if i > 200 {
-				break
-			}
+	// log the split
+	log.Printf("dev_split_theory: %d bytes -> %d units (%d files, %d dirs)",
+		len(theory), len(units), len(sections), len(dirOrder))
+	for i, u := range units {
+		firstLine := u
+		if idx := strings.Index(firstLine, "\n"); idx > 0 {
+			firstLine = firstLine[:idx]
 		}
+		log.Printf("dev_split_theory:   unit %d: %d bytes — %s", i+1, len(u), firstLine)
 	}
 
 	return units
