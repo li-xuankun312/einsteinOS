@@ -40,6 +40,19 @@ func NewShadowDB() *ShadowDB {
 	}
 }
 
+// Reset clears all records. called on /new (main conversation reset).
+func (db *ShadowDB) Reset() {
+	db.mu.Lock()
+	db.records = nil
+	db.nextID = 0
+	db.byConv = make(map[string][]int)
+	db.byFile = make(map[string][]int)
+	db.byTool = make(map[string][]int)
+	db.convID = ""
+	db.taskDesc = ""
+	db.mu.Unlock()
+}
+
 func (db *ShadowDB) SetConv(convID string) {
 	db.mu.Lock()
 	db.convID = convID
@@ -160,35 +173,50 @@ func (db *ShadowDB) Count() int {
 	return len(db.records)
 }
 
+// Summary returns exec history for a specific conversation only.
+// conversations are isolated — a child only sees its own exec records.
+// to see another conversation's records, use DownloadConv/DownloadFile.
 func (db *ShadowDB) Summary(maxRecent int) string {
+	return db.SummaryForConv(db.convID, maxRecent)
+}
+
+func (db *ShadowDB) SummaryForConv(convID string, maxRecent int) string {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 
-	total := len(db.records)
-	if total == 0 {
+	if convID == "" {
+		return ""
+	}
+
+	indices, ok := db.byConv[convID]
+	if !ok || len(indices) == 0 {
 		return ""
 	}
 
 	var failed int
-	for _, r := range db.records {
-		if r.ExitCode != 0 {
+	for _, idx := range indices {
+		if db.records[idx].ExitCode != 0 {
 			failed++
 		}
 	}
 
-	s := fmt.Sprintf("[Local State] %d commands executed (%d failed), %d files touched, %d conversations\n",
-		total, failed, len(db.byFile), len(db.byConv))
-
-	if db.taskDesc != "" {
-		s += "Last task: " + db.taskDesc + "\n"
+	// collect files touched by this conversation only
+	convFiles := map[string]bool{}
+	for _, idx := range indices {
+		if db.records[idx].File != "" {
+			convFiles[db.records[idx].File] = true
+		}
 	}
 
-	if len(db.byFile) > 0 {
+	s := fmt.Sprintf("[Local State] %d commands executed (%d failed), %d files touched\n",
+		len(indices), failed, len(convFiles))
+
+	if len(convFiles) > 0 {
 		s += "Files modified:"
 		count := 0
-		for f := range db.byFile {
+		for f := range convFiles {
 			if count >= 15 {
-				s += fmt.Sprintf(" (+%d more)", len(db.byFile)-15)
+				s += fmt.Sprintf(" (+%d more)", len(convFiles)-15)
 				break
 			}
 			s += " " + f
@@ -198,11 +226,12 @@ func (db *ShadowDB) Summary(maxRecent int) string {
 	}
 
 	s += "Recent:\n"
-	start := total - maxRecent
+	start := len(indices) - maxRecent
 	if start < 0 {
 		start = 0
 	}
-	for _, r := range db.records[start:] {
+	for _, idx := range indices[start:] {
+		r := db.records[idx]
 		status := "ok"
 		if r.ExitCode != 0 {
 			status = fmt.Sprintf("exit=%d", r.ExitCode)
