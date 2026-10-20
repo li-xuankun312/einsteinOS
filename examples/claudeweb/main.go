@@ -570,7 +570,7 @@ func newConversation(name string) (*claudeweb.Model, *runner.Runner, string) {
 		return client.DownloadFile(convID, path)
 	})
 	kernel.SetContinueConvFn(func(convID, prompt string) (string, string) {
-		return mdl.ContinueConversation(convID, prompt)
+		return llm.ContinueConversation(convID, prompt)
 	})
 
 	shadow := &claudeweb.ShadowExecutor{
