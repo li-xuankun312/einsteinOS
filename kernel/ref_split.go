@@ -89,6 +89,48 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 				log.Printf("ref_split: chunk %d/%d download failed (using GetResult=%d): %v",
 					i+1, len(chunks), len(result), err)
 			}
+
+			// DownloadFile: theory is in create_file outputs, not conversation text.
+			// scan GetResult for /mnt/user-data/outputs/*.md paths and download them.
+			// these files have ## FILE: headers that dev_split_theory needs.
+			for _, line := range strings.Split(GetStderr(child_pid), "\n") {
+				// shadow exec logs: [pid N] exec: mkdir -p ... && cat > '/mnt/user-data/outputs/xxx.md'
+				if strings.Contains(line, "/mnt/user-data/outputs/") && strings.Contains(line, ".md") {
+					// extract path
+					start := strings.Index(line, "/mnt/user-data/outputs/")
+					if start < 0 {
+						continue
+					}
+					rest := line[start:]
+					// find end of path (quote, space, or EOL)
+					end := len(rest)
+					for _, delim := range []byte{'\'', '"', ' ', '\t', '\n', '\r'} {
+						if idx := strings.IndexByte(rest, delim); idx > 0 && idx < end {
+							end = idx
+						}
+					}
+					path := rest[:end]
+					if !strings.HasSuffix(path, ".md") {
+						continue
+					}
+
+					fileBytes, err := DownloadFile(convID, path)
+					if err != nil {
+						log.Printf("ref_split: chunk %d/%d download-file %s failed: %v", i+1, len(chunks), path, err)
+						continue
+					}
+					fileStr := string(fileBytes)
+					if strings.Contains(fileStr, "## FILE:") || strings.Contains(fileStr, "LAYER 1") {
+						log.Printf("ref_split: chunk %d/%d download-file %s: %d bytes (has ## FILE headers!)",
+							i+1, len(chunks), path, len(fileStr))
+						if len(fileStr) > len(result) {
+							result = fileStr
+						} else {
+							result = result + "\n\n" + fileStr
+						}
+					}
+				}
+			}
 		}
 
 		results = append(results, result)

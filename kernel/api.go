@@ -546,6 +546,22 @@ func DownloadConv(convID string) (string, error) {
 	return downloadConvFn(convID)
 }
 
+var downloadFileFn func(convID, path string) ([]byte, error)
+
+func SetDownloadFileFn(fn func(string, string) ([]byte, error)) {
+	downloadFileFn = fn
+}
+
+// DownloadFile downloads a create_file output from the remote sandbox.
+// convID: the child conversation that created the file
+// path: the absolute path (e.g. /mnt/user-data/outputs/strata_layer1_layer2.md)
+func DownloadFile(convID, path string) ([]byte, error) {
+	if downloadFileFn == nil {
+		return nil, fmt.Errorf("no download-file function set")
+	}
+	return downloadFileFn(convID, path)
+}
+
 func RegisterConv(parentPid int64, convID, repo, role string, phase int) {
 	convRegistryMu.Lock()
 	convRegistry = append(convRegistry, ConvRecord{
