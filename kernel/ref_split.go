@@ -66,29 +66,28 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 
 		result := GetResult(child_pid)
 
-		// DownloadConv fallback: if GetResult is short (child wrote to
-		// Artifact/create_file instead of text), download the full
-		// conversation and extract assistant text.
-		if len(result) < 500 {
-			convID := ""
-			if m := getMeta(child_pid); m != nil {
-				convID = m.ConvID
+		// always try DownloadConv — child writes theory to create_file
+		// (e.g. strata_chunk2_analysis.md with ## FILE: headers),
+		// which is NOT in GetResult stdout. only the full conversation
+		// download captures create_file content.
+		convID := ""
+		if m := getMeta(child_pid); m != nil {
+			convID = m.ConvID
+		}
+		if convID == "" {
+			if rec := FindConv(owner+"/"+repo, role, 0); rec != nil {
+				convID = rec.ConvID
 			}
-			if convID == "" {
-				// also try registry
-				if rec := FindConv(owner+"/"+repo, role, 0); rec != nil {
-					convID = rec.ConvID
-				}
-			}
-			if convID != "" {
-				downloaded, err := DownloadConv(convID)
-				if err == nil && len(downloaded) > len(result) {
-					log.Printf("ref_split: chunk %d/%d GetResult=%d, downloaded=%d, using download",
-						i+1, len(chunks), len(result), len(downloaded))
-					result = downloaded
-				} else if err != nil {
-					log.Printf("ref_split: chunk %d/%d download failed: %v", i+1, len(chunks), err)
-				}
+		}
+		if convID != "" {
+			downloaded, err := DownloadConv(convID)
+			if err == nil && len(downloaded) > len(result) {
+				log.Printf("ref_split: chunk %d/%d GetResult=%d, downloaded=%d, using download",
+					i+1, len(chunks), len(result), len(downloaded))
+				result = downloaded
+			} else if err != nil {
+				log.Printf("ref_split: chunk %d/%d download failed (using GetResult=%d): %v",
+					i+1, len(chunks), len(result), err)
 			}
 		}
 
