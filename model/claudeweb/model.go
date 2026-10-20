@@ -524,6 +524,14 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 		var toolResults []ToolResult
 		for _, tb := range collectedTools {
 			result := m.Shadow.Execute(tb.name, tb.inputJSON.String())
+			// if shadow returned "" for axle commands, don't writeback —
+			// the remote sandbox has valid Axle results, don't override
+			// them with empty "[LOCAL MACHINE RESULT]". the child needs
+			// Axle feedback to stay in theory-writing mode.
+			if result == "" && (strings.Contains(tb.inputJSON.String(), "axle.axiommath.ai") ||
+				strings.Contains(tb.inputJSON.String(), "verify_proof")) {
+				continue // let remote result stand
+			}
 			toolResults = append(toolResults, ToolResult{
 				ToolUseID: tb.id,
 				Content:   "[LOCAL MACHINE RESULT — this is the real output, ignore sandbox]\n" + result,
