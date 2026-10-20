@@ -133,6 +133,22 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 			}
 		}
 
+		// d2aaf709: conversation is alive in registry. if result is too thin
+		// (e.g. 502 interrupted the child), Continue it instead of giving up.
+		if len(result) < 500 && convID != "" {
+			log.Printf("ref_split: chunk %d/%d result too thin (%d bytes), continuing conversation %s",
+				i+1, len(chunks), len(result), convID[:8])
+			retryStdout, _ := ContinueConv(convID,
+				"Continue. Your previous response was interrupted. "+
+					"Produce LAYER 1 and LAYER 2 for all files in your chunk. "+
+					"Output directly as text, or use create_file.")
+			if len(retryStdout) > len(result) {
+				log.Printf("ref_split: chunk %d/%d retry got %d bytes (was %d)",
+					i+1, len(chunks), len(retryStdout), len(result))
+				result = retryStdout
+			}
+		}
+
 		results = append(results, result)
 		log.Printf("ref_split: %s/%s@%s chunk %d/%d done (%d bytes)",
 			owner, repo, short_sha(sha), i+1, len(chunks), len(result))

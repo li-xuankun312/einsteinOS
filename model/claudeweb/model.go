@@ -680,6 +680,53 @@ func parseKV(text string) map[string]string {
 	return m
 }
 
+// ContinueConversation sends a new message to an existing conversation.
+// the conversation is alive in the registry (d2aaf709: don't kill, index for reuse).
+// used when a child produces too little output (e.g. 502 interrupted it).
+func (m *Model) ContinueConversation(existingConvID, prompt string) (string, string) {
+	webReq := &CompletionRequest{
+		Prompt:        localExecPrefix + prompt,
+		Model:         m.modelName,
+		Timezone:      "Asia/Shanghai",
+		Locale:        "en-US",
+		Effort:        m.effort,
+		ThinkingMode:  "off",
+		RenderingMode: "messages",
+		Attachments:   []json.RawMessage{},
+		Files:         []json.RawMessage{},
+		SyncSources:   []json.RawMessage{},
+		Tools:         []WebTool{},
+	}
+
+	log.Printf("claudeweb: continue %s prompt=%q", existingConvID[:8], truncate(prompt, 80))
+
+	kernel.SetForkConvID(existingConvID)
+
+	m.toolLog.Reset()
+	var result strings.Builder
+	ctx := context.Background()
+
+	m.completionLoop(ctx, existingConvID, webReq, false, func(resp *model.LLMResponse, err error) bool {
+		if err != nil {
+			return false
+		}
+		if resp.Content != nil {
+			for _, p := range resp.Content.Parts {
+				if p.Text != "" {
+					result.WriteString(p.Text)
+				}
+			}
+		}
+		return true
+	}, true)
+
+	stdout := result.String()
+	stderr := m.toolLog.String()
+	log.Printf("claudeweb: continue %s done, stdout=%d stderr=%d",
+		existingConvID[:8], len(stdout), len(stderr))
+	return stdout, stderr
+}
+
 func (m *Model) RunConversation(prompt string) (string, string) {
 	convID := generateUUID()
 

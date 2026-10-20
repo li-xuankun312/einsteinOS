@@ -546,6 +546,21 @@ func DownloadConv(convID string) (string, error) {
 	return downloadConvFn(convID)
 }
 
+var continueConvFn func(convID, prompt string) (string, string)
+
+func SetContinueConvFn(fn func(string, string) (string, string)) {
+	continueConvFn = fn
+}
+
+// ContinueConv sends a new message to an existing conversation.
+// the conversation must be alive in the registry (d2aaf709).
+func ContinueConv(convID, prompt string) (string, string) {
+	if continueConvFn == nil {
+		return "", "no continue function set"
+	}
+	return continueConvFn(convID, prompt)
+}
+
 var downloadFileFn func(convID, path string) ([]byte, error)
 
 func SetDownloadFileFn(fn func(string, string) ([]byte, error)) {

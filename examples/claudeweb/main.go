@@ -569,6 +569,9 @@ func newConversation(name string) (*claudeweb.Model, *runner.Runner, string) {
 	kernel.SetDownloadFileFn(func(convID, path string) ([]byte, error) {
 		return client.DownloadFile(convID, path)
 	})
+	kernel.SetContinueConvFn(func(convID, prompt string) (string, string) {
+		return mdl.ContinueConversation(convID, prompt)
+	})
 
 	shadow := &claudeweb.ShadowExecutor{
 		WorkDir: cfg.workDir,
