@@ -33,13 +33,33 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 		return ref_split_leaf(parent_pid, owner, repo, sha, files, task, depth)
 	}
 
-	var chunks [][]string
-	for i := 0; i < len(files); i += SPLIT_CHUNK {
-		end := i + SPLIT_CHUNK
-		if end > len(files) {
-			end = len(files)
+	// interleave files by directory so each chunk gets a mix
+	// (not all cuda in chunk1 and all cpp in chunk3).
+	// group by parent dir, then round-robin across chunks.
+	nChunks := (len(files) + SPLIT_CHUNK - 1) / SPLIT_CHUNK
+	chunks := make([][]string, nChunks)
+
+	// group by directory
+	dirOrder := []string{}
+	dirFiles := map[string][]string{}
+	for _, f := range files {
+		d := f
+		if idx := strings.LastIndex(f, "/"); idx > 0 {
+			d = f[:idx]
 		}
-		chunks = append(chunks, files[i:end])
+		if _, ok := dirFiles[d]; !ok {
+			dirOrder = append(dirOrder, d)
+		}
+		dirFiles[d] = append(dirFiles[d], f)
+	}
+
+	// round-robin: distribute each dir's files across chunks
+	ci := 0
+	for _, d := range dirOrder {
+		for _, f := range dirFiles[d] {
+			chunks[ci%nChunks] = append(chunks[ci%nChunks], f)
+			ci++
+		}
 	}
 
 	log.Printf("ref_split: %s/%s@%s depth=%d %d files -> %d chunks",
@@ -217,14 +237,24 @@ func ref_split_fork(parent_pid int64, owner, repo, sha string, files []string, t
 		src_text = src_text[:100000]
 	}
 
-	prompt := src_text + theorize_instruction +
+	// INSTRUCTION FIRST, source code second.
+	// if source comes first, the child reads 2000+ lines of CUDA and starts
+	// "porting" it instead of writing mathematical theory. instruction must
+	// be the first thing the child sees after the task header.
+	prompt := theorize_instruction +
+		"\nCRITICAL RULES:\n" +
+		"- do NOT write .cu, .cpp, .py, or any implementation code\n" +
+		"- do NOT create build scripts, Makefiles, or test files\n" +
+		"- do NOT push to any git repository\n" +
+		"- ONLY output: ## FILE headers + LAYER 1a (LaTeX) + LAYER 1b (Lean 4) + LAYER 2 (form template)\n" +
+		"- write theory as TEXT in your response, or use create_file for .md files only\n\n" +
 		"you may use git to read other files for CONTEXT (understanding types, interfaces, dependencies).\n" +
 		"the bare repo is at " + dir + " — use `git --git-dir=" + dir + " show " + short_sha(sha) + ":<path>`.\n" +
 		"but produce LAYER 1/2 ONLY for YOUR files listed above. other chunks handle the rest.\n" +
 		"if any single file is too large to fully analyze, " +
 		"list its functions and produce both layers for the most important ones.\n\n" +
-		"write your LAYER 1 and LAYER 2 however you prefer — text, Artifact, or create_file all work. " +
-		"the kernel will download the full conversation after you finish."
+		"[SOURCE CODE for your chunk — read these, then write THEORY (not code) for them]\n\n" +
+		src_text
 
 	pid, err := Fork(prompt, ".")
 	if err != nil {
