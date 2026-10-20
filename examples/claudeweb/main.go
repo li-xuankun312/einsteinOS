@@ -100,16 +100,26 @@ func main() {
 			fmt.Println()
 
 		case input == "/new":
-			// clean up file system from previous runs to prevent pollution
+			// clean file system from previous runs to prevent writeback pollution.
+			// keep /tmp/ref_Niko1221_Strata.git (clone takes minutes).
+			// delete everything else that leaks into child conversations.
 			cleanPaths := []string{"/home/claude/Strata", "/home/claude/strata-ref.git",
 				"/home/claude/baloon", "/home/claude/ikun",
 				"/tmp/Strata", "/tmp/strata-bare", "/tmp/strata-shallow",
 				"/tmp/strata_checkout", "/tmp/strata-check",
-				"/tmp/baloon", "/tmp/mooncake.git", "/tmp/mooncake_co"}
+				"/tmp/baloon", "/tmp/mooncake.git", "/tmp/mooncake_co",
+				"/tmp/ikun"}
 			for _, p := range cleanPaths {
 				os.RemoveAll(p)
 			}
-			// keep /tmp/ref_* (bare repos reused by ref_clone)
+			// clean /tmp/ref_* except Strata (which takes too long to re-clone)
+			entries, _ := os.ReadDir("/tmp")
+			for _, e := range entries {
+				name := e.Name()
+				if strings.HasPrefix(name, "ref_") && !strings.Contains(name, "Strata") {
+					os.RemoveAll("/tmp/" + name)
+				}
+			}
 			mainLLM, mainRunner, mainSessID = newConversation("init")
 			fmt.Println("  ✓ Main conversation reset")
 			fmt.Println()

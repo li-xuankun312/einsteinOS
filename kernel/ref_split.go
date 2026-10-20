@@ -153,19 +153,37 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 			}
 		}
 
-		// d2aaf709: conversation is alive in registry. if result is too thin
-		// (e.g. 502 interrupted the child), Continue it instead of giving up.
-		if len(result) < 500 && convID != "" {
-			log.Printf("ref_split: chunk %d/%d result too thin (%d bytes), continuing conversation %s",
-				i+1, len(chunks), len(result), convID[:8])
-			retryStdout, _ := ContinueConv(convID,
-				"Continue. Your previous response was interrupted. "+
-					"Produce LAYER 1 and LAYER 2 for all files in your chunk. "+
-					"Output directly as text, or use create_file.")
-			if len(retryStdout) > len(result) {
-				log.Printf("ref_split: chunk %d/%d retry got %d bytes (was %d)",
-					i+1, len(chunks), len(retryStdout), len(result))
-				result = retryStdout
+		// detect bad results: too thin OR child refused (social engineering detection).
+		// if bad, open a fresh conversation and retry the same chunk.
+		needsRetry := false
+		if len(result) < 500 {
+			log.Printf("ref_split: chunk %d/%d result too thin (%d bytes)", i+1, len(chunks), len(result))
+			needsRetry = true
+		}
+		if strings.Contains(result, "don't have any prior context") ||
+			strings.Contains(result, "social engineering") ||
+			strings.Contains(result, "no earlier tool calls") ||
+			strings.Contains(result, "don't have context") {
+			log.Printf("ref_split: chunk %d/%d child refused (writeback confusion), retrying fresh",
+				i+1, len(chunks))
+			needsRetry = true
+		}
+
+		if needsRetry {
+			// open a brand new conversation with the same chunk — don't reuse the confused one.
+			log.Printf("ref_split: chunk %d/%d retrying with fresh conversation", i+1, len(chunks))
+			retryPid := ref_split_fork(parent_pid, owner, repo, sha, chunk, task, depth+1, i, len(chunks), chunks, results)
+			if retryPid > 0 {
+				Wait(retryPid)
+				retryResult := GetResult(retryPid)
+				if m := getMeta(retryPid); m != nil && m.ConvID != "" {
+					RegisterConv(parent_pid, m.ConvID, owner+"/"+repo, role+"_retry", 0)
+				}
+				if len(retryResult) > len(result) {
+					log.Printf("ref_split: chunk %d/%d retry got %d bytes (was %d)",
+						i+1, len(chunks), len(retryResult), len(result))
+					result = retryResult
+				}
 			}
 		}
 
