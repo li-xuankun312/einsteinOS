@@ -19,6 +19,7 @@ type TaskMeta struct {
 	ConvID       string
 	Result       string
 	StdErr       string
+	Role         string // from d2aaf709: hw_probe, theorize_chunk_N, dev_draft, dev_fix, ref_discover
 	Ctx          context.Context
 	Cancel       context.CancelFunc
 	Cmd          *exec.Cmd
@@ -75,9 +76,12 @@ var convExecFn func(prompt string) (string, string)
 
 // forkConvID: goroutine writes convID here before convExecFn returns.
 // Fork goroutine reads it after convExecFn returns to set TaskMeta.ConvID.
+// forkRole: set by ForkWithRole before convExecFn, read by RunConversation
+// to determine child lifecycle (max rounds). follows d2aaf709 architecture.
 // Protected by forkConvMu. Keyed by goroutine — only one writer at a time
 // per convExecFn call since RunConversation is synchronous within the goroutine.
 var forkConvID string
+var forkRole string
 var forkConvMu sync.Mutex
 
 func SetForkConvID(convID string) {
@@ -86,12 +90,44 @@ func SetForkConvID(convID string) {
 	forkConvMu.Unlock()
 }
 
+func SetForkRole(role string) {
+	forkConvMu.Lock()
+	forkRole = role
+	forkConvMu.Unlock()
+}
+
+func ConsumeForkRole() string {
+	forkConvMu.Lock()
+	r := forkRole
+	forkRole = ""
+	forkConvMu.Unlock()
+	return r
+}
+
 func SetConvExec(fn func(string) (string, string)) {
 	convExecFn = fn
 }
 
 func GetConvExec() func(string) (string, string) {
 	return convExecFn
+}
+
+// ForkWithRole creates a child conversation with a registered role.
+// the role controls the child's lifecycle (max rounds, writeback behavior).
+// this follows d2aaf709: conversations are indexed resources with identity.
+func ForkWithRole(prompt string, pwd string, role string) (int64, error) {
+	SetForkRole(role)
+	pid, err := Fork(prompt, pwd)
+	if err != nil {
+		SetForkRole("") // clear on failure
+		return 0, err
+	}
+	metaMu.Lock()
+	if m, ok := taskMeta[pid]; ok {
+		m.Role = role
+	}
+	metaMu.Unlock()
+	return pid, err
 }
 
 func Fork(prompt string, pwd string) (int64, error) {

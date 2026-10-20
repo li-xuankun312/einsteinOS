@@ -226,6 +226,19 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 	isChild := len(opts) > 0 && opts[0]
 	st := &loopState{convID: convID, isChild: isChild}
 
+	// d2aaf709: role determines lifecycle. consume the role set by ForkWithRole.
+	childRole := kernel.ConsumeForkRole()
+	roleMaxRounds := maxRounds
+	switch childRole {
+	case "hw_probe", "ref_discover":
+		roleMaxRounds = 2 // probe and report, don't explore
+	case "dir_survey", "file_survey":
+		roleMaxRounds = 1 // classify and return, single round
+	}
+	if childRole != "" {
+		log.Printf("claudeweb: child role=%s maxRounds=%d", childRole, roleMaxRounds)
+	}
+
 	// save the original user prompt BEFORE webReq.Prompt gets mutated by
 	// writeback Continue loops. the 30-tool switch needs the user's original
 	// input for extractRepoMentions, not the writeback continuation text.
@@ -258,7 +271,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 		}, nil)
 	}
 
-	for round := 0; round < maxRounds; round++ {
+	for round := 0; round < roleMaxRounds; round++ {
 		st.rounds = round + 1
 
 		body, err := m.client.Completion(convID, webReq)
@@ -570,7 +583,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 		}
 	}
 
-	doExit(exitRounds, fmt.Sprintf("[exceeded %d rounds]", maxRounds))
+	doExit(exitRounds, fmt.Sprintf("[exceeded %d rounds]", roleMaxRounds))
 }
 
 func (m *Model) extractPrompt(req *model.LLMRequest) string {

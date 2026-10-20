@@ -267,11 +267,11 @@ func hw_init(pid int64) (string, error) {
 		"CPU cores, memory, kernel version.\n\n" +
 		"context: " + task
 
-	child, err := Fork(prompt, ".")
+	child, err := ForkWithRole(prompt, ".", "hw_probe")
 	if err != nil {
 		return "", err
 	}
-	log.Printf("hw_init: pid=%d child=%d", pid, child)
+	log.Printf("hw_init: pid=%d child=%d role=hw_probe", pid, child)
 	Wait(child)
 
 	hw_info := GetResult(child)
