@@ -551,6 +551,20 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 		log.Printf("claudeweb: stop_reason=%q tools=%d text=%d", stopReason, len(collectedTools), textBuf.Len())
 		kernel.TouchByConv(convID)
 
+		// stop_reason="" means the SSE stream broke mid-generation.
+		// the remote is still generating — sending writeback now would
+		// inject a new user message that interrupts the remote's response,
+		// causing "I don't have context" confusion.
+		// instead: send a bare "Continue" without tool results, letting
+		// the remote finish its current generation naturally.
+		if stopReason == "" && len(collectedTools) > 0 {
+			log.Printf("claudeweb: stop_reason empty with %d tools — SSE broke mid-stream, sending bare Continue (no writeback)",
+				len(collectedTools))
+			webReq.Prompt = "Continue"
+			webReq.CreateConversationParams = nil
+			continue
+		}
+
 		if textBuf.Len() > 0 {
 			st.consecutiveContinues = 0
 			yield(&model.LLMResponse{
