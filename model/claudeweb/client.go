@@ -230,7 +230,11 @@ func (c *Client) CreateConversation(name, modelName string) (string, error) {
 }
 
 func (c *Client) DownloadConversation(convID string) (string, error) {
-	url := fmt.Sprintf("%s/api/organizations/%s/chat_conversations/%s",
+	// tree=True: return the full message tree, not just the last leaf.
+	// rendering_mode=messages: raw message format with tool_use/tool_result.
+	// render_all_tools=true: include tool_use input (create_file file_text).
+	// consistency=strong: don't return stale cache if remote just wrote.
+	url := fmt.Sprintf("%s/api/organizations/%s/chat_conversations/%s?tree=True&rendering_mode=messages&render_all_tools=true&consistency=strong",
 		c.baseURL, c.orgID, convID)
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
@@ -252,7 +256,7 @@ func (c *Client) DownloadConversation(convID string) (string, error) {
 
 	var conv struct {
 		ChatMessages []struct {
-			Sender  string `json:"sender"`
+			Sender  string            `json:"sender"`
 			Content []json.RawMessage `json:"content"`
 		} `json:"chat_messages"`
 	}
@@ -261,6 +265,7 @@ func (c *Client) DownloadConversation(convID string) (string, error) {
 	}
 
 	var md strings.Builder
+	var createdFiles int
 	for _, msg := range conv.ChatMessages {
 		for _, raw := range msg.Content {
 			var block struct {
@@ -281,8 +286,22 @@ func (c *Client) DownloadConversation(convID string) (string, error) {
 					md.WriteString("\n\n")
 				}
 			case "tool_use":
-				// child called a tool — extract the command
-				if block.Name == "bash_tool" || block.Name == "bash" {
+				if block.Name == "create_file" || block.Name == "str_replace" {
+					// create_file: input has {path, file_text}
+					// this is the primary output channel for theory/code.
+					// even if SSE broke mid-stream, the remote conversation
+					// has the full file_text in its message history.
+					var inp struct {
+						Path     string `json:"path"`
+						FileText string `json:"file_text"`
+					}
+					if json.Unmarshal(block.Input, &inp) == nil && inp.FileText != "" {
+						md.WriteString(fmt.Sprintf("\n## FILE: %s\n", inp.Path))
+						md.WriteString(inp.FileText)
+						md.WriteString("\n\n")
+						createdFiles++
+					}
+				} else if block.Name == "bash_tool" || block.Name == "bash" {
 					var inp struct {
 						Command string `json:"command"`
 					}
@@ -291,7 +310,7 @@ func (c *Client) DownloadConversation(convID string) (string, error) {
 					}
 				}
 			case "tool_result":
-				// shell execution output — this is where compile results live
+				// shell execution output — compile results, test output
 				var content string
 				if json.Unmarshal(block.Content, &content) == nil {
 					if len(content) > 0 {
@@ -299,7 +318,6 @@ func (c *Client) DownloadConversation(convID string) (string, error) {
 						md.WriteString("\n\n")
 					}
 				} else {
-					// content might be array of blocks
 					var parts []struct {
 						Type string `json:"type"`
 						Text string `json:"text"`
@@ -316,8 +334,8 @@ func (c *Client) DownloadConversation(convID string) (string, error) {
 			}
 		}
 	}
-	log.Printf("claudeweb: downloaded %s: %d chars from %d messages",
-		convID[:8], md.Len(), len(conv.ChatMessages))
+	log.Printf("claudeweb: downloaded %s: %d chars from %d messages (%d created files)",
+		convID[:8], md.Len(), len(conv.ChatMessages), createdFiles)
 	return md.String(), nil
 }
 
