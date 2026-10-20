@@ -100,6 +100,16 @@ func main() {
 			fmt.Println()
 
 		case input == "/new":
+			// clean up file system from previous runs to prevent pollution
+			cleanPaths := []string{"/home/claude/Strata", "/home/claude/strata-ref.git",
+				"/home/claude/baloon", "/home/claude/ikun",
+				"/tmp/Strata", "/tmp/strata-bare", "/tmp/strata-shallow",
+				"/tmp/strata_checkout", "/tmp/strata-check",
+				"/tmp/baloon", "/tmp/mooncake.git", "/tmp/mooncake_co"}
+			for _, p := range cleanPaths {
+				os.RemoveAll(p)
+			}
+			// keep /tmp/ref_* (bare repos reused by ref_clone)
 			mainLLM, mainRunner, mainSessID = newConversation("init")
 			fmt.Println("  ✓ Main conversation reset")
 			fmt.Println()
