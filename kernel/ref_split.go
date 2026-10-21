@@ -172,21 +172,51 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 		if needsRetry && convID != "" {
 			// SSE broke but remote may still be generating. the conversation
 			// on the server keeps running even after our SSE connection drops.
-			// wait 15 min, then re-download — if remote finished, we get the
-			// create_file content without wasting a fresh retry.
-			log.Printf("ref_split: chunk %d/%d too thin, waiting 15min for remote to finish (conv %s)",
+			// poll every 3min: download conversation, compare size to previous.
+			// if size grows → remote still working, keep waiting.
+			// if size stable and > 500 → remote finished, use it.
+			// if size stable and <= 500 after 30min → give up, retry fresh.
+			log.Printf("ref_split: chunk %d/%d too thin, polling remote conv %s (3min intervals, max 30min)",
 				i+1, len(chunks), convID[:8])
-			time.Sleep(15 * time.Minute)
+			prevSize := len(result)
+			stableCount := 0
+			for poll := 0; poll < 10; poll++ { // 10 × 3min = 30min max
+				time.Sleep(3 * time.Minute)
+				redownloaded, err := DownloadConv(convID)
+				curSize := 0
+				if err == nil {
+					curSize = len(redownloaded)
+				}
+				log.Printf("ref_split: chunk %d/%d poll %d/10: %d bytes (prev %d)",
+					i+1, len(chunks), poll+1, curSize, prevSize)
 
-			redownloaded, err := DownloadConv(convID)
-			if err == nil && len(redownloaded) > 500 {
-				log.Printf("ref_split: chunk %d/%d re-download after 15min: %d bytes (was %d) — remote finished!",
-					i+1, len(chunks), len(redownloaded), len(result))
-				result = redownloaded
+				if curSize > 500 {
+					if curSize == prevSize {
+						stableCount++
+					} else {
+						stableCount = 0
+					}
+					// stable for 2 consecutive polls (6min) = remote is done
+					if stableCount >= 2 {
+						log.Printf("ref_split: chunk %d/%d remote finished: %d bytes stable for 6min",
+							i+1, len(chunks), curSize)
+						result = redownloaded
+						needsRetry = false
+						break
+					}
+					// size grew but already big enough — remote still going, update result
+					if curSize > len(result) {
+						result = redownloaded
+					}
+				}
+				prevSize = curSize
+			}
+			// if we exited the loop with a good result, needsRetry is already false.
+			// if result grew past 500 during polling but never stabilized, use what we have.
+			if needsRetry && len(result) > 500 {
+				log.Printf("ref_split: chunk %d/%d polling timeout but got %d bytes, using partial",
+					i+1, len(chunks), len(result))
 				needsRetry = false
-			} else {
-				log.Printf("ref_split: chunk %d/%d re-download after 15min: still thin (%d bytes), will retry fresh",
-					i+1, len(chunks), len(redownloaded))
 			}
 		}
 
