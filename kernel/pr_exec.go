@@ -467,6 +467,10 @@ func dev_split_theory(theory string) []string {
 			newPath = strings.TrimLeft(newPath, ": ")
 		}
 
+		if isHeader {
+			// clean the path: strip quotes, backticks, leading/trailing junk
+			newPath = strings.Trim(newPath, "\"'` \t\r\n")
+		}
 		if isHeader && cur.Len() > 0 {
 			flush()
 		}
@@ -492,12 +496,22 @@ func dev_split_theory(theory string) []string {
 	dirOrder := []string{}
 	dirSections := map[string][]fileSection{}
 	for _, sec := range sections {
-		// skip shadow local paths
-		if strings.HasPrefix(sec.path, "/home/claude") || strings.HasPrefix(sec.dir, "/home/claude") ||
-			strings.HasPrefix(sec.path, "/mnt/") || strings.HasPrefix(sec.dir, "/mnt/") ||
-			strings.HasPrefix(sec.path, "/tmp/") || strings.HasPrefix(sec.dir, "/tmp/") {
+		// clean path/dir: strip quotes, whitespace that leaked from parsing
+		cleanPath := strings.Trim(sec.path, "\"'` \t")
+		cleanDir := strings.Trim(sec.dir, "\"'` \t")
+
+		// skip shadow/local paths
+		if strings.HasPrefix(cleanPath, "/home/claude") || strings.HasPrefix(cleanDir, "/home/claude") ||
+			strings.HasPrefix(cleanPath, "/mnt/") || strings.HasPrefix(cleanDir, "/mnt/") ||
+			strings.HasPrefix(cleanPath, "/tmp/") || strings.HasPrefix(cleanDir, "/tmp/") {
 			continue
 		}
+		// skip malformed: path contains ## FILE: (concatenated headers from ContinueConv)
+		if strings.Contains(cleanPath, "## FILE:") || strings.Contains(cleanDir, "## FILE:") {
+			continue
+		}
+		sec.path = cleanPath
+		sec.dir = cleanDir
 		d := sec.dir
 		if d == "" {
 			d = "/"
