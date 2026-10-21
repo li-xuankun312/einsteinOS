@@ -489,32 +489,38 @@ func dirSurveyChild(owner, name, sha string, heavy []string, light []lightFile, 
 
 	prompt.WriteString("\nreply ONLY: keep=dir1,dir2,dir3\nskip tests, benchmarks, examples, docs, CI, vendored, build scripts.\n")
 
-	child, err := Fork(prompt.String(), ".")
-	if err != nil {
-		log.Printf("dirSurveyChild: fork failed: %v", err)
-		return nil
-	}
-	Wait(child)
-
-	stdout := GetResult(child)
-	log.Printf("dirSurveyChild: child returned %d bytes", len(stdout))
-
-	// parse keep= line
 	var keepDirs []string
-	for _, line := range strings.Split(stdout, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "keep=") {
-			for _, d := range strings.Split(line[5:], ",") {
-				d = strings.TrimSpace(d)
-				if d != "" {
-					keepDirs = append(keepDirs, d)
+	for attempt := 1; attempt <= 5; attempt++ {
+		child, err := Fork(prompt.String(), ".")
+		if err != nil {
+			log.Printf("dirSurveyChild: fork failed (attempt %d/5): %v", attempt, err)
+			continue
+		}
+		Wait(child)
+
+		stdout := GetResult(child)
+		log.Printf("dirSurveyChild: child returned %d bytes (attempt %d/5)", len(stdout), attempt)
+
+		for _, line := range strings.Split(stdout, "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "keep=") {
+				for _, d := range strings.Split(line[5:], ",") {
+					d = strings.TrimSpace(d)
+					if d != "" {
+						keepDirs = append(keepDirs, d)
+					}
 				}
 			}
 		}
+
+		if len(keepDirs) > 0 {
+			break
+		}
+		log.Printf("dirSurveyChild: no keep dirs parsed (attempt %d/5), retrying", attempt)
 	}
 
 	if len(keepDirs) == 0 {
-		log.Printf("dirSurveyChild: no keep dirs parsed, skipping prune")
+		log.Printf("dirSurveyChild: all attempts failed, skipping prune")
 		return nil
 	}
 
@@ -583,39 +589,46 @@ func fileSurveyChild(owner, name, sha string, initHeavy []string, initLight []li
 	prompt.WriteString("heavy=comma,separated,paths\n")
 	prompt.WriteString("light=comma,separated,paths\n")
 
-	child, err := Fork(prompt.String(), ".")
-	if err != nil {
-		log.Printf("fileSurveyChild: fork failed: %v", err)
-		return nil
-	}
-	Wait(child)
-
-	stdout := GetResult(child)
-	log.Printf("fileSurveyChild: %s/%s child returned %d bytes", owner, name, len(stdout))
-
-	// parse heavy= and light= lines
 	var heavyPaths, lightPaths []string
-	for _, line := range strings.Split(stdout, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "heavy=") {
-			for _, p := range strings.Split(line[6:], ",") {
-				p = strings.TrimSpace(p)
-				if p != "" && allFiles[p] > 0 {
-					heavyPaths = append(heavyPaths, p)
+	for attempt := 1; attempt <= 5; attempt++ {
+		child, err := Fork(prompt.String(), ".")
+		if err != nil {
+			log.Printf("fileSurveyChild: fork failed (attempt %d/5): %v", attempt, err)
+			continue
+		}
+		Wait(child)
+
+		stdout := GetResult(child)
+		log.Printf("fileSurveyChild: %s/%s child returned %d bytes (attempt %d/5)", owner, name, len(stdout), attempt)
+
+		// parse heavy= and light= lines
+		for _, line := range strings.Split(stdout, "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "heavy=") {
+				for _, p := range strings.Split(line[6:], ",") {
+					p = strings.TrimSpace(p)
+					if p != "" && allFiles[p] > 0 {
+						heavyPaths = append(heavyPaths, p)
+					}
 				}
-			}
-		} else if strings.HasPrefix(line, "light=") {
-			for _, p := range strings.Split(line[6:], ",") {
-				p = strings.TrimSpace(p)
-				if p != "" && allFiles[p] > 0 {
-					lightPaths = append(lightPaths, p)
+			} else if strings.HasPrefix(line, "light=") {
+				for _, p := range strings.Split(line[6:], ",") {
+					p = strings.TrimSpace(p)
+					if p != "" && allFiles[p] > 0 {
+						lightPaths = append(lightPaths, p)
+					}
 				}
 			}
 		}
+
+		if len(heavyPaths) > 0 || len(lightPaths) > 0 {
+			break
+		}
+		log.Printf("fileSurveyChild: no parseable output (attempt %d/5), retrying", attempt)
 	}
 
 	if len(heavyPaths) == 0 && len(lightPaths) == 0 {
-		log.Printf("fileSurveyChild: no parseable output, keeping kernel classification")
+		log.Printf("fileSurveyChild: all attempts failed, keeping kernel classification")
 		return nil
 	}
 
