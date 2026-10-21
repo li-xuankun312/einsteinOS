@@ -273,21 +273,34 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 			}
 		}
 
-		if needsRetry {
-			// remote didn't finish even after 15min. open a brand new conversation.
-			log.Printf("ref_split: chunk %d/%d retrying with fresh conversation", i+1, len(chunks))
+		// retry up to 3 times — SSE breaks are network issues (proxy, TLS),
+		// same chunk can hit it twice in a row when the network is bad.
+		for attempt := 1; attempt <= 3 && needsRetry; attempt++ {
+			log.Printf("ref_split: chunk %d/%d retry %d/3 with fresh conversation", i+1, len(chunks), attempt)
 			retryPid := ref_split_fork(parent_pid, owner, repo, sha, chunk, task, depth+1, i, len(chunks), chunks, results)
-			if retryPid > 0 {
-				Wait(retryPid)
-				retryResult := GetResult(retryPid)
-				if m := getMeta(retryPid); m != nil && m.ConvID != "" {
-					RegisterConv(parent_pid, m.ConvID, owner+"/"+repo, role+"_retry", 0)
+			if retryPid <= 0 {
+				break
+			}
+			Wait(retryPid)
+			retryResult := GetResult(retryPid)
+			retryConvID := ""
+			if m := getMeta(retryPid); m != nil && m.ConvID != "" {
+				retryConvID = m.ConvID
+				RegisterConv(parent_pid, m.ConvID, owner+"/"+repo, fmt.Sprintf("%s_retry%d", role, attempt), 0)
+			}
+			// also download the retry conversation
+			if retryConvID != "" {
+				if dl, err := DownloadConv(retryConvID); err == nil && len(dl) > len(retryResult) {
+					retryResult = dl
 				}
-				if len(retryResult) > len(result) {
-					log.Printf("ref_split: chunk %d/%d retry got %d bytes (was %d)",
-						i+1, len(chunks), len(retryResult), len(result))
-					result = retryResult
-				}
+			}
+			if len(retryResult) > len(result) {
+				log.Printf("ref_split: chunk %d/%d retry %d/3 got %d bytes (was %d)",
+					i+1, len(chunks), attempt, len(retryResult), len(result))
+				result = retryResult
+			}
+			if len(result) >= 500 {
+				needsRetry = false
 			}
 		}
 
