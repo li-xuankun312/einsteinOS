@@ -273,10 +273,10 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 			}
 		}
 
-		// retry until success — SSE breaks are network issues (proxy, TLS).
-		// no artificial cap: rate limit is the natural limit.
-		for attempt := 1; needsRetry; attempt++ {
-			log.Printf("ref_split: chunk %d/%d retry attempt %d with fresh conversation", i+1, len(chunks), attempt)
+		// retry up to 5 times — SSE breaks are transient network issues.
+		// 5 is enough for proxy/TLS flaps. beyond that, stop and report.
+		for attempt := 1; attempt <= 5 && needsRetry; attempt++ {
+			log.Printf("ref_split: chunk %d/%d retry %d/5 with fresh conversation", i+1, len(chunks), attempt)
 			retryPid := ref_split_fork(parent_pid, owner, repo, sha, chunk, task, depth+1, i, len(chunks), chunks, results)
 			if retryPid <= 0 {
 				break
