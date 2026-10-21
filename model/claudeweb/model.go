@@ -292,7 +292,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 					continue
 				}
 				log.Printf("claudeweb: rate limit on effort=high, waiting 3 minutes")
-				time.Sleep(3 * time.Minute)
+				sleepWithHeartbeat(3 * time.Minute)
 				continue
 			}
 			doExit(exitError, fmt.Sprintf("[API Error] %v", err))
