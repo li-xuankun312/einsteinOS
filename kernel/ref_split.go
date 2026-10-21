@@ -273,10 +273,10 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 			}
 		}
 
-		// retry up to 3 times — SSE breaks are network issues (proxy, TLS),
-		// same chunk can hit it twice in a row when the network is bad.
-		for attempt := 1; attempt <= 3 && needsRetry; attempt++ {
-			log.Printf("ref_split: chunk %d/%d retry %d/3 with fresh conversation", i+1, len(chunks), attempt)
+		// retry until success — SSE breaks are network issues (proxy, TLS).
+		// no artificial cap: rate limit is the natural limit.
+		for attempt := 1; needsRetry; attempt++ {
+			log.Printf("ref_split: chunk %d/%d retry attempt %d with fresh conversation", i+1, len(chunks), attempt)
 			retryPid := ref_split_fork(parent_pid, owner, repo, sha, chunk, task, depth+1, i, len(chunks), chunks, results)
 			if retryPid <= 0 {
 				break
@@ -286,7 +286,7 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 			retryConvID := ""
 			if m := getMeta(retryPid); m != nil && m.ConvID != "" {
 				retryConvID = m.ConvID
-				RegisterConv(parent_pid, m.ConvID, owner+"/"+repo, fmt.Sprintf("%s_retry%d", role, attempt), 0)
+				RegisterConv(parent_pid, m.ConvID, owner+"/"+repo, fmt.Sprintf("%s_r%d", role, attempt), 0)
 			}
 			// also download the retry conversation
 			if retryConvID != "" {
@@ -295,7 +295,7 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 				}
 			}
 			if len(retryResult) > len(result) {
-				log.Printf("ref_split: chunk %d/%d retry %d/3 got %d bytes (was %d)",
+				log.Printf("ref_split: chunk %d/%d attempt %d got %d bytes (was %d)",
 					i+1, len(chunks), attempt, len(retryResult), len(result))
 				result = retryResult
 			}
