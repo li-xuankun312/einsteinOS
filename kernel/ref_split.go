@@ -238,29 +238,6 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 			}
 		}
 
-		// error exit with partial result: conversation is alive with context.
-		// ContinueConv to recover remaining files instead of accepting partial.
-		// detect via stderr (completionLoop logs "do_exit(error)").
-		if !needsRetry && convID != "" && len(result) >= 500 {
-			stderr := GetStderr(child_pid)
-			if strings.Contains(stderr, "do_exit(error)") || strings.Contains(stderr, "do_exit(starvation)") {
-				fileHeaders := strings.Count(result, "## FILE:")
-				if fileHeaders < len(chunk) {
-					log.Printf("ref_split: chunk %d/%d error exit with partial result (%d files of %d), ContinueConv to recover",
-						i+1, len(chunks), fileHeaders, len(chunk))
-					contResult, _ := ContinueConv(convID,
-						fmt.Sprintf("You were interrupted. You covered %d files but this chunk has %d. "+
-							"Continue writing LAYER 1 and LAYER 2 for the remaining files. "+
-							"Use the same ## FILE: header format.", fileHeaders, len(chunk)))
-					if len(contResult) > 100 {
-						log.Printf("ref_split: chunk %d/%d ContinueConv recovered %d bytes",
-							i+1, len(chunks), len(contResult))
-						result = result + "\n\n" + contResult
-					}
-				}
-			}
-		}
-
 		results = append(results, result)
 		log.Printf("ref_split: %s/%s@%s chunk %d/%d done (%d bytes)",
 			owner, repo, short_sha(sha), i+1, len(chunks), len(result))
