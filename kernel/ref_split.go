@@ -154,6 +154,53 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 			}
 		}
 
+		// theory completeness: count ## FILE: headers vs assigned files.
+		// if missing, ContinueConv on the same theorize conversation.
+		// the conversation has prior file context → theories stay connected.
+		if convID != "" && len(result) >= 500 {
+			covered := map[string]bool{}
+			for _, line := range strings.Split(result, "\n") {
+				trimmed := strings.TrimSpace(line)
+				if strings.HasPrefix(trimmed, "## FILE:") {
+					path := strings.TrimSpace(trimmed[len("## FILE:"):])
+					covered[path] = true
+				} else if strings.Contains(trimmed, "## FILE:") {
+					idx := strings.Index(trimmed, "## FILE:")
+					path := strings.TrimSpace(trimmed[idx+len("## FILE:"):])
+					covered[path] = true
+				}
+			}
+			var missing []string
+			for _, f := range chunk {
+				if !covered[f] {
+					missing = append(missing, f)
+				}
+			}
+			if len(missing) > 0 && len(missing) < len(chunk) {
+				log.Printf("ref_split: chunk %d/%d has %d/%d files covered, %d missing — ContinueConv to recover",
+					i+1, len(chunks), len(covered), len(chunk), len(missing))
+				var prompt strings.Builder
+				prompt.WriteString(fmt.Sprintf("Continue. %d files remaining:\n", len(missing)))
+				for _, f := range missing {
+					prompt.WriteString(f + "\n")
+				}
+				contResult, _ := ContinueConv(convID, prompt.String())
+				if len(contResult) > 100 {
+					// re-download full conversation to get everything including create_file
+					fullDownload, err := DownloadConv(convID)
+					if err == nil && len(fullDownload) > len(result) {
+						log.Printf("ref_split: chunk %d/%d ContinueConv + re-download: %d bytes (was %d)",
+							i+1, len(chunks), len(fullDownload), len(result))
+						result = fullDownload
+					} else {
+						log.Printf("ref_split: chunk %d/%d ContinueConv appended %d bytes",
+							i+1, len(chunks), len(contResult))
+						result = result + "\n\n" + contResult
+					}
+				}
+			}
+		}
+
 		// detect bad results: too thin OR child refused (social engineering detection).
 		needsRetry := false
 		if len(result) < 500 {
