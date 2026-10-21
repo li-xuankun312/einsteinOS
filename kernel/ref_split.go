@@ -229,17 +229,23 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 			stableCount := 0
 			for poll := 0; poll < 10; poll++ { // 10 × 3min = 30min max
 				time.Sleep(3 * time.Minute)
-				redownloaded, err := DownloadConv(convID)
+				redownloaded, dlErr := DownloadConv(convID)
 				curSize := 0
-				if err == nil {
+				if dlErr == nil {
 					curSize = len(redownloaded)
+				}
+				if dlErr != nil {
+					log.Printf("ref_split: chunk %d/%d poll %d/10: download error (network), skipping: %v",
+						i+1, len(chunks), poll+1, dlErr)
+					// don't update prevSize — network error is not signal about conversation state
+					continue
 				}
 				log.Printf("ref_split: chunk %d/%d poll %d/10: %d bytes (prev %d)",
 					i+1, len(chunks), poll+1, curSize, prevSize)
 
 				if curSize == 0 && prevSize == 0 {
-					// conversation is dead/empty — don't waste 30min polling nothing
-					log.Printf("ref_split: chunk %d/%d poll %d: 0 bytes, conversation dead — retry now",
+					// download succeeded but empty — conversation genuinely dead
+					log.Printf("ref_split: chunk %d/%d poll %d: download OK but 0 bytes, conversation dead — retry now",
 						i+1, len(chunks), poll+1)
 					break
 				}
