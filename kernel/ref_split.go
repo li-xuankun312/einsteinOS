@@ -275,6 +275,7 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 
 		// retry up to 5 times — SSE breaks are transient network issues.
 		// 5 is enough for proxy/TLS flaps. beyond that, stop and report.
+		lastRetryConvID := ""
 		for attempt := 1; attempt <= 5 && needsRetry; attempt++ {
 			log.Printf("ref_split: chunk %d/%d retry %d/5 with fresh conversation", i+1, len(chunks), attempt)
 			retryPid := ref_split_fork(parent_pid, owner, repo, sha, chunk, task, depth+1, i, len(chunks), chunks, results)
@@ -298,9 +299,51 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 				log.Printf("ref_split: chunk %d/%d attempt %d got %d bytes (was %d)",
 					i+1, len(chunks), attempt, len(retryResult), len(result))
 				result = retryResult
+				lastRetryConvID = retryConvID
 			}
 			if len(result) >= 500 {
 				needsRetry = false
+			}
+		}
+
+		// theory completeness check on retry result too.
+		// retry might also be partial (SSE broke again mid-way).
+		if lastRetryConvID != "" && len(result) >= 500 {
+			covered := map[string]bool{}
+			for _, line := range strings.Split(result, "\n") {
+				trimmed := strings.TrimSpace(line)
+				if strings.HasPrefix(trimmed, "## FILE:") {
+					path := strings.TrimSpace(trimmed[len("## FILE:"):])
+					covered[path] = true
+				} else if strings.Contains(trimmed, "## FILE:") {
+					idx := strings.Index(trimmed, "## FILE:")
+					path := strings.TrimSpace(trimmed[idx+len("## FILE:"):])
+					covered[path] = true
+				}
+			}
+			var missing []string
+			for _, f := range chunk {
+				if !covered[f] {
+					missing = append(missing, f)
+				}
+			}
+			if len(missing) > 0 && len(missing) < len(chunk) {
+				log.Printf("ref_split: chunk %d/%d retry result has %d/%d files, %d missing — ContinueConv",
+					i+1, len(chunks), len(covered), len(chunk), len(missing))
+				var prompt strings.Builder
+				prompt.WriteString(fmt.Sprintf("Continue. %d files remaining:\n", len(missing)))
+				for _, f := range missing {
+					prompt.WriteString(f + "\n")
+				}
+				contResult, _ := ContinueConv(lastRetryConvID, prompt.String())
+				if len(contResult) > 100 {
+					fullDownload, err := DownloadConv(lastRetryConvID)
+					if err == nil && len(fullDownload) > len(result) {
+						result = fullDownload
+					} else {
+						result = result + "\n\n" + contResult
+					}
+				}
 			}
 		}
 
