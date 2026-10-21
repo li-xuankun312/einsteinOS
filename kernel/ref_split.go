@@ -5,6 +5,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"time"
 )
 
 type SplitNode struct {
@@ -154,7 +155,6 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 		}
 
 		// detect bad results: too thin OR child refused (social engineering detection).
-		// if bad, open a fresh conversation and retry the same chunk.
 		needsRetry := false
 		if len(result) < 500 {
 			log.Printf("ref_split: chunk %d/%d result too thin (%d bytes)", i+1, len(chunks), len(result))
@@ -169,8 +169,29 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 			needsRetry = true
 		}
 
+		if needsRetry && convID != "" {
+			// SSE broke but remote may still be generating. the conversation
+			// on the server keeps running even after our SSE connection drops.
+			// wait 15 min, then re-download — if remote finished, we get the
+			// create_file content without wasting a fresh retry.
+			log.Printf("ref_split: chunk %d/%d too thin, waiting 15min for remote to finish (conv %s)",
+				i+1, len(chunks), convID[:8])
+			time.Sleep(15 * time.Minute)
+
+			redownloaded, err := DownloadConv(convID)
+			if err == nil && len(redownloaded) > 500 {
+				log.Printf("ref_split: chunk %d/%d re-download after 15min: %d bytes (was %d) — remote finished!",
+					i+1, len(chunks), len(redownloaded), len(result))
+				result = redownloaded
+				needsRetry = false
+			} else {
+				log.Printf("ref_split: chunk %d/%d re-download after 15min: still thin (%d bytes), will retry fresh",
+					i+1, len(chunks), len(redownloaded))
+			}
+		}
+
 		if needsRetry {
-			// open a brand new conversation with the same chunk — don't reuse the confused one.
+			// remote didn't finish even after 15min. open a brand new conversation.
 			log.Printf("ref_split: chunk %d/%d retrying with fresh conversation", i+1, len(chunks))
 			retryPid := ref_split_fork(parent_pid, owner, repo, sha, chunk, task, depth+1, i, len(chunks), chunks, results)
 			if retryPid > 0 {
