@@ -226,6 +226,7 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 			log.Printf("ref_split: chunk %d/%d too thin, polling remote conv %s (3min intervals, max 30min)",
 				i+1, len(chunks), convID[:8])
 			prevSize := len(result)
+			maxSeen := len(result)
 			stableCount := 0
 			for poll := 0; poll < 10; poll++ { // 10 × 3min = 30min max
 				time.Sleep(3 * time.Minute)
@@ -237,17 +238,26 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 				if dlErr != nil {
 					log.Printf("ref_split: chunk %d/%d poll %d/10: download error (network), skipping: %v",
 						i+1, len(chunks), poll+1, dlErr)
-					// don't update prevSize — network error is not signal about conversation state
 					continue
 				}
-				log.Printf("ref_split: chunk %d/%d poll %d/10: %d bytes (prev %d)",
-					i+1, len(chunks), poll+1, curSize, prevSize)
+				log.Printf("ref_split: chunk %d/%d poll %d/10: %d bytes (prev %d, max %d)",
+					i+1, len(chunks), poll+1, curSize, prevSize, maxSeen)
 
-				if curSize == 0 && prevSize == 0 {
-					// download succeeded but empty — conversation genuinely dead
-					log.Printf("ref_split: chunk %d/%d poll %d: download OK but 0 bytes, conversation dead — retry now",
-						i+1, len(chunks), poll+1)
-					break
+				// 0-byte response: if we've never seen content, conversation is dead.
+				// if we HAVE seen content before, this is API flap — skip like network error.
+				if curSize == 0 {
+					if maxSeen <= 500 {
+						log.Printf("ref_split: chunk %d/%d poll %d: 0 bytes, never seen content — conversation dead",
+							i+1, len(chunks), poll+1)
+						break
+					}
+					log.Printf("ref_split: chunk %d/%d poll %d: 0 bytes but maxSeen=%d — API flap, skipping",
+						i+1, len(chunks), poll+1, maxSeen)
+					continue
+				}
+
+				if curSize > maxSeen {
+					maxSeen = curSize
 				}
 				if curSize > 500 {
 					if curSize == prevSize {
@@ -255,7 +265,6 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 					} else {
 						stableCount = 0
 					}
-					// stable for 2 consecutive polls (6min) = remote is done
 					if stableCount >= 2 {
 						log.Printf("ref_split: chunk %d/%d remote finished: %d bytes stable for 6min",
 							i+1, len(chunks), curSize)
@@ -263,7 +272,6 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 						needsRetry = false
 						break
 					}
-					// size grew but already big enough — remote still going, update result
 					if curSize > len(result) {
 						result = redownloaded
 					}
