@@ -484,10 +484,20 @@ func dev_split_theory(theory string) []string {
 		return []string{theory}
 	}
 
-	// second pass: group sections by directory
+	// second pass: group sections by directory.
+	// filter out /home/claude paths — these are shadow exec local file paths
+	// (e.g. /home/claude/strata_chunk1_theory.md), not repo source files.
+	// if a shadow file contains valid ## FILE: headers inside its content,
+	// those were already split into separate sections in the first pass.
 	dirOrder := []string{}
 	dirSections := map[string][]fileSection{}
 	for _, sec := range sections {
+		// skip shadow local paths
+		if strings.HasPrefix(sec.path, "/home/claude") || strings.HasPrefix(sec.dir, "/home/claude") ||
+			strings.HasPrefix(sec.path, "/mnt/") || strings.HasPrefix(sec.dir, "/mnt/") ||
+			strings.HasPrefix(sec.path, "/tmp/") || strings.HasPrefix(sec.dir, "/tmp/") {
+			continue
+		}
 		d := sec.dir
 		if d == "" {
 			d = "/"

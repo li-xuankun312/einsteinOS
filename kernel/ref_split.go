@@ -237,6 +237,12 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 				log.Printf("ref_split: chunk %d/%d poll %d/10: %d bytes (prev %d)",
 					i+1, len(chunks), poll+1, curSize, prevSize)
 
+				if curSize == 0 && prevSize == 0 {
+					// conversation is dead/empty — don't waste 30min polling nothing
+					log.Printf("ref_split: chunk %d/%d poll %d: 0 bytes, conversation dead — retry now",
+						i+1, len(chunks), poll+1)
+					break
+				}
 				if curSize > 500 {
 					if curSize == prevSize {
 						stableCount++
