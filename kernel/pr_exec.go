@@ -662,17 +662,44 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 		log.Printf("dev_from_theorems: %s unit %d/%d forking (prompt %d bytes)",
 			repo, i+1, len(units), p.Len())
 
-		child, err := Fork(p.String(), ".")
-		if err != nil {
-			return lastStdout, fmt.Errorf("dev_from_theorems: unit %d fork: %w", i+1, err)
-		}
-		if m := getMeta(child); m != nil && m.ConvID != "" {
-			RegisterConv(pid, m.ConvID, repo, fmt.Sprintf("dev_unit_%d", i+1), i+1)
-		}
-		Wait(child)
-		step.ChildPid = child
+		// retry loop: connection failures and "no context" responses get retried.
+		// same pattern as ref_split: network issues are transient.
+		prompt := p.String()
+		for attempt := 1; attempt <= 5; attempt++ {
+			child, err := Fork(prompt, ".")
+			if err != nil {
+				log.Printf("dev_from_theorems: %s unit %d/%d fork failed (attempt %d/5): %v",
+					repo, i+1, len(units), attempt, err)
+				continue
+			}
+			if m := getMeta(child); m != nil && m.ConvID != "" {
+				RegisterConv(pid, m.ConvID, repo, fmt.Sprintf("dev_unit_%d", i+1), i+1)
+			}
+			Wait(child)
+			step.ChildPid = child
 
-		lastStdout, lastStatus = dev_collect_child(child, repo)
+			lastStdout, lastStatus = dev_collect_child(child, repo)
+
+			// check if child actually ran or hit connection issues
+			needsRetry := false
+			if lastStatus["compile"] == "no_response" {
+				needsRetry = true
+			}
+			if strings.Contains(lastStdout, "don't have any prior context") ||
+				strings.Contains(lastStdout, "don't have context") ||
+				strings.Contains(lastStdout, "start of our chat") {
+				log.Printf("dev_from_theorems: %s unit %d/%d child lost context (attempt %d/5), retrying",
+					repo, i+1, len(units), attempt)
+				needsRetry = true
+			}
+			if !needsRetry {
+				break
+			}
+			if attempt < 5 {
+				log.Printf("dev_from_theorems: %s unit %d/%d no_response (attempt %d/5), retrying fresh",
+					repo, i+1, len(units), attempt)
+			}
+		}
 
 		dev_update_gpu(pid, lastStatus, gpuAll, gpuUsable)
 		PRFeedbackAdd(pid, fmt.Sprintf("- dev[%s] unit %d/%d: compile=%s smoke=%s",
