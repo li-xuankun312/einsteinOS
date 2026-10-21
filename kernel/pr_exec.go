@@ -692,6 +692,13 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 					repo, i+1, len(units), attempt)
 				needsRetry = true
 			}
+			if strings.Contains(lastStdout, "[API Error]") ||
+				strings.Contains(lastStdout, "TLS handshake timeout") ||
+				strings.Contains(lastStdout, "net/http:") {
+				log.Printf("dev_from_theorems: %s unit %d/%d child hit API/network error (attempt %d/5), retrying",
+					repo, i+1, len(units), attempt)
+				needsRetry = true
+			}
 			if !needsRetry {
 				break
 			}
@@ -1347,6 +1354,13 @@ func dev_collect_child(childPid int64, repo string) (string, map[string]string) 
 		// child produced almost nothing — likely API failure, not a real attempt
 		status["compile"] = "no_response"
 		status["compile_error"] = fmt.Sprintf("child stdout=%d bytes, no files written", len(stdout))
+	} else if strings.Contains(stdout, "[API Error]") ||
+		strings.Contains(stdout, "http request:") ||
+		strings.Contains(stdout, "TLS handshake timeout") ||
+		strings.Contains(stdout, "net/http:") {
+		// child stdout is an API/network error message, not a real attempt
+		status["compile"] = "no_response"
+		status["compile_error"] = fmt.Sprintf("child returned API/network error (%d bytes)", len(stdout))
 	} else {
 		status["compile"] = "fail"
 		status["compile_error"] = "no status block, no code files"
