@@ -426,16 +426,220 @@ func ref_bind_cursor(pid int64, owner, repo string) int {
 //   src/kernels/*.cu → one unit
 //   include/strata/core/*.hpp → one unit
 // if no ## FILE headers found, return as single unit.
-func dev_split_theory(theory string) []string {
-	lines := strings.Split(theory, "\n")
+// ---------------------------------------------------------------------------
+// dev_plan: fork a planner conv to split theory into fine-grained units.
+//
+// The planner does NOT write code. It reads the theory, sees the ## FILE
+// headers, and outputs a structured plan: which files go into which unit,
+// max ~10 files per unit, respecting coupling (files in same dir together).
+//
+// If the planner fails or returns unparseable output, fallback to static split.
+// ---------------------------------------------------------------------------
 
-	// first pass: split into per-file sections
-	type fileSection struct {
-		path    string
-		dir     string
-		content string
+type devUnit struct {
+	Files   []string // file paths assigned to this unit
+	Theory  string   // the theory text for just these files
+}
+
+func dev_plan(pid int64, repo string, theory string) []devUnit {
+	// extract ## FILE headers from theory
+	fileSections := dev_extract_file_sections(theory)
+	if len(fileSections) <= 10 {
+		// small enough — single unit, no planner needed
+		log.Printf("dev_plan: %s %d files ≤ 10, single unit", repo, len(fileSections))
+		return []devUnit{{
+			Files:  dev_section_paths(fileSections),
+			Theory: theory,
+		}}
 	}
-	var sections []fileSection
+
+	// build file list for planner prompt
+	var fileList strings.Builder
+	for _, sec := range fileSections {
+		fileList.WriteString(fmt.Sprintf("  %s (%d bytes)\n", sec.path, len(sec.content)))
+	}
+
+	plannerPrompt := fmt.Sprintf(
+		"[TASK] split %d source files into implementation units.\n"+
+			"each unit should have at most 10 files.\n"+
+			"files in the same directory should stay together.\n"+
+			"units should be ordered: foundational files first (types, config),\n"+
+			"then core logic, then higher-level components.\n\n"+
+			"[FILES]\n%s\n"+
+			"[OUTPUT FORMAT]\n"+
+			"output ONLY lines like:\n"+
+			"unit: file1.hpp, file2.hpp, file3.cpp\n"+
+			"unit: file4.cu, file5.cu\n"+
+			"one line per unit, files comma-separated. nothing else.\n",
+		len(fileSections), fileList.String())
+
+	child, err := ForkWithRole(plannerPrompt, ".", "dev_planner")
+	if err != nil {
+		log.Printf("dev_plan: %s planner fork failed: %v, using static split", repo, err)
+		return dev_static_split(fileSections)
+	}
+	if m := getMeta(child); m != nil && m.ConvID != "" {
+		RegisterConv(pid, m.ConvID, repo, "dev_planner", 0)
+	}
+	Wait(child)
+	planOutput := GetResult(child)
+	log.Printf("dev_plan: %s planner returned %d bytes", repo, len(planOutput))
+
+	// parse planner output
+	units := dev_parse_plan(planOutput, fileSections)
+	if len(units) == 0 {
+		log.Printf("dev_plan: %s planner output unparseable, using static split", repo)
+		return dev_static_split(fileSections)
+	}
+
+	// log the plan
+	log.Printf("dev_plan: %s planner split %d files into %d units", repo, len(fileSections), len(units))
+	for i, u := range units {
+		log.Printf("dev_plan:   unit %d: %d files, %d bytes theory", i+1, len(u.Files), len(u.Theory))
+	}
+	return units
+}
+
+// dev_parse_plan: parse "unit: file1, file2, ..." lines from planner output
+func dev_parse_plan(output string, sections []devFileSection) []devUnit {
+	sectionMap := make(map[string]*devFileSection)
+	for i := range sections {
+		sectionMap[sections[i].path] = &sections[i]
+	}
+
+	var units []devUnit
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(strings.ToLower(line), "unit:") {
+			continue
+		}
+		rest := strings.TrimSpace(line[5:])
+		if rest == "" {
+			continue
+		}
+
+		var files []string
+		var theoryBuf strings.Builder
+		for _, f := range strings.Split(rest, ",") {
+			f = strings.TrimSpace(f)
+			if f == "" {
+				continue
+			}
+			files = append(files, f)
+			if sec, ok := sectionMap[f]; ok {
+				theoryBuf.WriteString(sec.content)
+				theoryBuf.WriteString("\n\n")
+				delete(sectionMap, f) // claimed
+			}
+		}
+		if len(files) > 0 {
+			units = append(units, devUnit{
+				Files:  files,
+				Theory: strings.TrimSpace(theoryBuf.String()),
+			})
+		}
+	}
+
+	// any unclaimed sections? append to last unit or make a new one
+	if len(sectionMap) > 0 && len(units) > 0 {
+		var extra []string
+		var extraTheory strings.Builder
+		for _, sec := range sectionMap {
+			extra = append(extra, sec.path)
+			extraTheory.WriteString(sec.content)
+			extraTheory.WriteString("\n\n")
+		}
+		last := &units[len(units)-1]
+		if len(last.Files)+len(extra) <= 15 {
+			last.Files = append(last.Files, extra...)
+			last.Theory += "\n\n" + extraTheory.String()
+		} else {
+			units = append(units, devUnit{
+				Files:  extra,
+				Theory: strings.TrimSpace(extraTheory.String()),
+			})
+		}
+		log.Printf("dev_plan: %d unclaimed files added", len(extra))
+	}
+
+	return units
+}
+
+// dev_static_split: fallback when planner fails. group by directory, split
+// large directories into chunks of ≤10 files.
+func dev_static_split(sections []devFileSection) []devUnit {
+	dirOrder := []string{}
+	dirSections := map[string][]devFileSection{}
+	for _, sec := range sections {
+		d := sec.dir
+		if d == "" {
+			d = "/"
+		}
+		if _, ok := dirSections[d]; !ok {
+			dirOrder = append(dirOrder, d)
+		}
+		dirSections[d] = append(dirSections[d], sec)
+	}
+
+	var units []devUnit
+	for _, d := range dirOrder {
+		secs := dirSections[d]
+		// chunk large directories into groups of 10
+		for start := 0; start < len(secs); start += 10 {
+			end := start + 10
+			if end > len(secs) {
+				end = len(secs)
+			}
+			chunk := secs[start:end]
+			var files []string
+			var theory strings.Builder
+			theory.WriteString(fmt.Sprintf("# Directory: %s (files %d-%d of %d)\n\n",
+				d, start+1, end, len(secs)))
+			for _, sec := range chunk {
+				files = append(files, sec.path)
+				theory.WriteString(sec.content)
+				theory.WriteString("\n\n")
+			}
+			s := strings.TrimSpace(theory.String())
+			if len(s) > 100 {
+				units = append(units, devUnit{Files: files, Theory: s})
+			}
+		}
+	}
+
+	if len(units) == 0 {
+		// nothing parsed
+		var allContent strings.Builder
+		var allFiles []string
+		for _, sec := range sections {
+			allFiles = append(allFiles, sec.path)
+			allContent.WriteString(sec.content)
+			allContent.WriteString("\n\n")
+		}
+		units = []devUnit{{Files: allFiles, Theory: allContent.String()}}
+	}
+
+	log.Printf("dev_static_split: %d files -> %d units", len(sections), len(units))
+	for i, u := range units {
+		log.Printf("dev_static_split:   unit %d: %d files, %d bytes", i+1, len(u.Files), len(u.Theory))
+	}
+	return units
+}
+
+// ---------------------------------------------------------------------------
+// dev_extract_file_sections: parse ## FILE headers from theory text.
+// shared by planner and static split.
+// ---------------------------------------------------------------------------
+
+type devFileSection struct {
+	path    string
+	dir     string
+	content string
+}
+
+func dev_extract_file_sections(theory string) []devFileSection {
+	lines := strings.Split(theory, "\n")
+	var sections []devFileSection
 	var cur strings.Builder
 	curPath := ""
 
@@ -446,7 +650,21 @@ func dev_split_theory(theory string) []string {
 			if idx := strings.LastIndex(curPath, "/"); idx > 0 {
 				dir = curPath[:idx]
 			}
-			sections = append(sections, fileSection{path: curPath, dir: dir, content: s})
+			sec := devFileSection{path: curPath, dir: dir, content: s}
+			// skip shadow/local paths
+			cleanPath := strings.Trim(sec.path, "\"'` \t")
+			cleanDir := strings.Trim(sec.dir, "\"'` \t")
+			if strings.HasPrefix(cleanPath, "/home/claude") || strings.HasPrefix(cleanDir, "/home/claude") ||
+				strings.HasPrefix(cleanPath, "/mnt/") || strings.HasPrefix(cleanDir, "/mnt/") ||
+				strings.HasPrefix(cleanPath, "/tmp/") || strings.HasPrefix(cleanDir, "/tmp/") {
+				// skip
+			} else if strings.Contains(cleanPath, "## FILE:") || strings.Contains(cleanDir, "## FILE:") {
+				// skip malformed
+			} else {
+				sec.path = cleanPath
+				sec.dir = cleanDir
+				sections = append(sections, sec)
+			}
 		}
 		cur.Reset()
 		curPath = ""
@@ -454,7 +672,6 @@ func dev_split_theory(theory string) []string {
 
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		// detect ## FILE: <path> header
 		isHeader := false
 		newPath := ""
 		if strings.Contains(trimmed, "## FILE:") {
@@ -466,9 +683,7 @@ func dev_split_theory(theory string) []string {
 			newPath = strings.TrimSpace(trimmed[len("## FILE"):])
 			newPath = strings.TrimLeft(newPath, ": ")
 		}
-
 		if isHeader {
-			// clean the path: strip quotes, backticks, leading/trailing junk
 			newPath = strings.Trim(newPath, "\"'` \t\r\n")
 		}
 		if isHeader && cur.Len() > 0 {
@@ -481,79 +696,30 @@ func dev_split_theory(theory string) []string {
 		cur.WriteString("\n")
 	}
 	flush()
+	return sections
+}
 
-	if len(sections) <= 1 {
-		// no splitting possible
-		log.Printf("dev_split_theory: %d bytes -> 1 unit (found %d ## FILE sections)", len(theory), len(sections))
-		return []string{theory}
-	}
-
-	// second pass: group sections by directory.
-	// filter out /home/claude paths — these are shadow exec local file paths
-	// (e.g. /home/claude/strata_chunk1_theory.md), not repo source files.
-	// if a shadow file contains valid ## FILE: headers inside its content,
-	// those were already split into separate sections in the first pass.
-	dirOrder := []string{}
-	dirSections := map[string][]fileSection{}
-	for _, sec := range sections {
-		// clean path/dir: strip quotes, whitespace that leaked from parsing
-		cleanPath := strings.Trim(sec.path, "\"'` \t")
-		cleanDir := strings.Trim(sec.dir, "\"'` \t")
-
-		// skip shadow/local paths
-		if strings.HasPrefix(cleanPath, "/home/claude") || strings.HasPrefix(cleanDir, "/home/claude") ||
-			strings.HasPrefix(cleanPath, "/mnt/") || strings.HasPrefix(cleanDir, "/mnt/") ||
-			strings.HasPrefix(cleanPath, "/tmp/") || strings.HasPrefix(cleanDir, "/tmp/") {
-			continue
-		}
-		// skip malformed: path contains ## FILE: (concatenated headers from ContinueConv)
-		if strings.Contains(cleanPath, "## FILE:") || strings.Contains(cleanDir, "## FILE:") {
-			continue
-		}
-		sec.path = cleanPath
-		sec.dir = cleanDir
-		d := sec.dir
-		if d == "" {
-			d = "/"
-		}
-		if _, ok := dirSections[d]; !ok {
-			dirOrder = append(dirOrder, d)
-		}
-		dirSections[d] = append(dirSections[d], sec)
-	}
-
-	// build units from directory groups
-	var units []string
-	for _, d := range dirOrder {
-		secs := dirSections[d]
-		var unit strings.Builder
-		unit.WriteString(fmt.Sprintf("# Directory: %s (%d files)\n\n", d, len(secs)))
-		for _, sec := range secs {
-			unit.WriteString(sec.content)
-			unit.WriteString("\n\n")
-		}
-		s := strings.TrimSpace(unit.String())
-		if len(s) > 100 {
-			units = append(units, s)
+func dev_section_paths(sections []devFileSection) []string {
+	var paths []string
+	for _, s := range sections {
+		if s.path != "" {
+			paths = append(paths, s.path)
 		}
 	}
+	return paths
+}
 
-	if len(units) == 0 {
-		units = []string{theory}
+// dev_split_theory: compat wrapper — returns []string for callers that
+// don't use the new devUnit structure yet. will be removed once
+// dev_from_theorems fully migrates.
+func dev_split_theory(theory string) []string {
+	sections := dev_extract_file_sections(theory)
+	units := dev_static_split(sections)
+	var result []string
+	for _, u := range units {
+		result = append(result, u.Theory)
 	}
-
-	// log the split
-	log.Printf("dev_split_theory: %d bytes -> %d units (%d files, %d dirs)",
-		len(theory), len(units), len(sections), len(dirOrder))
-	for i, u := range units {
-		firstLine := u
-		if idx := strings.Index(firstLine, "\n"); idx > 0 {
-			firstLine = firstLine[:idx]
-		}
-		log.Printf("dev_split_theory:   unit %d: %d bytes — %s", i+1, len(u), firstLine)
-	}
-
-	return units
+	return result
 }
 
 
@@ -579,8 +745,9 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 		writeGHToken(pr.Title)
 	}
 
-	units := dev_split_theory(theory)
-	log.Printf("dev_from_theorems: %s %d theory units, total %d bytes, gpu_all=%s gpu_usable=%s",
+	// planner decides the split — NOT the dev conv, NOT static grouping
+	units := dev_plan(pid, repo, theory)
+	log.Printf("dev_from_theorems: %s %d planned units, total %d bytes theory, gpu_all=%s gpu_usable=%s",
 		repo, len(units), len(theory), gpuAll, gpuUsable)
 
 	// shared branch for all incremental children
@@ -610,51 +777,47 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 			p.WriteString("\n\n")
 		}
 
-		// accumulated context: prior theories in FULL + prior unit conversations
-		// downloaded via DownloadConv. child sees everything, no truncation.
-		// pattern: [code1 + T1 + T2 + ... + Ti] → codei
+		// --- conv address list: prior units as addresses, NOT full text ---
+		// dev conv gets: summary + convID for each prior unit.
+		// it reads code from the branch (git checkout). if it needs to understand
+		// WHY a prior unit made a decision, it can DownloadConv(convID).
+		// this keeps the prompt small: ~200 bytes per prior unit, not ~200KB.
 		if i > 0 {
-			// inject prior unit work: download each prior child conversation
-			// which contains create_file code, bash commands, compile results.
+			p.WriteString(fmt.Sprintf("[PRIOR UNITS 1..%d — code on branch %s]\n", i, branch))
 			for j := 0; j < i; j++ {
 				rec := FindConv(repo, fmt.Sprintf("dev_unit_%d", j+1), j+1)
-				if rec == nil {
-					continue
+				convAddr := "unknown"
+				convStatus := "unknown"
+				if rec != nil {
+					convAddr = rec.ConvID[:8]
+					convStatus = rec.Status
 				}
-				downloaded, err := DownloadConv(rec.ConvID)
-				if err != nil {
-					log.Printf("dev_from_theorems: %s unit %d prior conv download failed: %v",
-						repo, j+1, err)
-					continue
+				fileList := ""
+				if j < len(units) {
+					fileList = strings.Join(units[j].Files, ", ")
+					if len(fileList) > 120 {
+						fileList = fileList[:120] + "..."
+					}
 				}
-				p.WriteString(fmt.Sprintf("[PRIOR UNIT %d/%d — conv %s, %d bytes]\n",
-					j+1, len(units), rec.ConvID[:8], len(downloaded)))
-				p.WriteString(downloaded)
-				p.WriteString("\n\n")
-				log.Printf("dev_from_theorems: %s injected prior unit %d conv (%d bytes) into unit %d prompt",
-					repo, j+1, len(downloaded), i+1)
+				p.WriteString(fmt.Sprintf("  unit %d: conv=%s status=%s files=[%s]\n",
+					j+1, convAddr, convStatus, fileList))
 			}
-
-			// prior theories in full — not summaries
-			p.WriteString(fmt.Sprintf("[PRIOR THEORIES 1..%d — full text]\n", i))
-			for j := 0; j < i; j++ {
-				p.WriteString(fmt.Sprintf("--- THEORY %d/%d ---\n", j+1, len(units)))
-				p.WriteString(units[j])
-				p.WriteString("\n\n")
-			}
+			p.WriteString("all code is on the branch. git checkout and READ it.\n")
+			p.WriteString("do NOT rewrite prior code unless your theory REQUIRES it.\n\n")
 		}
 
-		p.WriteString(fmt.Sprintf("[THEORY %d/%d — your task: implement THIS unit]\n", i+1, len(units)))
-		p.WriteString(unit)
+		// --- only THIS unit's theory, not all prior theories ---
+		p.WriteString(fmt.Sprintf("[THEORY — unit %d/%d, %d files]\n", i+1, len(units), len(unit.Files)))
+		p.WriteString(fmt.Sprintf("files: %s\n\n", strings.Join(unit.Files, ", ")))
+		p.WriteString(unit.Theory)
 		p.WriteString("\n\n")
 
 		if i > 0 {
 			p.WriteString(fmt.Sprintf("[EXISTING CODE]\n"+
-				"branch %s has code from prior units (you have their full conversations above).\n"+
+				"branch %s has code from units 1..%d.\n"+
 				"  cd /home/claude/<repo> && git fetch origin && git checkout %s\n"+
-				"do NOT rewrite existing files unless theory %d requires changing them.\n"+
-				"ADD your new code, then compile the WHOLE project.\n\n",
-				branch, branch, i+1))
+				"read what's there. ADD your new code, then compile the WHOLE project.\n\n",
+				branch, i, branch))
 		}
 
 		p.WriteString(fmt.Sprintf("[TASK]\n%s\n\n", task))
@@ -664,7 +827,6 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 			p.WriteString("\n")
 		}
 
-		// use the incremental instruction (shared branch, not own branch)
 		p.WriteString(fmt.Sprintf(dev_incremental_instruction, branch, gpuAll, gpuUsable, gpuUsable, i+1, len(units)))
 
 		feedback := pr_feedback(pid)
@@ -672,11 +834,9 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 			p.WriteString(fmt.Sprintf("\n\n[PRIOR FEEDBACK]\n%s", feedback))
 		}
 
-		log.Printf("dev_from_theorems: %s unit %d/%d forking (prompt %d bytes)",
-			repo, i+1, len(units), p.Len())
+		log.Printf("dev_from_theorems: %s unit %d/%d forking (prompt %d bytes, %d files: %v)",
+			repo, i+1, len(units), p.Len(), len(unit.Files), unit.Files)
 
-		// retry loop: connection failures and "no context" responses get retried.
-		// same pattern as ref_split: network issues are transient.
 		prompt := p.String()
 		for attempt := 1; attempt <= 5; attempt++ {
 			child, err := Fork(prompt, ".")
@@ -706,13 +866,6 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 				// any real status from dev_collect = child worked
 				needsRetry = false
 			} else if strings.Contains(lastStdout, "[API Error]") ||
-				strings.Contains(lastStdout, "TLS handshake timeout") ||
-				strings.Contains(lastStdout, "net/http:") {
-				log.Printf("dev_from_theorems: %s unit %d/%d child hit API/network error (attempt %d/5), retrying",
-					repo, i+1, len(units), attempt)
-				needsRetry = true
-			}
-			if strings.Contains(lastStdout, "[API Error]") ||
 				strings.Contains(lastStdout, "TLS handshake timeout") ||
 				strings.Contains(lastStdout, "net/http:") {
 				log.Printf("dev_from_theorems: %s unit %d/%d child hit API/network error (attempt %d/5), retrying",
