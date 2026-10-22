@@ -908,15 +908,38 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 		// unit success: compile status starts with "pass" (may have description suffix
 		// like "pass (CPU tests + headers); pending (GPU)"). smoke may be empty if
 		// no GPU available — treat empty smoke as acceptable when compile passes.
-		compilePassed := strings.HasPrefix(lastStatus["compile"], "pass")
+		compile := lastStatus["compile"]
+		compilePassed := strings.HasPrefix(compile, "pass")
 		smokeOK := lastStatus["smoke"] == "" || strings.HasPrefix(lastStatus["smoke"], "pass")
+
+		// interrupted (SSE broke before compile finished): compile is "pending",
+		// empty, or "no_response". this is NOT a failure — the child was cut off.
+		// push a fresh DEV_FROM_THEOREMS to retry, don't count as fix attempt.
+		interrupted := compile == "pending" || compile == "" || compile == "no_response"
+		if interrupted {
+			log.Printf("dev_from_theorems: %s unit %d/%d interrupted (compile=%q), re-queuing dev_from_theorems",
+				repo, i+1, len(units), compile)
+			pr_push_step(pid, &Step{
+				Kind:  STEP_DEV_FROM_THEOREMS,
+				Owner: step.Owner,
+				Repo:  step.Repo,
+			})
+			return lastStdout, nil
+		}
+
 		if !compilePassed || !smokeOK {
 			log.Printf("dev_from_theorems: %s unit %d/%d failed (compile=%q smoke=%q), pushing fix",
-				repo, i+1, len(units), lastStatus["compile"], lastStatus["smoke"])
+				repo, i+1, len(units), compile, lastStatus["smoke"])
 			dev_push_fix(pid, step.Owner, step.Repo, lastStatus, i+1)
-			// remaining units become new dev_thms steps to resume later
+			// always re-queue dev_from_theorems after fix so remaining units run.
+			// the pipeline must NOT end with unfinished units.
+			pr_push_step(pid, &Step{
+				Kind:  STEP_DEV_FROM_THEOREMS,
+				Owner: step.Owner,
+				Repo:  step.Repo,
+			})
 			if i+1 < len(units) {
-				log.Printf("dev_from_theorems: %s %d units remaining after fix",
+				log.Printf("dev_from_theorems: %s %d units remaining, re-queued dev_from_theorems after fix",
 					repo, len(units)-i-1)
 			}
 			return lastStdout, nil
@@ -1318,7 +1341,15 @@ func dev_fix(pid int64, step *Step) (string, error) {
 // no text instructions — only structured args in Step fields.
 func dev_push_fix(pid int64, owner, repo string, status map[string]string, attempt int) {
 	if attempt > 3 {
-		log.Printf("dev_push_fix: %s/%s max attempts reached", owner, repo)
+		log.Printf("dev_push_fix: %s/%s max fix attempts reached, re-queuing dev_from_theorems for fresh plan",
+			owner, repo)
+		// don't just stop — re-queue so the pipeline replans and retries.
+		// the planner may split differently, or the network may be better.
+		pr_push_step(pid, &Step{
+			Kind:  STEP_DEV_FROM_THEOREMS,
+			Owner: owner,
+			Repo:  repo,
+		})
 		return
 	}
 
