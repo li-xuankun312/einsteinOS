@@ -415,6 +415,73 @@ func (c *Client) StopResponse(convID string) error {
 	return nil
 }
 
+// ProbeConvBusy checks if a remote conversation's code execution environment is busy.
+// Sends a minimal completion request. If the server returns wiggle_container_in_use,
+// the remote is still running (SSE dropped but execution continues).
+// Returns:
+//   - true, nil:  remote is busy
+//   - false, nil: remote is idle (accepted the probe or returned non-busy error)
+//   - false, err: network error, inconclusive
+func (c *Client) ProbeConvBusy(convID string) (bool, error) {
+	url := fmt.Sprintf("%s/api/organizations/%s/chat_conversations/%s/completion",
+		c.baseURL, c.orgID, convID)
+
+	probeReq := map[string]interface{}{
+		"prompt":         "continue",
+		"model":          "claude-sonnet-4-6",
+		"timezone":       "Asia/Shanghai",
+		"locale":         "en-US",
+		"effort":         "low",
+		"thinking_mode":  "off",
+		"rendering_mode": "messages",
+		"attachments":    []interface{}{},
+		"files":          []interface{}{},
+		"sync_sources":   []interface{}{},
+		"tools":          []interface{}{},
+	}
+
+	body, err := json.Marshal(probeReq)
+	if err != nil {
+		return false, fmt.Errorf("marshal probe: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	if err != nil {
+		return false, fmt.Errorf("create probe request: %w", err)
+	}
+	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("anthropic-client-platform", "web_claude_ai")
+	req.Header.Set("Cookie", c.cookie)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return false, fmt.Errorf("probe http: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == 200 {
+		// remote accepted the probe — it was idle, now it's continuing. That's fine.
+		log.Printf("claudeweb: probe %s → 200 (idle, accepted continue)", convID[:8])
+		return false, nil
+	}
+
+	errBody, _ := io.ReadAll(resp.Body)
+	errStr := string(errBody)
+
+	if strings.Contains(errStr, "wiggle_container_in_use") || strings.Contains(errStr, "Another response is already running") {
+		log.Printf("claudeweb: probe %s → busy (container_in_use)", convID[:8])
+		return true, nil
+	}
+
+	// rate limit or other error — inconclusive about busy-ness
+	log.Printf("claudeweb: probe %s → %d: %s", convID[:8], resp.StatusCode, truncBody(errBody))
+	return false, nil
+}
+
 func truncBody(b []byte) string {
 	s := string(b)
 	if len(s) > 300 {

@@ -561,6 +561,27 @@ func ContinueConv(convID, prompt string) (string, string) {
 	return continueConvFn(convID, prompt)
 }
 
+// ProbeConvBusy checks if a remote conversation is still executing.
+// Sends a lightweight completion request ("continue"). Three outcomes:
+//   - returns true, nil  → remote is busy (wiggle_container_in_use)
+//   - returns false, nil → remote is idle (accepted the completion, or empty response)
+//   - returns false, err → network/API error, inconclusive
+//
+// If the remote is idle and accepts the "continue", that's fine — it resumes work,
+// which is the best outcome (free ContinueConv recovery).
+var probeConvFn func(convID string) (busy bool, err error)
+
+func SetProbeConvFn(fn func(string) (bool, error)) {
+	probeConvFn = fn
+}
+
+func ProbeConvBusy(convID string) (bool, error) {
+	if probeConvFn == nil {
+		return false, fmt.Errorf("no probe function set")
+	}
+	return probeConvFn(convID)
+}
+
 var downloadFileFn func(convID, path string) ([]byte, error)
 
 func SetDownloadFileFn(fn func(string, string) ([]byte, error)) {

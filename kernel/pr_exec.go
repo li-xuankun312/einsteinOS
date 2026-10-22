@@ -1372,6 +1372,10 @@ func dev_collect_child(childPid int64, repo string) (string, map[string]string) 
 					curSize = len(redownloaded)
 				}
 				if dlErr != nil {
+					if busy, probeErr := ProbeConvBusy(convID); probeErr == nil && busy {
+						log.Printf("dev_collect: %s poll %d: download error but remote still busy, waiting", repo, poll+1)
+						continue
+					}
 					staleCount++
 					log.Printf("dev_collect: %s poll %d: download error (stale %d/5)", repo, poll+1, staleCount)
 					continue
@@ -1381,7 +1385,11 @@ func dev_collect_child(childPid int64, repo string) (string, map[string]string) 
 
 				if curSize == 0 {
 					if maxSeen <= 500 {
-						log.Printf("dev_collect: %s poll %d: 0 bytes, conversation dead", repo, poll+1)
+						if busy, probeErr := ProbeConvBusy(convID); probeErr == nil && busy {
+							log.Printf("dev_collect: %s poll %d: 0 bytes but remote still busy, waiting", repo, poll+1)
+							continue
+						}
+						log.Printf("dev_collect: %s poll %d: 0 bytes, remote idle — conversation dead", repo, poll+1)
 						break
 					}
 					staleCount++
@@ -1391,7 +1399,12 @@ func dev_collect_child(childPid int64, repo string) (string, map[string]string) 
 					maxSeen = curSize
 					staleCount = 0
 				} else {
-					staleCount++
+					if busy, probeErr := ProbeConvBusy(convID); probeErr == nil && busy {
+						log.Printf("dev_collect: %s poll %d: %d bytes unchanged but remote still busy, waiting",
+							repo, poll+1, curSize)
+					} else {
+						staleCount++
+					}
 				}
 				if curSize > 500 {
 					if curSize == prevSize {

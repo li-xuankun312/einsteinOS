@@ -237,6 +237,14 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 					curSize = len(redownloaded)
 				}
 				if dlErr != nil {
+					// download failed — but remote might still be running.
+					// probe before counting as stale.
+					if busy, probeErr := ProbeConvBusy(convID); probeErr == nil && busy {
+						log.Printf("ref_split: chunk %d/%d poll %d: download error but remote still busy, waiting",
+							i+1, len(chunks), poll+1)
+						// don't increment staleCount — remote is alive
+						continue
+					}
 					staleCount++
 					log.Printf("ref_split: chunk %d/%d poll %d: download error (stale %d/5): %v",
 						i+1, len(chunks), poll+1, staleCount, dlErr)
@@ -248,7 +256,13 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 
 				if curSize == 0 {
 					if maxSeen <= 500 {
-						log.Printf("ref_split: chunk %d/%d poll %d: 0 bytes, never seen content — conversation dead",
+						// probe: maybe remote is generating but hasn't flushed to conversation yet
+						if busy, probeErr := ProbeConvBusy(convID); probeErr == nil && busy {
+							log.Printf("ref_split: chunk %d/%d poll %d: 0 bytes but remote still busy, waiting",
+								i+1, len(chunks), poll+1)
+							continue
+						}
+						log.Printf("ref_split: chunk %d/%d poll %d: 0 bytes, never seen content, remote idle — conversation dead",
 							i+1, len(chunks), poll+1)
 						break
 					}
@@ -260,7 +274,14 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 					maxSeen = curSize
 					staleCount = 0 // content grew — reset stale counter
 				} else {
-					staleCount++
+					// content didn't grow — probe before counting as stale
+					if busy, probeErr := ProbeConvBusy(convID); probeErr == nil && busy {
+						log.Printf("ref_split: chunk %d/%d poll %d: %d bytes unchanged but remote still busy, waiting",
+							i+1, len(chunks), poll+1, curSize)
+						// don't increment staleCount
+					} else {
+						staleCount++
+					}
 				}
 
 				if curSize > 500 {

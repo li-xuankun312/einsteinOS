@@ -592,6 +592,9 @@ func newConversation(name string) (*claudeweb.Model, *runner.Runner, string) {
 	kernel.SetContinueConvFn(func(convID, prompt string) (string, string) {
 		return llm.ContinueConversation(convID, prompt)
 	})
+	kernel.SetProbeConvFn(func(convID string) (bool, error) {
+		return client.ProbeConvBusy(convID)
+	})
 
 	shadow := &claudeweb.ShadowExecutor{
 		WorkDir: cfg.workDir,
