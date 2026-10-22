@@ -230,7 +230,7 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 			stableCount := 0
 			staleCount := 0 // consecutive polls with no growth (including errors)
 			for poll := 0; staleCount < 5; poll++ {
-				sleepWithHeartbeat(3 * time.Minute)
+				time.Sleep(3 * time.Minute)
 				redownloaded, dlErr := DownloadConv(convID)
 				curSize := 0
 				if dlErr == nil {
@@ -288,7 +288,7 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 			if needsRetry && len(result) > 500 {
 				log.Printf("ref_split: chunk %d/%d polling exhausted, waiting 5min for network recovery then retrying download",
 					i+1, len(chunks))
-				sleepWithHeartbeat(5 * time.Minute)
+				time.Sleep(5 * time.Minute)
 				if recoveredDL, recoveredErr := DownloadConv(convID); recoveredErr == nil && len(recoveredDL) >= len(result) {
 					log.Printf("ref_split: chunk %d/%d post-wait download: %d bytes (was %d)",
 						i+1, len(chunks), len(recoveredDL), len(result))

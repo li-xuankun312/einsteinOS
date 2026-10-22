@@ -1358,7 +1358,7 @@ func dev_collect_child(childPid int64, repo string) (string, map[string]string) 
 			prevSize := len(stdout)
 			staleCount := 0
 			for poll := 0; staleCount < 5; poll++ {
-				sleepWithHeartbeat(3 * time.Minute)
+				time.Sleep(3 * time.Minute)
 				redownloaded, dlErr := DownloadConv(convID)
 				curSize := 0
 				if dlErr == nil {
