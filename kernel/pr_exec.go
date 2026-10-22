@@ -610,23 +610,38 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 			p.WriteString("\n\n")
 		}
 
-		// accumulated theories: all up to and including this unit
-		// but only current unit in full — prior units as one-line summaries
-		// to avoid context bloat
+		// accumulated context: prior theories in FULL + prior unit conversations
+		// downloaded via DownloadConv. child sees everything, no truncation.
+		// pattern: [code1 + T1 + T2 + ... + Ti] → codei
 		if i > 0 {
-			p.WriteString(fmt.Sprintf("[PRIOR THEORIES 1..%d — already implemented on branch %s]\n", i, branch))
+			// inject prior unit work: download each prior child conversation
+			// which contains create_file code, bash commands, compile results.
 			for j := 0; j < i; j++ {
-				// first line of each prior unit as a summary
-				first := units[j]
-				if idx := strings.Index(first, "\n"); idx > 0 {
-					first = first[:idx]
+				rec := FindConv(repo, fmt.Sprintf("dev_unit_%d", j+1), j+1)
+				if rec == nil {
+					continue
 				}
-				if len(first) > 120 {
-					first = first[:120]
+				downloaded, err := DownloadConv(rec.ConvID)
+				if err != nil {
+					log.Printf("dev_from_theorems: %s unit %d prior conv download failed: %v",
+						repo, j+1, err)
+					continue
 				}
-				p.WriteString(fmt.Sprintf("  %d. %s\n", j+1, first))
+				p.WriteString(fmt.Sprintf("[PRIOR UNIT %d/%d — conv %s, %d bytes]\n",
+					j+1, len(units), rec.ConvID[:8], len(downloaded)))
+				p.WriteString(downloaded)
+				p.WriteString("\n\n")
+				log.Printf("dev_from_theorems: %s injected prior unit %d conv (%d bytes) into unit %d prompt",
+					repo, j+1, len(downloaded), i+1)
 			}
-			p.WriteString("\n")
+
+			// prior theories in full — not summaries
+			p.WriteString(fmt.Sprintf("[PRIOR THEORIES 1..%d — full text]\n", i))
+			for j := 0; j < i; j++ {
+				p.WriteString(fmt.Sprintf("--- THEORY %d/%d ---\n", j+1, len(units)))
+				p.WriteString(units[j])
+				p.WriteString("\n\n")
+			}
 		}
 
 		p.WriteString(fmt.Sprintf("[THEORY %d/%d — your task: implement THIS unit]\n", i+1, len(units)))
@@ -634,11 +649,9 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 		p.WriteString("\n\n")
 
 		if i > 0 {
-			// tell child to read existing code from the branch
 			p.WriteString(fmt.Sprintf("[EXISTING CODE]\n"+
-				"branch %s has code from prior units. read it:\n"+
+				"branch %s has code from prior units (you have their full conversations above).\n"+
 				"  cd /home/claude/<repo> && git fetch origin && git checkout %s\n"+
-				"  find . -name '*.cu' -o -name '*.hpp' -o -name '*.h' -o -name '*.cpp' | head -50\n"+
 				"do NOT rewrite existing files unless theory %d requires changing them.\n"+
 				"ADD your new code, then compile the WHOLE project.\n\n",
 				branch, branch, i+1))
@@ -680,18 +693,17 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 
 			lastStdout, lastStatus = dev_collect_child(child, repo)
 
-			// check if child actually ran or hit connection issues.
-			// ONLY retry if dev_collect couldn't find any real work.
-			// if compile=pass/fail/unknown/pending, the child did real work — don't retry.
+			// retry logic: only no_response means child did nothing.
+			// any other non-empty compile status (pass, fail, unknown, pending, etc.)
+			// means dev_collect found real work — don't retry, even if the downloaded
+			// text contains "no context" phrases from Continue's preamble.
+			// empty compile means dev_collect set nothing — fall through to text heuristic.
 			needsRetry := false
 			compile := lastStatus["compile"]
 			if compile == "no_response" {
 				needsRetry = true
-			} else if compile == "pass" || compile == "fail" || compile == "unknown" || strings.HasPrefix(compile, "pending") {
-				// dev_collect found real status (possibly via polling) — child worked.
-				// don't override with text-based "lost context" check on the full download,
-				// because the download includes bare Continue's "no context" reply mixed
-				// with the real work output.
+			} else if compile != "" {
+				// any real status from dev_collect = child worked
 				needsRetry = false
 			} else if strings.Contains(lastStdout, "[API Error]") ||
 				strings.Contains(lastStdout, "TLS handshake timeout") ||
