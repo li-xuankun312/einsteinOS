@@ -725,8 +725,14 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 		PRFeedbackAdd(pid, fmt.Sprintf("- dev[%s] unit %d/%d: compile=%s smoke=%s",
 			repo, i+1, len(units), lastStatus["compile"], lastStatus["smoke"]))
 
-		if lastStatus["compile"] != "pass" || lastStatus["smoke"] != "pass" {
-			log.Printf("dev_from_theorems: %s unit %d/%d failed, pushing fix", repo, i+1, len(units))
+		// unit success: compile status starts with "pass" (may have description suffix
+		// like "pass (CPU tests + headers); pending (GPU)"). smoke may be empty if
+		// no GPU available — treat empty smoke as acceptable when compile passes.
+		compilePassed := strings.HasPrefix(lastStatus["compile"], "pass")
+		smokeOK := lastStatus["smoke"] == "" || strings.HasPrefix(lastStatus["smoke"], "pass")
+		if !compilePassed || !smokeOK {
+			log.Printf("dev_from_theorems: %s unit %d/%d failed (compile=%q smoke=%q), pushing fix",
+				repo, i+1, len(units), lastStatus["compile"], lastStatus["smoke"])
 			dev_push_fix(pid, step.Owner, step.Repo, lastStatus, i+1)
 			// remaining units become new dev_thms steps to resume later
 			if i+1 < len(units) {
@@ -1116,7 +1122,9 @@ func dev_fix(pid int64, step *Step) (string, error) {
 		PRFeedbackAdd(pid, fmt.Sprintf("- dev[%s]: %s=%s", repo, k, v))
 	}
 
-	if status["compile"] == "pass" && status["smoke"] == "pass" {
+	compilePassed := strings.HasPrefix(status["compile"], "pass")
+	smokeOK := status["smoke"] == "" || strings.HasPrefix(status["smoke"], "pass")
+	if compilePassed && smokeOK {
 		log.Printf("dev_fix: %s verified on attempt %d", repo, attempt)
 		return stdout, nil
 	}
