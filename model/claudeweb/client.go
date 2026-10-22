@@ -148,10 +148,10 @@ func (c *Client) Completion(convID string, req *CompletionRequest) (io.ReadClose
 				if isProxyThrottle(errStr) {
 					if waitDur := parseRetryAfter(errStr); waitDur > 0 {
 						log.Printf("claudeweb: proxy throttle, sleeping %v until quota resets", waitDur)
-						time.Sleep(waitDur)
+						sleepWithHeartbeat(waitDur)
 					} else {
 						log.Printf("claudeweb: proxy throttle, waiting 2 minutes before retry")
-						time.Sleep(2 * time.Minute)
+						sleepWithHeartbeat(2 * time.Minute)
 					}
 					lastErr = &RateLimitError{Body: errStr}
 					continue
@@ -163,7 +163,7 @@ func (c *Client) Completion(convID string, req *CompletionRequest) (io.ReadClose
 			if resp.StatusCode == 403 && contains(errStr, "Just a moment") {
 				// Cloudflare challenge — IP flagged, wait and retry
 				log.Printf("claudeweb: Cloudflare challenge, waiting 3 minutes before retry")
-				time.Sleep(3 * time.Minute)
+				sleepWithHeartbeat(3 * time.Minute)
 				lastErr = fmt.Errorf("cloudflare 403: challenge page")
 				continue
 			}
@@ -175,6 +175,36 @@ func (c *Client) Completion(convID string, req *CompletionRequest) (io.ReadClose
 			return nil, fmt.Errorf("API %d: %s", resp.StatusCode, truncBody(errBody))
 		}
 
+		return resp.Body, nil
+	}
+
+	// slow retry phase: network may recover in a few minutes.
+	// especially important for Continue (writeback) where the child's work is done.
+	log.Printf("claudeweb: fast retries exhausted, entering slow retry (3 attempts, 3min intervals)")
+	for slowAttempt := 0; slowAttempt < 3; slowAttempt++ {
+		sleepWithHeartbeat(3 * time.Minute)
+		log.Printf("claudeweb: slow retry %d/3", slowAttempt+1)
+		ctx, cancel = context.WithTimeout(context.Background(), 10*time.Minute)
+		_ = cancel
+		httpReq, _ = http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+		httpReq.Header.Set("Accept", "text/event-stream")
+		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("anthropic-client-platform", "web_claude_ai")
+		httpReq.Header.Set("anthropic-client-version", "1.0.0")
+		httpReq.Header.Set("Cookie", c.cookie)
+		resp, err := c.httpClient.Do(httpReq)
+		if err != nil {
+			lastErr = fmt.Errorf("http request: %w", err)
+			log.Printf("claudeweb: slow retry %d/3 http error: %v", slowAttempt+1, err)
+			continue
+		}
+		if resp.StatusCode >= 400 {
+			errBody, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			lastErr = fmt.Errorf("API %d: %s", resp.StatusCode, truncBody(errBody))
+			log.Printf("claudeweb: slow retry %d/3 status %d", slowAttempt+1, resp.StatusCode)
+			continue
+		}
 		return resp.Body, nil
 	}
 

@@ -610,23 +610,38 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 			p.WriteString("\n\n")
 		}
 
-		// accumulated theories: all up to and including this unit
-		// but only current unit in full — prior units as one-line summaries
-		// to avoid context bloat
+		// accumulated context: prior theories in FULL + prior unit conversations
+		// downloaded via DownloadConv. child sees everything, no truncation.
+		// pattern: [code1 + T1 + T2 + ... + Ti] → codei
 		if i > 0 {
-			p.WriteString(fmt.Sprintf("[PRIOR THEORIES 1..%d — already implemented on branch %s]\n", i, branch))
+			// inject prior unit work: download each prior child conversation
+			// which contains create_file code, bash commands, compile results.
 			for j := 0; j < i; j++ {
-				// first line of each prior unit as a summary
-				first := units[j]
-				if idx := strings.Index(first, "\n"); idx > 0 {
-					first = first[:idx]
+				rec := FindConv(repo, fmt.Sprintf("dev_unit_%d", j+1), j+1)
+				if rec == nil {
+					continue
 				}
-				if len(first) > 120 {
-					first = first[:120]
+				downloaded, err := DownloadConv(rec.ConvID)
+				if err != nil {
+					log.Printf("dev_from_theorems: %s unit %d prior conv download failed: %v",
+						repo, j+1, err)
+					continue
 				}
-				p.WriteString(fmt.Sprintf("  %d. %s\n", j+1, first))
+				p.WriteString(fmt.Sprintf("[PRIOR UNIT %d/%d — conv %s, %d bytes]\n",
+					j+1, len(units), rec.ConvID[:8], len(downloaded)))
+				p.WriteString(downloaded)
+				p.WriteString("\n\n")
+				log.Printf("dev_from_theorems: %s injected prior unit %d conv (%d bytes) into unit %d prompt",
+					repo, j+1, len(downloaded), i+1)
 			}
-			p.WriteString("\n")
+
+			// prior theories in full — not summaries
+			p.WriteString(fmt.Sprintf("[PRIOR THEORIES 1..%d — full text]\n", i))
+			for j := 0; j < i; j++ {
+				p.WriteString(fmt.Sprintf("--- THEORY %d/%d ---\n", j+1, len(units)))
+				p.WriteString(units[j])
+				p.WriteString("\n\n")
+			}
 		}
 
 		p.WriteString(fmt.Sprintf("[THEORY %d/%d — your task: implement THIS unit]\n", i+1, len(units)))
@@ -634,11 +649,9 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 		p.WriteString("\n\n")
 
 		if i > 0 {
-			// tell child to read existing code from the branch
 			p.WriteString(fmt.Sprintf("[EXISTING CODE]\n"+
-				"branch %s has code from prior units. read it:\n"+
+				"branch %s has code from prior units (you have their full conversations above).\n"+
 				"  cd /home/claude/<repo> && git fetch origin && git checkout %s\n"+
-				"  find . -name '*.cu' -o -name '*.hpp' -o -name '*.h' -o -name '*.cpp' | head -50\n"+
 				"do NOT rewrite existing files unless theory %d requires changing them.\n"+
 				"ADD your new code, then compile the WHOLE project.\n\n",
 				branch, branch, i+1))
@@ -680,15 +693,22 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 
 			lastStdout, lastStatus = dev_collect_child(child, repo)
 
-			// check if child actually ran or hit connection issues
+			// retry logic: only no_response means child did nothing.
+			// any other non-empty compile status (pass, fail, unknown, pending, etc.)
+			// means dev_collect found real work — don't retry, even if the downloaded
+			// text contains "no context" phrases from Continue's preamble.
+			// empty compile means dev_collect set nothing — fall through to text heuristic.
 			needsRetry := false
-			if lastStatus["compile"] == "no_response" {
+			compile := lastStatus["compile"]
+			if compile == "no_response" {
 				needsRetry = true
-			}
-			if strings.Contains(lastStdout, "don't have any prior context") ||
-				strings.Contains(lastStdout, "don't have context") ||
-				strings.Contains(lastStdout, "start of our chat") {
-				log.Printf("dev_from_theorems: %s unit %d/%d child lost context (attempt %d/5), retrying",
+			} else if compile != "" {
+				// any real status from dev_collect = child worked
+				needsRetry = false
+			} else if strings.Contains(lastStdout, "[API Error]") ||
+				strings.Contains(lastStdout, "TLS handshake timeout") ||
+				strings.Contains(lastStdout, "net/http:") {
+				log.Printf("dev_from_theorems: %s unit %d/%d child hit API/network error (attempt %d/5), retrying",
 					repo, i+1, len(units), attempt)
 				needsRetry = true
 			}
@@ -712,8 +732,14 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 		PRFeedbackAdd(pid, fmt.Sprintf("- dev[%s] unit %d/%d: compile=%s smoke=%s",
 			repo, i+1, len(units), lastStatus["compile"], lastStatus["smoke"]))
 
-		if lastStatus["compile"] != "pass" || lastStatus["smoke"] != "pass" {
-			log.Printf("dev_from_theorems: %s unit %d/%d failed, pushing fix", repo, i+1, len(units))
+		// unit success: compile status starts with "pass" (may have description suffix
+		// like "pass (CPU tests + headers); pending (GPU)"). smoke may be empty if
+		// no GPU available — treat empty smoke as acceptable when compile passes.
+		compilePassed := strings.HasPrefix(lastStatus["compile"], "pass")
+		smokeOK := lastStatus["smoke"] == "" || strings.HasPrefix(lastStatus["smoke"], "pass")
+		if !compilePassed || !smokeOK {
+			log.Printf("dev_from_theorems: %s unit %d/%d failed (compile=%q smoke=%q), pushing fix",
+				repo, i+1, len(units), lastStatus["compile"], lastStatus["smoke"])
 			dev_push_fix(pid, step.Owner, step.Repo, lastStatus, i+1)
 			// remaining units become new dev_thms steps to resume later
 			if i+1 < len(units) {
@@ -1103,7 +1129,9 @@ func dev_fix(pid int64, step *Step) (string, error) {
 		PRFeedbackAdd(pid, fmt.Sprintf("- dev[%s]: %s=%s", repo, k, v))
 	}
 
-	if status["compile"] == "pass" && status["smoke"] == "pass" {
+	compilePassed := strings.HasPrefix(status["compile"], "pass")
+	smokeOK := status["smoke"] == "" || strings.HasPrefix(status["smoke"], "pass")
+	if compilePassed && smokeOK {
 		log.Printf("dev_fix: %s verified on attempt %d", repo, attempt)
 		return stdout, nil
 	}
@@ -1316,7 +1344,6 @@ func dev_collect_child(childPid int64, repo string) (string, map[string]string) 
 		if err == nil && len(downloaded) > len(stdout) {
 			log.Printf("dev_collect: %s downloaded %d chars (stdout was %d)",
 				repo, len(downloaded), len(stdout))
-			// parse status from downloaded content (includes tool_result)
 			status = parse_last_status(downloaded)
 			if status != nil {
 				log.Printf("dev_collect: %s status from download: compile=%s", repo, status["compile"])
@@ -1326,6 +1353,69 @@ func dev_collect_child(childPid int64, repo string) (string, map[string]string) 
 				return downloaded, status
 			}
 			stdout = downloaded
+		}
+
+		// SSE broke but remote may still be running. Poll like ref_split.
+		// dev children write 30+ files then compile — if SSE breaks mid-write,
+		// remote continues and finishes compile+push on the server side.
+		if len(stdout) < 500 {
+			log.Printf("dev_collect: %s stdout thin (%d bytes), polling conv %s (exit after 5 stale)",
+				repo, len(stdout), convID[:8])
+			maxSeen := len(stdout)
+			prevSize := len(stdout)
+			staleCount := 0
+			for poll := 0; staleCount < 5; poll++ {
+				time.Sleep(3 * time.Minute)
+				redownloaded, dlErr := DownloadConv(convID)
+				curSize := 0
+				if dlErr == nil {
+					curSize = len(redownloaded)
+				}
+				if dlErr != nil {
+					staleCount++
+					log.Printf("dev_collect: %s poll %d: download error (stale %d/5)", repo, poll+1, staleCount)
+					continue
+				}
+				log.Printf("dev_collect: %s poll %d: %d bytes (prev %d, max %d, stale %d/5)",
+					repo, poll+1, curSize, prevSize, maxSeen, staleCount)
+
+				if curSize == 0 {
+					if maxSeen <= 500 {
+						log.Printf("dev_collect: %s poll %d: 0 bytes, conversation dead", repo, poll+1)
+						break
+					}
+					staleCount++
+					continue
+				}
+				if curSize > maxSeen {
+					maxSeen = curSize
+					staleCount = 0
+				} else {
+					staleCount++
+				}
+				if curSize > 500 {
+					if curSize == prevSize {
+						log.Printf("dev_collect: %s remote finished: %d bytes stable", repo, curSize)
+						stdout = redownloaded
+						status = parse_last_status(redownloaded)
+						if status != nil {
+							log.Printf("dev_collect: %s status from poll: compile=%s", repo, status["compile"])
+							if len(files) > 0 {
+								status["files_written"] = strings.Join(files, ",")
+							}
+							return stdout, status
+						}
+						break
+					}
+					if curSize > len(stdout) {
+						stdout = redownloaded
+					}
+				}
+				prevSize = curSize
+			}
+			if len(stdout) > 500 {
+				log.Printf("dev_collect: %s polling got %d bytes, no status found", repo, len(stdout))
+			}
 		}
 	}
 
