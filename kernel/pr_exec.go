@@ -680,19 +680,20 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 
 			lastStdout, lastStatus = dev_collect_child(child, repo)
 
-			// check if child actually ran or hit connection issues
+			// check if child actually ran or hit connection issues.
+			// ONLY retry if dev_collect couldn't find any real work.
+			// if compile=pass/fail/unknown/pending, the child did real work — don't retry.
 			needsRetry := false
-			if lastStatus["compile"] == "no_response" {
+			compile := lastStatus["compile"]
+			if compile == "no_response" {
 				needsRetry = true
-			}
-			if strings.Contains(lastStdout, "don't have any prior context") ||
-				strings.Contains(lastStdout, "don't have context") ||
-				strings.Contains(lastStdout, "start of our chat") {
-				log.Printf("dev_from_theorems: %s unit %d/%d child lost context (attempt %d/5), retrying",
-					repo, i+1, len(units), attempt)
-				needsRetry = true
-			}
-			if strings.Contains(lastStdout, "[API Error]") ||
+			} else if compile == "pass" || compile == "fail" || compile == "unknown" || strings.HasPrefix(compile, "pending") {
+				// dev_collect found real status (possibly via polling) — child worked.
+				// don't override with text-based "lost context" check on the full download,
+				// because the download includes bare Continue's "no context" reply mixed
+				// with the real work output.
+				needsRetry = false
+			} else if strings.Contains(lastStdout, "[API Error]") ||
 				strings.Contains(lastStdout, "TLS handshake timeout") ||
 				strings.Contains(lastStdout, "net/http:") {
 				log.Printf("dev_from_theorems: %s unit %d/%d child hit API/network error (attempt %d/5), retrying",
