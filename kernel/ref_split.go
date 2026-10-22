@@ -223,42 +223,46 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 			// if size grows → remote still working, keep waiting.
 			// if size stable and > 500 → remote finished, use it.
 			// if size stable and <= 500 after 30min → give up, retry fresh.
-			log.Printf("ref_split: chunk %d/%d too thin, polling remote conv %s (3min intervals, max 30min)",
+			log.Printf("ref_split: chunk %d/%d too thin, polling remote conv %s (3min intervals, exit after 5 stale)",
 				i+1, len(chunks), convID[:8])
 			prevSize := len(result)
 			maxSeen := len(result)
 			stableCount := 0
-			for poll := 0; poll < 10; poll++ { // 10 × 3min = 30min max
-				time.Sleep(3 * time.Minute)
+			staleCount := 0 // consecutive polls with no growth (including errors)
+			for poll := 0; staleCount < 5; poll++ {
+				sleepWithHeartbeat(3 * time.Minute)
 				redownloaded, dlErr := DownloadConv(convID)
 				curSize := 0
 				if dlErr == nil {
 					curSize = len(redownloaded)
 				}
 				if dlErr != nil {
-					log.Printf("ref_split: chunk %d/%d poll %d/10: download error (network), skipping: %v",
-						i+1, len(chunks), poll+1, dlErr)
+					staleCount++
+					log.Printf("ref_split: chunk %d/%d poll %d: download error (stale %d/5): %v",
+						i+1, len(chunks), poll+1, staleCount, dlErr)
 					continue
 				}
-				log.Printf("ref_split: chunk %d/%d poll %d/10: %d bytes (prev %d, max %d)",
-					i+1, len(chunks), poll+1, curSize, prevSize, maxSeen)
 
-				// 0-byte response: if we've never seen content, conversation is dead.
-				// if we HAVE seen content before, this is API flap — skip like network error.
+				log.Printf("ref_split: chunk %d/%d poll %d: %d bytes (prev %d, max %d, stale %d/5)",
+					i+1, len(chunks), poll+1, curSize, prevSize, maxSeen, staleCount)
+
 				if curSize == 0 {
 					if maxSeen <= 500 {
 						log.Printf("ref_split: chunk %d/%d poll %d: 0 bytes, never seen content — conversation dead",
 							i+1, len(chunks), poll+1)
 						break
 					}
-					log.Printf("ref_split: chunk %d/%d poll %d: 0 bytes but maxSeen=%d — API flap, skipping",
-						i+1, len(chunks), poll+1, maxSeen)
+					staleCount++
 					continue
 				}
 
 				if curSize > maxSeen {
 					maxSeen = curSize
+					staleCount = 0 // content grew — reset stale counter
+				} else {
+					staleCount++
 				}
+
 				if curSize > 500 {
 					if curSize == prevSize {
 						stableCount++
@@ -279,10 +283,20 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 				prevSize = curSize
 			}
 			// if we exited the loop with a good result, needsRetry is already false.
-			// if result grew past 500 during polling but never stabilized, use what we have.
+			// if result grew past 500 during polling but never stabilized,
+			// wait for network recovery then try one final download.
 			if needsRetry && len(result) > 500 {
-				log.Printf("ref_split: chunk %d/%d polling timeout but got %d bytes, using partial",
-					i+1, len(chunks), len(result))
+				log.Printf("ref_split: chunk %d/%d polling exhausted, waiting 5min for network recovery then retrying download",
+					i+1, len(chunks))
+				sleepWithHeartbeat(5 * time.Minute)
+				if recoveredDL, recoveredErr := DownloadConv(convID); recoveredErr == nil && len(recoveredDL) >= len(result) {
+					log.Printf("ref_split: chunk %d/%d post-wait download: %d bytes (was %d)",
+						i+1, len(chunks), len(recoveredDL), len(result))
+					result = recoveredDL
+				} else if recoveredErr != nil {
+					log.Printf("ref_split: chunk %d/%d post-wait download failed: %v, using previous %d bytes",
+						i+1, len(chunks), recoveredErr, len(result))
+				}
 				needsRetry = false
 			}
 		}

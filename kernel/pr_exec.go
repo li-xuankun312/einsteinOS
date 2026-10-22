@@ -1352,40 +1352,44 @@ func dev_collect_child(childPid int64, repo string) (string, map[string]string) 
 		// dev children write 30+ files then compile — if SSE breaks mid-write,
 		// remote continues and finishes compile+push on the server side.
 		if len(stdout) < 500 {
-			log.Printf("dev_collect: %s stdout thin (%d bytes), polling conv %s for remote to finish",
+			log.Printf("dev_collect: %s stdout thin (%d bytes), polling conv %s (exit after 5 stale)",
 				repo, len(stdout), convID[:8])
 			maxSeen := len(stdout)
 			prevSize := len(stdout)
-			for poll := 0; poll < 10; poll++ {
-				time.Sleep(3 * time.Minute)
+			staleCount := 0
+			for poll := 0; staleCount < 5; poll++ {
+				sleepWithHeartbeat(3 * time.Minute)
 				redownloaded, dlErr := DownloadConv(convID)
 				curSize := 0
 				if dlErr == nil {
 					curSize = len(redownloaded)
 				}
 				if dlErr != nil {
-					log.Printf("dev_collect: %s poll %d/10: download error, skipping", repo, poll+1)
+					staleCount++
+					log.Printf("dev_collect: %s poll %d: download error (stale %d/5)", repo, poll+1, staleCount)
 					continue
 				}
-				log.Printf("dev_collect: %s poll %d/10: %d bytes (prev %d, max %d)",
-					repo, poll+1, curSize, prevSize, maxSeen)
+				log.Printf("dev_collect: %s poll %d: %d bytes (prev %d, max %d, stale %d/5)",
+					repo, poll+1, curSize, prevSize, maxSeen, staleCount)
 
 				if curSize == 0 {
 					if maxSeen <= 500 {
 						log.Printf("dev_collect: %s poll %d: 0 bytes, conversation dead", repo, poll+1)
 						break
 					}
-					log.Printf("dev_collect: %s poll %d: 0 bytes but maxSeen=%d, API flap", repo, poll+1, maxSeen)
+					staleCount++
 					continue
 				}
 				if curSize > maxSeen {
 					maxSeen = curSize
+					staleCount = 0
+				} else {
+					staleCount++
 				}
 				if curSize > 500 {
 					if curSize == prevSize {
 						log.Printf("dev_collect: %s remote finished: %d bytes stable", repo, curSize)
 						stdout = redownloaded
-						// try parsing status from the full download
 						status = parse_last_status(redownloaded)
 						if status != nil {
 							log.Printf("dev_collect: %s status from poll: compile=%s", repo, status["compile"])
@@ -1402,7 +1406,6 @@ func dev_collect_child(childPid int64, repo string) (string, map[string]string) 
 				}
 				prevSize = curSize
 			}
-			// if polling got content but no status, use what we have
 			if len(stdout) > 500 {
 				log.Printf("dev_collect: %s polling got %d bytes, no status found", repo, len(stdout))
 			}
