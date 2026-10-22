@@ -674,7 +674,16 @@ func dev_extract_file_sections(theory string) []devFileSection {
 		trimmed := strings.TrimSpace(line)
 		isHeader := false
 		newPath := ""
-		if strings.Contains(trimmed, "## FILE:") {
+		// support both ## MODULE: (new) and ## FILE: (legacy)
+		if strings.Contains(trimmed, "## MODULE:") {
+			isHeader = true
+			idx := strings.Index(trimmed, "## MODULE:")
+			newPath = strings.TrimSpace(trimmed[idx+len("## MODULE:"):])
+		} else if strings.HasPrefix(trimmed, "## MODULE") {
+			isHeader = true
+			newPath = strings.TrimSpace(trimmed[len("## MODULE"):])
+			newPath = strings.TrimLeft(newPath, ": ")
+		} else if strings.Contains(trimmed, "## FILE:") {
 			isHeader = true
 			idx := strings.Index(trimmed, "## FILE:")
 			newPath = strings.TrimSpace(trimmed[idx+len("## FILE:"):])
@@ -743,6 +752,17 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 
 	if pr != nil {
 		writeGHToken(pr.Title)
+	}
+
+	// strip ref repo references from task — dev conv must NOT know the source repo.
+	// it should only see the dev repo and the abstract theory.
+	if pr != nil {
+		for _, ref := range pr.RefRepos {
+			refFull := ref.Owner + "/" + ref.Name
+			task = strings.ReplaceAll(task, refFull, "(reference project)")
+			task = strings.ReplaceAll(task, "github.com/"+refFull, "(reference)")
+			task = strings.ReplaceAll(task, ref.Name, "(ref)")
+		}
 	}
 
 	// planner decides the split — NOT the dev conv, NOT static grouping
@@ -1806,6 +1826,21 @@ CUDA_VISIBLE_DEVICES=%[4]s
 - the THEORY for your unit above (LAYER 1 math + LAYER 2 form templates)
 - if unit > 1: prior code already on the branch — git checkout and READ it first
 - you do NOT have the original source code. this is intentional.
+
+[CRITICAL — DO NOT]
+- do NOT clone, fetch, or read ANY repository other than the dev repo
+- do NOT search for or access the reference source code in any way
+- do NOT use the reference project's namespace, directory structure, or file names
+- the theory is ABSTRACT — it describes WHAT to build, not HOW the reference did it
+- if the theory mentions paths from the reference, IGNORE those paths
+- create YOUR OWN project layout appropriate for YOUR dev repo
+
+[YOUR PROJECT LAYOUT]
+use the dev repo's existing structure. look at what prior units created:
+  include/<project>/  — headers
+  src/<project>/      — implementations
+  tests/              — test files
+if unit 1 and no structure exists yet, create one that fits YOUR project name.
 
 [RULES]
 1. if this is unit 1: clone the dev repo, create branch %[1]s, start coding

@@ -21,9 +21,17 @@ type theorem_entry struct {
 
 const theorize_instruction = `OUTPUT FORMAT: for each source file, emit a section headed by:
 
-## FILE: <exact/path/from/repo>
+## MODULE: <short_descriptive_name>
 
-under that header, produce THREE layers for every function / struct / method in that file.
+the module name is an ABSTRACT name you choose based on what the code DOES,
+not the source file path. examples:
+  ## MODULE: expert_cache (expert routing weight cache)
+  ## MODULE: quantized_scaled_attention (QSA kernel)
+  ## MODULE: cuda_graph_executor (graph capture + replay)
+do NOT use the source repo's directory structure or namespaces.
+the downstream developer will create their OWN project layout.
+
+under that header, produce THREE layers for every function / struct / method.
 
 [LAYER 1a — MATH (LaTeX)]
 formal specification: types, preconditions, postconditions, invariants.
@@ -69,9 +77,12 @@ after:
       return fseek(this->objtype, (long)position, SEEK_SET) == 0;
   }
 
-CRITICAL: every ## FILE section must use the EXACT path from the repository.
-do NOT invent paths. do NOT reorganize files. the downstream code generator
-reads each ## FILE section independently and must know which real file it maps to.
+CRITICAL: do NOT use the source repo's file paths, directory names, or namespaces
+in your ## MODULE headers. the theory is ABSTRACT — the developer reads it to
+understand WHAT to build, not WHERE the source lives. they will NEVER see the
+original source code. if you write "## FILE: include/strata/kernels/qsa.hpp",
+the developer will create that exact path in their own project, which is WRONG.
+write "## MODULE: quantized_scaled_attention" instead.
 
 all three layers are required for every semantic unit. do not skip any layer.
 LAYER 1b is verified by machine (Lean 4 kernel) — if you are unsure of the proof,

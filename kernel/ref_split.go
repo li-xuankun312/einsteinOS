@@ -141,8 +141,8 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 						continue
 					}
 					fileStr := string(fileBytes)
-					if strings.Contains(fileStr, "## FILE:") || strings.Contains(fileStr, "LAYER 1") {
-						log.Printf("ref_split: chunk %d/%d download-file %s: %d bytes (has ## FILE headers!)",
+					if strings.Contains(fileStr, "## MODULE:") || strings.Contains(fileStr, "## FILE:") || strings.Contains(fileStr, "LAYER 1") {
+						log.Printf("ref_split: chunk %d/%d download-file %s: %d bytes (has theory headers!)",
 							i+1, len(chunks), path, len(fileStr))
 						if len(fileStr) > len(result) {
 							result = fileStr
@@ -154,14 +154,18 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 			}
 		}
 
-		// theory completeness: count ## FILE: headers vs assigned files.
+		// theory completeness: count ## MODULE: or ## FILE: headers vs assigned files.
+		// ## MODULE: uses abstract names so we count modules vs expected file count.
+		// ## FILE: (legacy) matches exact paths.
 		// if missing, ContinueConv on the same theorize conversation.
-		// the conversation has prior file context → theories stay connected.
 		if convID != "" && len(result) >= 500 {
 			covered := map[string]bool{}
+			moduleCount := 0
 			for _, line := range strings.Split(result, "\n") {
 				trimmed := strings.TrimSpace(line)
-				if strings.HasPrefix(trimmed, "## FILE:") {
+				if strings.HasPrefix(trimmed, "## MODULE:") || strings.Contains(trimmed, "## MODULE:") {
+					moduleCount++
+				} else if strings.HasPrefix(trimmed, "## FILE:") {
 					path := strings.TrimSpace(trimmed[len("## FILE:"):])
 					covered[path] = true
 				} else if strings.Contains(trimmed, "## FILE:") {
@@ -171,9 +175,24 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 				}
 			}
 			var missing []string
-			for _, f := range chunk {
-				if !covered[f] {
-					missing = append(missing, f)
+			if moduleCount > 0 {
+				// new format: ## MODULE headers. check count vs file count.
+				// modules may not be 1:1 with files (e.g. small files grouped),
+				// so only flag missing if we have <50% coverage.
+				if moduleCount < len(chunk)/2 {
+					// estimate missing: files not yet covered
+					for idx := moduleCount; idx < len(chunk); idx++ {
+						missing = append(missing, chunk[idx])
+					}
+				}
+				log.Printf("ref_split: chunk %d/%d has %d ## MODULE headers for %d files",
+					i+1, len(chunks), moduleCount, len(chunk))
+			} else {
+				// legacy format: ## FILE headers with exact paths
+				for _, f := range chunk {
+					if !covered[f] {
+						missing = append(missing, f)
+					}
 				}
 			}
 			if len(missing) > 0 && len(missing) < len(chunk) {
