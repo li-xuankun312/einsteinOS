@@ -41,6 +41,19 @@ type PuppetState struct {
 	TpsResult   float64
 }
 
+// PriorRun holds what the previous (failed) puppet accomplished.
+// The retry puppet reads this to skip already-done work.
+type PriorRun struct {
+	Branch      string   // the PR branch that has code from the failed run
+	ConvIDs     []string // conv IDs of completed dev units
+	UnitsPass   int      // how many units passed before failure
+	UnitsTotal  int      // how many units the planner created
+	TheoryDone  bool     // was theory phase completed?
+	TheoryBytes int      // how much theory was produced
+	HWInfo      string   // hardware info from hw_probe (no need to re-probe)
+	Verdict     string   // verify_conv's FAIL reason
+}
+
 // ProcEngine is the long-running Go process that manages puppets across commits.
 // It replaces the old ProcState which tried to run everything in one conversation.
 type ProcEngine struct {
@@ -50,11 +63,14 @@ type ProcEngine struct {
 	Task   string // the original user task string
 
 	// L1: Go memory state
-	Cursor      int    // next commit index to process
+	Cursor       int    // next commit index to process
 	TotalCommits int
-	RefOwner    string
-	RefName     string
-	DevRepo     string // "owner/name"
+	RefOwner     string
+	RefName      string
+	DevRepo      string // "owner/name"
+
+	// retry state: what the previous puppet accomplished for the CURRENT cursor
+	PriorRun *PriorRun
 
 	// puppet history
 	Puppets    []PuppetState
@@ -135,13 +151,22 @@ func (pe *ProcEngine) Run() {
 		pe.mu.Lock()
 		if result == "merged" {
 			pe.Cursor++
+			pe.PriorRun = nil // clean slate for next commit
 			log.Printf("proc_engine: commit %d merged, cursor → %d", cursor, pe.Cursor)
 		} else if result == "stopped" {
 			pe.mu.Unlock()
 			return
 		} else {
-			// failed — retry same commit with new puppet
-			log.Printf("proc_engine: commit %d failed (%s), retrying", cursor, result)
+			// failed — PriorRun already saved by runCommit.
+			// next iteration retries the same cursor with a new puppet
+			// that sees what the prior puppet accomplished.
+			prior := pe.PriorRun
+			if prior != nil {
+				log.Printf("proc_engine: commit %d failed (%s), retrying with %d/%d prior units on branch %s",
+					cursor, result, prior.UnitsPass, prior.UnitsTotal, prior.Branch)
+			} else {
+				log.Printf("proc_engine: commit %d failed (%s), retrying from scratch", cursor, result)
+			}
 		}
 		pe.mu.Unlock()
 	}
@@ -205,12 +230,22 @@ func (pe *ProcEngine) boot() error {
 func (pe *ProcEngine) runCommit(cursor int) string {
 	repo := pe.RefOwner + "/" + pe.RefName
 
-	// get the commit SHA for this cursor position
 	commits, err := RefListCommits(pe.RefOwner, pe.RefName)
 	if err != nil || cursor >= len(commits) {
 		return "failed: can't list commits"
 	}
 	sha := commits[cursor]
+
+	pe.mu.Lock()
+	prior := pe.PriorRun // nil on first attempt, set on retry
+	pe.mu.Unlock()
+
+	isRetry := prior != nil
+	retryLabel := ""
+	if isRetry {
+		retryLabel = fmt.Sprintf(" (retry, %d/%d units passed, branch=%s)",
+			prior.UnitsPass, prior.UnitsTotal, prior.Branch)
+	}
 
 	puppet := &PuppetState{
 		CommitIdx: cursor,
@@ -224,10 +259,10 @@ func (pe *ProcEngine) runCommit(cursor int) string {
 	pe.Puppets = append(pe.Puppets, *puppet)
 	pe.mu.Unlock()
 
-	log.Printf("proc_engine: commit %d/%d sha=%s — creating puppet",
-		cursor, pe.TotalCommits, sha[:8])
+	log.Printf("proc_engine: commit %d/%d sha=%s — creating puppet%s",
+		cursor, pe.TotalCommits, sha[:8], retryLabel)
 
-	// 1. create PR process (this pushes hw_probe + ref_bind + dev_from_theorems steps)
+	// 1. create PR process
 	pid, err := PRFork(".", "dev", pe.Task, []RefRepo{{Owner: pe.RefOwner, Name: pe.RefName}})
 	if err != nil {
 		log.Printf("proc_engine: PRFork failed: %v", err)
@@ -235,9 +270,31 @@ func (pe *ProcEngine) runCommit(cursor int) string {
 		return "failed: PRFork"
 	}
 	puppet.PRPid = pid
-	puppet.Branch = fmt.Sprintf("einsteinOS/dev-%d", pid)
 
-	// 2. run pipeline steps — Go process drives directly, no main conversation needed
+	// on retry: reuse the prior branch (it has code from units 1..N)
+	// on first attempt: new branch
+	if isRetry && prior.Branch != "" {
+		puppet.Branch = prior.Branch
+		// inject prior HW info so hw_probe can be skipped
+		if prior.HWInfo != "" {
+			pr := GetPR(pid)
+			if pr != nil {
+				pr.HWInfo = prior.HWInfo
+			}
+		}
+		// inject prior conv IDs into registry so dev_from_theorems can see them
+		for _, convID := range prior.ConvIDs {
+			// these are already in the global conv_registry from the prior run,
+			// no need to re-register. just log for visibility.
+			log.Printf("proc_engine: retry has prior conv %s", convID[:8])
+		}
+		log.Printf("proc_engine: retry reusing branch %s (%d prior units pass)",
+			prior.Branch, prior.UnitsPass)
+	} else {
+		puppet.Branch = fmt.Sprintf("einsteinOS/dev-%d", pid)
+	}
+
+	// 2. run pipeline
 	log.Printf("proc_engine: commit %d pid=%d running pipeline", cursor, pid)
 
 	for stepNum := 0; stepNum < 30; stepNum++ {
@@ -259,17 +316,17 @@ func (pe *ProcEngine) runCommit(cursor int) string {
 
 	puppet.Status = "pipeline_done"
 
-	// 3. verify: fork a verify_conv to judge whether this commit passed.
-	// the verify conv reads the branch code + .einsteinOS/convs/ + compile logs.
-	// it does NOT write code. it outputs PASS or FAIL: reason.
+	// 3. verify
 	pr := GetPR(pid)
 	if pr == nil {
+		pe.savePriorRun(puppet, cursor, "PR not found")
 		puppet.Status = "failed"
 		return "failed: PR not found"
 	}
 
 	verdict := pe.verifyCommit(pid, puppet.Branch, cursor, sha)
 	if !strings.HasPrefix(verdict, "PASS") {
+		pe.savePriorRun(puppet, cursor, verdict)
 		puppet.Status = "failed"
 		log.Printf("proc_engine: commit %d verify → %s", cursor, verdict)
 		return "failed: verify"
@@ -277,7 +334,7 @@ func (pe *ProcEngine) runCommit(cursor int) string {
 	puppet.CompilePass = true
 	log.Printf("proc_engine: commit %d verify → PASS", cursor)
 
-	// 4. milestone benchmark (if applicable)
+	// 4. milestone benchmark
 	if pe.isMilestone(cursor) {
 		puppet.Status = "tps_check"
 		tps := pe.runBenchmark(pid, puppet.Branch)
@@ -293,12 +350,12 @@ func (pe *ProcEngine) runCommit(cursor int) string {
 		pe.mu.Unlock()
 
 		log.Printf("proc_engine: commit %d benchmark tok/s=%.1f", cursor, tps)
-		// tps is recorded but NOT a gate — design principle
 	}
 
 	// 5. merge PR branch to main
 	puppet.Status = "merging"
 	if err := pe.mergePRToMain(pid, puppet.Branch, cursor, sha); err != nil {
+		pe.savePriorRun(puppet, cursor, "merge failed: "+err.Error())
 		puppet.Status = "failed"
 		log.Printf("proc_engine: commit %d merge failed: %v", cursor, err)
 		return "failed: merge"
@@ -307,17 +364,70 @@ func (pe *ProcEngine) runCommit(cursor int) string {
 	puppet.Status = "merged"
 	puppet.EndTime = time.Now()
 
-	// 6. cleanup: mark PR as merged in kernel
+	// 6. cleanup
 	PRMerge(pid)
+
+	// clear PriorRun — this commit is done
+	pe.mu.Lock()
+	pe.PriorRun = nil
+	pe.Current = nil
+	pe.mu.Unlock()
 
 	log.Printf("proc_engine: commit %d/%d MERGED in %v",
 		cursor, pe.TotalCommits, puppet.EndTime.Sub(puppet.StartTime).Truncate(time.Second))
 
+	return "merged"
+}
+
+// savePriorRun captures what this puppet accomplished before failing,
+// so the next puppet can continue from here instead of starting over.
+func (pe *ProcEngine) savePriorRun(puppet *PuppetState, cursor int, verdict string) {
+	// count passed units from conv_registry
+	repo := pe.RefOwner + "/" + pe.RefName
+	var convIDs []string
+	unitsPass := 0
+	unitsTotal := 0
+
+	convRegistryMu.Lock()
+	for _, c := range convRegistry {
+		if strings.HasPrefix(c.Role, "dev_unit_") && c.Repo == repo {
+			unitsTotal++
+			convIDs = append(convIDs, c.ConvID)
+			if c.Status == "done" {
+				unitsPass++
+			}
+		}
+	}
+	convRegistryMu.Unlock()
+
+	// get HW info
+	hwInfo := ""
+	if puppet.PRPid > 0 {
+		if pr := GetPR(puppet.PRPid); pr != nil {
+			hwInfo = pr.HWInfo
+		}
+	}
+
+	// get theory size
+	theoryBytes := len(theorem_get_all(repo))
+
+	prior := &PriorRun{
+		Branch:      puppet.Branch,
+		ConvIDs:     convIDs,
+		UnitsPass:   unitsPass,
+		UnitsTotal:  unitsTotal,
+		TheoryDone:  theoryBytes > 1000,
+		TheoryBytes: theoryBytes,
+		HWInfo:      hwInfo,
+		Verdict:     verdict,
+	}
+
 	pe.mu.Lock()
-	pe.Current = nil
+	pe.PriorRun = prior
 	pe.mu.Unlock()
 
-	return "merged"
+	log.Printf("proc_engine: saved PriorRun for cursor %d: %d/%d units pass, theory=%d bytes, branch=%s, verdict=%s",
+		cursor, unitsPass, unitsTotal, theoryBytes, puppet.Branch, truncateStr(verdict, 80))
 }
 
 // ---------------------------------------------------------------------------
