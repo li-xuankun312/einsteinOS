@@ -442,37 +442,95 @@ type devUnit struct {
 	Theory  string   // the theory text for just these files
 }
 
-func dev_plan(pid int64, repo string, theory string) []devUnit {
-	// extract ## FILE headers from theory
+// dev_store_theory: write theory to .einsteinOS/theory.md on the branch.
+// planner and dev convs read it from there with view/grep.
+func dev_store_theory(theory, repo, branch string) {
+	devRepos := GetDevRepos()
+	if len(devRepos) == 0 {
+		log.Printf("dev_store_theory: no dev repos, skipping")
+		return
+	}
+	parts := strings.Split(devRepos[0], "/")
+	repoName := parts[len(parts)-1]
+	repoDir := fmt.Sprintf("/home/claude/%s", repoName)
+
+	tmpFile := "/tmp/theory_full.md"
+	if err := os.WriteFile(tmpFile, []byte(theory), 0644); err != nil {
+		log.Printf("dev_store_theory: write tmp failed: %v", err)
+		return
+	}
+
+	script := fmt.Sprintf(`cd %s 2>/dev/null || exit 1
+git fetch origin 2>/dev/null
+git checkout %s 2>/dev/null || git checkout -b %s 2>/dev/null
+mkdir -p .einsteinOS
+cp %s .einsteinOS/theory.md
+git add .einsteinOS/theory.md
+git commit -m "theory: %d bytes" --allow-empty 2>/dev/null
+TOKEN=$(cat /tmp/.gh_token 2>/dev/null)
+git push "https://${TOKEN}@github.com/%s.git" %s 2>/dev/null
+echo "stored theory %d bytes"`,
+		repoDir,
+		branch, branch,
+		tmpFile,
+		len(theory),
+		devRepos[0], branch,
+		len(theory))
+
+	child, err := ForkExec(script, repoDir)
+	if err != nil {
+		log.Printf("dev_store_theory: ForkExec failed: %v", err)
+		return
+	}
+	Wait(child)
+	log.Printf("dev_store_theory: %s stored %d bytes to %s:.einsteinOS/theory.md",
+		repo, len(theory), branch)
+}
+
+func dev_plan(pid int64, repo string, theory string, branch string) []devUnit {
 	fileSections := dev_extract_file_sections(theory)
 	if len(fileSections) <= 10 {
-		// small enough — single unit, no planner needed
-		log.Printf("dev_plan: %s %d files ≤ 10, single unit", repo, len(fileSections))
+		log.Printf("dev_plan: %s %d sections ≤ 10, single unit", repo, len(fileSections))
 		return []devUnit{{
 			Files:  dev_section_paths(fileSections),
 			Theory: theory,
 		}}
 	}
 
-	// build file list for planner prompt
-	var fileList strings.Builder
-	for _, sec := range fileSections {
-		fileList.WriteString(fmt.Sprintf("  %s (%d bytes)\n", sec.path, len(sec.content)))
+	// build module list for planner — names + sizes, not content
+	var moduleList strings.Builder
+	for i, sec := range fileSections {
+		moduleList.WriteString(fmt.Sprintf("  %d. %s (%d bytes)\n", i+1, sec.path, len(sec.content)))
+	}
+
+	devRepos := GetDevRepos()
+	devRepoName := ""
+	if len(devRepos) > 0 {
+		parts := strings.Split(devRepos[0], "/")
+		devRepoName = parts[len(parts)-1]
 	}
 
 	plannerPrompt := fmt.Sprintf(
-		"[TASK] split %d source files into implementation units.\n"+
-			"each unit should have at most 10 files.\n"+
-			"files in the same directory should stay together.\n"+
-			"units should be ordered: foundational files first (types, config),\n"+
-			"then core logic, then higher-level components.\n\n"+
-			"[FILES]\n%s\n"+
+		"[TASK] split %d modules into implementation units, max 10 modules per unit.\n\n"+
+			"[MODULES] (from theory — each ## MODULE section is one entry)\n%s\n"+
+			"[THEORY FILE]\n"+
+			"the full theory is at .einsteinOS/theory.md on branch %s of %s.\n"+
+			"  git clone <repo> && git checkout %s && view .einsteinOS/theory.md\n"+
+			"you can read it to understand module dependencies before splitting.\n"+
+			"you do NOT have to read it — the module list above may be enough.\n\n"+
+			"[RULES]\n"+
+			"- group related modules together (same subsystem)\n"+
+			"- foundational modules first (types, config, utils), then core, then high-level\n"+
+			"- max 10 modules per unit\n"+
+			"- every module must appear in exactly one unit\n\n"+
 			"[OUTPUT FORMAT]\n"+
 			"output ONLY lines like:\n"+
-			"unit: file1.hpp, file2.hpp, file3.cpp\n"+
-			"unit: file4.cu, file5.cu\n"+
-			"one line per unit, files comma-separated. nothing else.\n",
-		len(fileSections), fileList.String())
+			"unit: module_name_1, module_name_2, module_name_3\n"+
+			"unit: module_name_4, module_name_5\n"+
+			"use the exact module names from the list above. one line per unit. nothing else.\n",
+		len(fileSections), moduleList.String(),
+		branch, devRepoName,
+		branch)
 
 	child, err := ForkWithRole(plannerPrompt, ".", "dev_planner")
 	if err != nil {
@@ -486,17 +544,15 @@ func dev_plan(pid int64, repo string, theory string) []devUnit {
 	planOutput := GetResult(child)
 	log.Printf("dev_plan: %s planner returned %d bytes", repo, len(planOutput))
 
-	// parse planner output
 	units := dev_parse_plan(planOutput, fileSections)
 	if len(units) == 0 {
 		log.Printf("dev_plan: %s planner output unparseable, using static split", repo)
 		return dev_static_split(fileSections)
 	}
 
-	// log the plan
-	log.Printf("dev_plan: %s planner split %d files into %d units", repo, len(fileSections), len(units))
+	log.Printf("dev_plan: %s planner split %d modules into %d units", repo, len(fileSections), len(units))
 	for i, u := range units {
-		log.Printf("dev_plan:   unit %d: %d files, %d bytes theory", i+1, len(u.Files), len(u.Theory))
+		log.Printf("dev_plan:   unit %d: %d modules, %d bytes theory", i+1, len(u.Files), len(u.Theory))
 	}
 	return units
 }
@@ -766,13 +822,16 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 		}
 	}
 
-	// planner decides the split — NOT the dev conv, NOT static grouping
-	units := dev_plan(pid, repo, theory)
-	log.Printf("dev_from_theorems: %s %d planned units, total %d bytes theory, gpu_all=%s gpu_usable=%s",
-		repo, len(units), len(theory), gpuAll, gpuUsable)
-
 	// shared branch for all incremental children
 	branch := fmt.Sprintf("einsteinOS/dev-%d", pid)
+
+	// store theory to branch — planner and dev convs read it from there
+	dev_store_theory(theory, repo, branch)
+
+	// planner decides the split — NOT the dev conv, NOT static grouping
+	units := dev_plan(pid, repo, theory, branch)
+	log.Printf("dev_from_theorems: %s %d planned units, total %d bytes theory, gpu_all=%s gpu_usable=%s",
+		repo, len(units), len(theory), gpuAll, gpuUsable)
 
 	devRepos := GetDevRepos()
 	var devRepoBlock string
@@ -829,11 +888,14 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 			p.WriteString("do NOT rewrite prior code unless your theory REQUIRES it.\n\n")
 		}
 
-		// --- only THIS unit's theory, not all prior theories ---
-		p.WriteString(fmt.Sprintf("[THEORY — unit %d/%d, %d files]\n", i+1, len(units), len(unit.Files)))
-		p.WriteString(fmt.Sprintf("files: %s\n\n", strings.Join(unit.Files, ", ")))
-		p.WriteString(unit.Theory)
-		p.WriteString("\n\n")
+		// --- theory reference: on the branch, not in the prompt ---
+		p.WriteString(fmt.Sprintf("[THEORY — unit %d/%d, %d modules]\n", i+1, len(units), len(unit.Files)))
+		p.WriteString(fmt.Sprintf("your modules: %s\n", strings.Join(unit.Files, ", ")))
+		p.WriteString(fmt.Sprintf("full theory is at: .einsteinOS/theory.md on branch %s\n", branch))
+		p.WriteString("after git checkout, use view/grep to read the ## MODULE sections for YOUR modules.\n")
+		p.WriteString("example: grep -n 'MODULE:' .einsteinOS/theory.md  — find your sections\n")
+		p.WriteString("         view .einsteinOS/theory.md <start> <end>  — read a section\n")
+		p.WriteString("you decide what to read and how much.\n\n")
 
 		if i > 0 {
 			p.WriteString(fmt.Sprintf("[EXISTING CODE]\n"+
