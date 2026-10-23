@@ -259,21 +259,23 @@ func (pe *ProcEngine) runCommit(cursor int) string {
 
 	puppet.Status = "pipeline_done"
 
-	// 3. check compile status from the last dev step
+	// 3. verify: fork a verify_conv to judge whether this commit passed.
+	// the verify conv reads the branch code + .einsteinOS/convs/ + compile logs.
+	// it does NOT write code. it outputs PASS or FAIL: reason.
 	pr := GetPR(pid)
 	if pr == nil {
 		puppet.Status = "failed"
 		return "failed: PR not found"
 	}
 
-	// check if all dev units passed by looking at the step log
-	stepLog := PRStepLog(pid)
-	if !strings.Contains(stepLog, "compile=pass") {
+	verdict := pe.verifyCommit(pid, puppet.Branch, cursor, sha)
+	if !strings.HasPrefix(verdict, "PASS") {
 		puppet.Status = "failed"
-		log.Printf("proc_engine: commit %d compile not pass", cursor)
-		return "failed: compile"
+		log.Printf("proc_engine: commit %d verify → %s", cursor, verdict)
+		return "failed: verify"
 	}
 	puppet.CompilePass = true
+	log.Printf("proc_engine: commit %d verify → PASS", cursor)
 
 	// 4. milestone benchmark (if applicable)
 	if pe.isMilestone(cursor) {
@@ -391,6 +393,107 @@ func (pe *ProcEngine) runBenchmark(pid int64, branch string) float64 {
 		return bm.TokPerSec
 	}
 	return 0
+}
+
+// ---------------------------------------------------------------------------
+// verifyCommit — fork a short-lived verify_conv to judge this commit.
+//
+// the verify conv gets:
+//   - branch name (it can git checkout and see all code)
+//   - .einsteinOS/convs/ directory listing (unit work logs)
+//   - conv_registry status (which units ran, their status)
+//   - step log (what the pipeline did)
+//
+// it reads what it needs, then outputs PASS or FAIL: <reason>.
+// it does NOT write code, fix bugs, or modify anything.
+// ---------------------------------------------------------------------------
+
+func (pe *ProcEngine) verifyCommit(pid int64, branch string, cursor int, sha string) string {
+	devRepo := pe.DevRepo
+	if devRepo == "" {
+		return "FAIL: no dev repo"
+	}
+
+	parts := strings.Split(devRepo, "/")
+	repoName := parts[len(parts)-1]
+
+	stepLog := PRStepLog(pid)
+	convStatus := ConvRegistryStatus()
+
+	// build verify prompt — only facts, no opinions
+	var prompt strings.Builder
+	prompt.WriteString("[TASK] verify whether this commit's pipeline succeeded.\n\n")
+	prompt.WriteString(fmt.Sprintf("[COMMIT] index=%d sha=%s\n", cursor, sha))
+	prompt.WriteString(fmt.Sprintf("[BRANCH] %s\n", branch))
+	prompt.WriteString(fmt.Sprintf("[DEV REPO] %s (clone to /home/claude/%s)\n\n", devRepo, repoName))
+
+	prompt.WriteString("[WHAT TO CHECK]\n")
+	prompt.WriteString("1. git checkout the branch, run: ls .einsteinOS/convs/ to see unit work logs\n")
+	prompt.WriteString("2. for each unit log, grep for 'compile=' and 'smoke=' lines\n")
+	prompt.WriteString("3. count how many units exist vs how many have compile=pass\n")
+	prompt.WriteString("4. check if the code actually compiles: run make or the compile command from the logs\n")
+	prompt.WriteString("5. if ALL units compile=pass AND the whole project compiles → output PASS\n")
+	prompt.WriteString("6. if ANY unit is missing, failed, or pending → output FAIL: <which unit and why>\n\n")
+
+	prompt.WriteString("[STEP LOG]\n")
+	if len(stepLog) > 3000 {
+		prompt.WriteString(stepLog[:3000])
+		prompt.WriteString("\n... (truncated)\n")
+	} else {
+		prompt.WriteString(stepLog)
+	}
+	prompt.WriteString("\n\n")
+
+	prompt.WriteString("[CONV REGISTRY]\n")
+	if len(convStatus) > 2000 {
+		prompt.WriteString(convStatus[:2000])
+	} else {
+		prompt.WriteString(convStatus)
+	}
+	prompt.WriteString("\n\n")
+
+	prompt.WriteString("[OUTPUT FORMAT]\n")
+	prompt.WriteString("your LAST line must be exactly one of:\n")
+	prompt.WriteString("  PASS\n")
+	prompt.WriteString("  FAIL: <one line reason>\n")
+	prompt.WriteString("nothing else on that line. do NOT write code or fix anything.\n")
+
+	log.Printf("proc_engine: commit %d forking verify_conv (%d bytes prompt)", cursor, prompt.Len())
+
+	child, err := ForkWithRole(prompt.String(), ".", "verify_conv")
+	if err != nil {
+		log.Printf("proc_engine: verify_conv fork failed: %v", err)
+		return "FAIL: verify_conv fork failed"
+	}
+	if m := getMeta(child); m != nil && m.ConvID != "" {
+		RegisterConv(pid, m.ConvID, pe.RefOwner+"/"+pe.RefName, "verify_conv", 0)
+	}
+	Wait(child)
+
+	result := GetResult(child)
+	log.Printf("proc_engine: verify_conv returned %d bytes", len(result))
+
+	// parse the last line for PASS or FAIL
+	lines := strings.Split(strings.TrimSpace(result), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "PASS" {
+			return "PASS"
+		}
+		if strings.HasPrefix(line, "FAIL:") {
+			return line
+		}
+		if strings.HasPrefix(line, "FAIL") {
+			return line
+		}
+	}
+
+	// no clear verdict — treat as fail
+	lastLine := ""
+	if len(lines) > 0 {
+		lastLine = lines[len(lines)-1]
+	}
+	return fmt.Sprintf("FAIL: verify_conv gave no verdict (last line: %s)", truncateStr(lastLine, 80))
 }
 
 func (pe *ProcEngine) isMilestone(cursor int) bool {
