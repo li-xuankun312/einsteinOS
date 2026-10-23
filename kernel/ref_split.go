@@ -293,13 +293,22 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 					maxSeen = curSize
 					staleCount = 0 // content grew — reset stale counter
 				} else {
-					// content didn't grow — probe before counting as stale
+					// content didn't grow — probe to check if remote is still running
 					if busy, probeErr := ProbeConvBusy(convID); probeErr == nil && busy {
 						log.Printf("ref_split: chunk %d/%d poll %d: %d bytes unchanged but remote still busy, waiting",
 							i+1, len(chunks), poll+1, curSize)
 						// don't increment staleCount
 					} else {
-						staleCount++
+						// remote idle + content stale → try ContinueConv to resume
+						// (probe no longer sends continue, so we do it properly here)
+						if staleCount == 0 && curSize > 500 {
+							log.Printf("ref_split: chunk %d/%d poll %d: remote idle, sending ContinueConv to resume",
+								i+1, len(chunks), poll+1)
+							ContinueConv(convID, "continue writing the remaining ## MODULE / ## FILE sections")
+							// don't count this as stale — give ContinueConv a chance
+						} else {
+							staleCount++
+						}
 					}
 				}
 

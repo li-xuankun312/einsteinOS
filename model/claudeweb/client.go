@@ -464,8 +464,15 @@ func (c *Client) ProbeConvBusy(convID string) (bool, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode == 200 {
-		// remote accepted the probe — it was idle, now it's continuing. That's fine.
-		log.Printf("claudeweb: probe %s → 200 (idle, accepted continue)", convID[:8])
+		// remote accepted the probe — it was idle. BUT the probe message ("continue")
+		// may go to a stale/reset context and generate garbage (e.g. metamaterials).
+		// immediately stop the response so it doesn't contaminate the conversation.
+		resp.Body.Close()
+		if stopErr := c.StopResponse(convID); stopErr != nil {
+			log.Printf("claudeweb: probe %s → 200 (idle), stop failed: %v", convID[:8], stopErr)
+		} else {
+			log.Printf("claudeweb: probe %s → 200 (idle, stopped)", convID[:8])
+		}
 		return false, nil
 	}
 

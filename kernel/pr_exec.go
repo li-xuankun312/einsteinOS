@@ -865,11 +865,19 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 					repo, i+1, len(units), attempt, err)
 				continue
 			}
-			if m := getMeta(child); m != nil && m.ConvID != "" {
-				RegisterConv(pid, m.ConvID, repo, fmt.Sprintf("dev_unit_%d", i+1), i+1)
-			}
 			Wait(child)
 			step.ChildPid = child
+
+			// register AFTER Wait — ConvID is set by model during Fork execution,
+			// but may not be available immediately after Fork returns.
+			if m := getMeta(child); m != nil && m.ConvID != "" {
+				RegisterConv(pid, m.ConvID, repo, fmt.Sprintf("dev_unit_%d", i+1), i+1)
+				log.Printf("dev_from_theorems: %s unit %d/%d registered conv %s",
+					repo, i+1, len(units), m.ConvID[:8])
+			} else {
+				log.Printf("dev_from_theorems: %s unit %d/%d WARNING: no ConvID after Wait",
+					repo, i+1, len(units))
+			}
 
 			lastStdout, lastStatus = dev_collect_child(child, repo)
 
@@ -1607,7 +1615,14 @@ func dev_collect_child(childPid int64, repo string) (string, map[string]string) 
 						log.Printf("dev_collect: %s poll %d: %d bytes unchanged but remote still busy, waiting",
 							repo, poll+1, curSize)
 					} else {
-						staleCount++
+						// remote idle + content stale → ContinueConv to resume
+						if staleCount == 0 && curSize > 500 {
+							log.Printf("dev_collect: %s poll %d: remote idle, sending ContinueConv to resume",
+								repo, poll+1)
+							ContinueConv(convID, "continue — finish compiling, testing, and push to the branch")
+						} else {
+							staleCount++
+						}
 					}
 				}
 				if curSize > 500 {
