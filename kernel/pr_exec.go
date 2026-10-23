@@ -510,27 +510,37 @@ func dev_plan(pid int64, repo string, theory string, branch string) []devUnit {
 		devRepoName = parts[len(parts)-1]
 	}
 
+	// build clone command with token so planner can optionally read theory
+	cloneCmd := ""
+	if len(devRepos) > 0 {
+		cloneCmd = fmt.Sprintf(
+			"TOKEN=$(cat /tmp/.gh_token 2>/dev/null)\n"+
+				"git clone https://${TOKEN}@github.com/%s.git /tmp/devrepo 2>/dev/null\n"+
+				"cd /tmp/devrepo && git checkout %s 2>/dev/null\n"+
+				"view .einsteinOS/theory.md  # full theory is here\n",
+			devRepos[0], branch)
+	}
+
 	plannerPrompt := fmt.Sprintf(
-		"[TASK] split %d modules into implementation units, max 10 modules per unit.\n\n"+
-			"[MODULES] (from theory — each ## MODULE section is one entry)\n%s\n"+
-			"[THEORY FILE]\n"+
-			"the full theory is at .einsteinOS/theory.md on branch %s of %s.\n"+
-			"  git clone <repo> && git checkout %s && view .einsteinOS/theory.md\n"+
-			"you can read it to understand module dependencies before splitting.\n"+
-			"you do NOT have to read it — the module list above may be enough.\n\n"+
+		"[TASK] group the %d modules below into implementation units.\n\n"+
+			"[IMPORTANT] the complete list of modules is below. this IS the input.\n"+
+			"you do NOT need to search for files, clone repos, or find anything.\n"+
+			"just read the list and group them.\n\n"+
+			"[MODULES] (%d entries — each is a ## MODULE section from the theory)\n%s\n"+
+			"[OPTIONAL] if you need to understand module dependencies to group better:\n%s\n"+
 			"[RULES]\n"+
 			"- group related modules together (same subsystem)\n"+
 			"- foundational modules first (types, config, utils), then core, then high-level\n"+
 			"- max 10 modules per unit\n"+
-			"- every module must appear in exactly one unit\n\n"+
+			"- every module from the list above must appear in exactly one unit\n\n"+
 			"[OUTPUT FORMAT]\n"+
 			"output ONLY lines like:\n"+
 			"unit: module_name_1, module_name_2, module_name_3\n"+
 			"unit: module_name_4, module_name_5\n"+
-			"use the exact module names from the list above. one line per unit. nothing else.\n",
+			"use the EXACT module names from the list above (copy-paste). one line per unit. nothing else.\n",
+		len(fileSections),
 		len(fileSections), moduleList.String(),
-		branch, devRepoName,
-		branch)
+		cloneCmd)
 
 	child, err := ForkWithRole(plannerPrompt, ".", "dev_planner")
 	if err != nil {
