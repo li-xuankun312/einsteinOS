@@ -75,6 +75,9 @@ type Model struct {
 	convID         string
 	lastSentPrompt string
 	toolLog        strings.Builder
+
+	// effort cooldown: track when each tier recovers
+	effortCooldown map[string]time.Time // effort → earliest retry time
 }
 
 func NewModel(client *Client, modelName string, effort string) *Model {
@@ -82,9 +85,10 @@ func NewModel(client *Client, modelName string, effort string) *Model {
 		effort = "medium"
 	}
 	return &Model{
-		client:    client,
-		modelName: modelName,
-		effort:    effort,
+		client:         client,
+		modelName:      modelName,
+		effort:         effort,
+		effortCooldown: make(map[string]time.Time),
 	}
 }
 
@@ -277,23 +281,58 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 		body, err := m.client.Completion(convID, webReq)
 		if err != nil {
 			if rle, ok := err.(*RateLimitError); ok {
-				if m.effort != "high" {
-					log.Printf("claudeweb: rate limit on effort=%s, escalating to high+thinking", m.effort)
-					m.mu.Lock()
-					m.effort = "high"
-					m.mu.Unlock()
-					webReq.Effort = "high"
-					webReq.ThinkingMode = "extended"
-					continue
-				}
+				// record cooldown for current effort tier
+				m.mu.Lock()
+				curEffort := m.effort
 				if rle.RetryAfter > 0 {
-					log.Printf("claudeweb: rate limit on effort=high, sleeping %v until quota resets", rle.RetryAfter)
-					sleepWithHeartbeat(rle.RetryAfter)
+					m.effortCooldown[curEffort] = time.Now().Add(rle.RetryAfter)
+				} else {
+					m.effortCooldown[curEffort] = time.Now().Add(3 * time.Minute)
+				}
+
+				// pick whichever tier recovers first
+				other := "high"
+				if curEffort == "high" {
+					other = "medium"
+				}
+				otherReady := m.effortCooldown[other] // zero if never limited
+				curReady := m.effortCooldown[curEffort]
+				now := time.Now()
+
+				if otherReady.Before(now) {
+					// other tier is available right now — switch to it
+					log.Printf("claudeweb: rate limit on effort=%s, switching to %s (available now)", curEffort, other)
+					m.effort = other
+					m.mu.Unlock()
+					webReq.Effort = other
+					if other == "high" {
+						webReq.ThinkingMode = "extended"
+					} else {
+						webReq.ThinkingMode = ""
+					}
+					continue
+				} else if otherReady.Before(curReady) {
+					// other tier recovers sooner — switch and wait for it
+					wait := time.Until(otherReady)
+					log.Printf("claudeweb: rate limit on effort=%s, switching to %s (ready in %v, vs %v)", curEffort, other, wait.Truncate(time.Second), time.Until(curReady).Truncate(time.Second))
+					m.effort = other
+					m.mu.Unlock()
+					webReq.Effort = other
+					if other == "high" {
+						webReq.ThinkingMode = "extended"
+					} else {
+						webReq.ThinkingMode = ""
+					}
+					sleepWithHeartbeat(wait)
+					continue
+				} else {
+					// current tier recovers sooner — wait for it
+					wait := time.Until(curReady)
+					log.Printf("claudeweb: rate limit on effort=%s, waiting %v", curEffort, wait.Truncate(time.Second))
+					m.mu.Unlock()
+					sleepWithHeartbeat(wait)
 					continue
 				}
-				log.Printf("claudeweb: rate limit on effort=high, waiting 3 minutes")
-				sleepWithHeartbeat(3 * time.Minute)
-				continue
 			}
 			doExit(exitError, fmt.Sprintf("[API Error] %v", err))
 			return
