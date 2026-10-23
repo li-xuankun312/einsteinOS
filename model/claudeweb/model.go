@@ -511,14 +511,14 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 
 				// tell the remote conversation to stop — don't let it continue
 				if st.convID != "" {
-					_ = client.StopResponse(st.convID)
+					_ = m.client.StopResponse(st.convID)
 				}
 
 				// exit the main conversation loop entirely
-				return fmt.Sprintf("[PR PIPELINE COMPLETE] %d steps ran. "+
-					"main conversation stopped to prevent uncontrolled writes.\n"+
-					"use engine_start to continue with next commit.",
-					len(stepResults)), ""
+				doExit(exitNormal, fmt.Sprintf("[PR PIPELINE COMPLETE] %d steps ran. "+
+					"main conversation stopped to prevent uncontrolled writes.",
+					len(stepResults)))
+				return
 			}
 		}
 
