@@ -510,12 +510,10 @@ func dev_plan(pid int64, repo string, theory string, branch string) []devUnit {
 		devRepoName = parts[len(parts)-1]
 	}
 
-	// build clone command with token so planner can optionally read theory
 	cloneCmd := ""
 	if len(devRepos) > 0 {
 		cloneCmd = fmt.Sprintf(
-			"TOKEN=$(cat /tmp/.gh_token 2>/dev/null)\n"+
-				"git clone https://${TOKEN}@github.com/%s.git /tmp/devrepo 2>/dev/null\n"+
+			"git clone https://github.com/%s.git /tmp/devrepo 2>/dev/null\n"+
 				"cd /tmp/devrepo && git checkout %s 2>/dev/null\n"+
 				"view .einsteinOS/theory.md  # full theory is here\n",
 			devRepos[0], branch)
