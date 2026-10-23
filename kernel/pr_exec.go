@@ -1470,12 +1470,11 @@ func dev_conv_summary(rawJSON []byte, convID string, unitNum int, status map[str
 			switch block.Type {
 			case "tool_use":
 				if block.Name == "create_file" {
-					// only log the path, NOT the file_text — code is on the branch
 					var inp struct {
 						Path string `json:"path"`
 					}
 					if json.Unmarshal(block.Input, &inp) == nil && inp.Path != "" {
-						out.WriteString(fmt.Sprintf("[create_file] %s\n", inp.Path))
+						out.WriteString(fmt.Sprintf("[create_file] %s\n", relPath(inp.Path)))
 					}
 				} else if block.Name == "str_replace" {
 					var inp struct {
@@ -1487,7 +1486,7 @@ func dev_conv_summary(rawJSON []byte, convID string, unitNum int, status map[str
 						if len(desc) > 80 {
 							desc = desc[:80] + "..."
 						}
-						out.WriteString(fmt.Sprintf("[str_replace] %s: %s\n", inp.Path, desc))
+						out.WriteString(fmt.Sprintf("[str_replace] %s: %s\n", relPath(inp.Path), desc))
 					}
 				} else if block.Name == "bash_tool" || block.Name == "bash" {
 					var inp struct {
@@ -1539,6 +1538,32 @@ func dev_conv_summary(rawJSON []byte, convID string, unitNum int, status map[str
 	}
 
 	return out.String()
+}
+
+// relPath strips absolute prefixes to get a repo-relative path.
+// /home/claude/baloon/include/core/x.hpp → include/core/x.hpp
+// /tmp/work/baloon/src/y.cpp → src/y.cpp
+// already relative → unchanged
+func relPath(p string) string {
+	if !strings.HasPrefix(p, "/") {
+		return p
+	}
+	// split on "/" and find the first segment that looks like a repo dir,
+	// then return everything after it.
+	// common patterns: /home/claude/<repo>/, /tmp/<repo>/, /mnt/.../<repo>/
+	parts := strings.Split(p, "/")
+	for i, seg := range parts {
+		// skip empty, home, claude, tmp, mnt, user-data, uploads, etc.
+		if seg == "" || seg == "home" || seg == "claude" || seg == "tmp" ||
+			seg == "mnt" || seg == "user-data" || seg == "uploads" || seg == "outputs" {
+			continue
+		}
+		// first non-system segment is likely the repo name — return rest
+		if i+1 < len(parts) {
+			return strings.Join(parts[i+1:], "/")
+		}
+	}
+	return p
 }
 
 func dev_push_fix(pid int64, owner, repo string, status map[string]string, attempt int) {
