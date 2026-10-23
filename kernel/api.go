@@ -80,13 +80,31 @@ var convExecFn func(prompt string) (string, string)
 // to determine child lifecycle (max rounds). follows d2aaf709 architecture.
 // Protected by forkConvMu. Keyed by goroutine — only one writer at a time
 // per convExecFn call since RunConversation is synchronous within the goroutine.
-var forkConvID string
+var forkConvID string               // legacy: used by non-pid-aware callers
+var forkConvIDs = map[int64]string{} // per-pid convID: race-free
 var forkRole string
 var forkConvMu sync.Mutex
+var lastForkedPid int64 // the most recently forked child pid
 
 func SetForkConvID(convID string) {
 	forkConvMu.Lock()
 	forkConvID = convID
+	forkConvMu.Unlock()
+}
+
+// GetLastForkedPid returns the pid of the most recently forked child.
+// Called by model layer so it can SetConvID on the right TaskMeta.
+func GetLastForkedPid() int64 {
+	forkConvMu.Lock()
+	defer forkConvMu.Unlock()
+	return lastForkedPid
+}
+
+// SetForkConvIDForPid sets the convID for a specific child pid.
+// Called by the model layer after creating the conversation.
+func SetForkConvIDForPid(pid int64, convID string) {
+	forkConvMu.Lock()
+	forkConvIDs[pid] = convID
 	forkConvMu.Unlock()
 }
 
@@ -178,14 +196,24 @@ func Fork(prompt string, pwd string) (int64, error) {
 	taskMeta[int64(pid)] = meta
 	metaMu.Unlock()
 
+	// track for model layer — GetLastForkedPid() returns this
+	forkConvMu.Lock()
+	lastForkedPid = int64(pid)
+	forkConvMu.Unlock()
+
 	if convExecFn != nil {
 		go func() {
 			stdout, stderr := convExecFn(prompt)
 
-			// Grab the convID that RunConversation set via SetForkConvID
+			// Grab the convID: per-pid map first (race-free), global fallback (legacy)
 			forkConvMu.Lock()
-			childConvID := forkConvID
-			forkConvID = "" // consume it
+			childConvID := forkConvIDs[int64(pid)]
+			if childConvID != "" {
+				delete(forkConvIDs, int64(pid))
+			} else {
+				childConvID = forkConvID
+				forkConvID = "" // consume global
+			}
 			forkConvMu.Unlock()
 
 			metaMu.Lock()

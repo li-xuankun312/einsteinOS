@@ -772,7 +772,12 @@ func (m *Model) RunConversation(prompt string) (string, string) {
 
 	parentPid := int64(kernel.SysGetpid())
 	kernel.TrackChildConv(parentPid, convID)
-	kernel.SetForkConvID(convID)
+	// set convID on the child's TaskMeta directly — race-free, no global
+	childPid := kernel.GetLastForkedPid()
+	if childPid > 0 {
+		kernel.SetConvID(childPid, convID)
+	}
+	kernel.SetForkConvID(convID) // legacy fallback
 
 	webReq.Prompt = fullPrompt
 

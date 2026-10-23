@@ -452,10 +452,14 @@ func theory_plan(parent_pid int64, owner, repo string, files []string) [][]strin
 			"[IMPORTANT] the file list below IS the complete input. just group them.\n\n"+
 			"[FILES by directory]\n%s\n"+
 			"[RULES]\n"+
-			"- max 12 files per chunk\n"+
+			"- each chunk will be analyzed by one conversation with ~50 tool calls budget\n"+
+			"- each file needs ~4 tool calls (read source + write theory + verify)\n"+
+			"- so each chunk should have roughly 8-12 files — enough to fill one session\n"+
+			"- don't split too fine: a chunk with 1-3 files wastes a conversation\n"+
+			"- don't lump too much: a chunk with 20+ files won't finish in one session\n"+
 			"- files in the same directory should stay together when possible\n"+
-			"- if a directory has >12 files, split it into multiple chunks\n"+
-			"- related directories (e.g. include/x/ and src/x/) can go together if ≤12 total\n\n"+
+			"- if a directory has many files, split it into multiple chunks\n"+
+			"- related directories (e.g. include/x/ and src/x/) can go together\n\n"+
 			"[OUTPUT FORMAT]\n"+
 			"output ONLY lines like:\n"+
 			"chunk: path/to/file1.hpp, path/to/file2.cpp, path/to/file3.cu\n"+

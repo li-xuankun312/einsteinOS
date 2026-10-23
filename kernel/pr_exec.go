@@ -524,7 +524,10 @@ func dev_plan(pid int64, repo string, theory string, branch string) []devUnit {
 			"[RULES]\n"+
 			"- group related modules together (same subsystem)\n"+
 			"- foundational modules first (types, config, utils), then core, then high-level\n"+
-			"- max 10 modules per unit\n"+
+			"- each unit should be a meaningful chunk of work for one developer session\n"+
+			"- don't split too fine: a unit with 1-2 modules is too small unless they're very large\n"+
+			"- don't lump too much: a unit with 15+ modules is too big for one session\n"+
+			"- sweet spot: 5-10 modules per unit for most cases\n"+
 			"- every module from the list above must appear in exactly one unit\n\n"+
 			"[OUTPUT FORMAT]\n"+
 			"output ONLY lines like:\n"+
