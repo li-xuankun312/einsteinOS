@@ -861,8 +861,10 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 			repo, i+1, len(units), p.Len(), len(unit.Files), unit.Files)
 
 		prompt := p.String()
+		var child int64
 		for attempt := 1; attempt <= 5; attempt++ {
-			child, err := Fork(prompt, ".")
+			var err error
+			child, err = Fork(prompt, ".")
 			if err != nil {
 				log.Printf("dev_from_theorems: %s unit %d/%d fork failed (attempt %d/5): %v",
 					repo, i+1, len(units), attempt, err)
