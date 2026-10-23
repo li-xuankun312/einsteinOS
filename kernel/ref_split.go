@@ -34,36 +34,12 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 		return ref_split_leaf(parent_pid, owner, repo, sha, files, task, depth)
 	}
 
-	// interleave files by directory so each chunk gets a mix
-	// (not all cuda in chunk1 and all cpp in chunk3).
-	// group by parent dir, then round-robin across chunks.
-	nChunks := (len(files) + SPLIT_CHUNK - 1) / SPLIT_CHUNK
-	chunks := make([][]string, nChunks)
+	// theory_planner decides how to group files — not static round-robin.
+	// planner sees file list with directories, groups related files,
+	// keeps each group ≤ 12 files so theory conv can finish within round limit.
+	chunks := theory_plan(parent_pid, owner, repo, files)
 
-	// group by directory
-	dirOrder := []string{}
-	dirFiles := map[string][]string{}
-	for _, f := range files {
-		d := f
-		if idx := strings.LastIndex(f, "/"); idx > 0 {
-			d = f[:idx]
-		}
-		if _, ok := dirFiles[d]; !ok {
-			dirOrder = append(dirOrder, d)
-		}
-		dirFiles[d] = append(dirFiles[d], f)
-	}
-
-	// round-robin: distribute each dir's files across chunks
-	ci := 0
-	for _, d := range dirOrder {
-		for _, f := range dirFiles[d] {
-			chunks[ci%nChunks] = append(chunks[ci%nChunks], f)
-			ci++
-		}
-	}
-
-	log.Printf("ref_split: %s/%s@%s depth=%d %d files -> %d chunks",
+	log.Printf("ref_split: %s/%s@%s depth=%d %d files -> %d chunks (planner)",
 		owner, repo, short_sha(sha), depth, len(files), len(chunks))
 
 	node := split_alloc(parent_pid, depth, owner, repo, sha, files)
@@ -439,6 +415,161 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 	log.Printf("ref_split: %s/%s@%s depth=%d merged %d children -> %d bytes",
 		owner, repo, short_sha(sha), depth, len(child_pids), len(merged))
 	return merged
+}
+
+// ---------------------------------------------------------------------------
+// theory_plan: fork a theory_planner conv to decide file grouping.
+// the planner sees the file list with directory structure and decides
+// which files go together. each group ≤ 12 files so theory conv can
+// finish (read source + write 3-layer theory + Axle verify) within budget.
+// ---------------------------------------------------------------------------
+
+func theory_plan(parent_pid int64, owner, repo string, files []string) [][]string {
+	// build file list grouped by directory for the planner
+	dirOrder := []string{}
+	dirFiles := map[string][]string{}
+	for _, f := range files {
+		d := f
+		if idx := strings.LastIndex(f, "/"); idx > 0 {
+			d = f[:idx]
+		}
+		if _, ok := dirFiles[d]; !ok {
+			dirOrder = append(dirOrder, d)
+		}
+		dirFiles[d] = append(dirFiles[d], f)
+	}
+
+	var fileList strings.Builder
+	for _, d := range dirOrder {
+		fileList.WriteString(fmt.Sprintf("[%s] (%d files)\n", d, len(dirFiles[d])))
+		for _, f := range dirFiles[d] {
+			fileList.WriteString(fmt.Sprintf("  %s\n", f))
+		}
+	}
+
+	prompt := fmt.Sprintf(
+		"[TASK] group %d source files into chunks for theory analysis.\n\n"+
+			"[IMPORTANT] the file list below IS the complete input. just group them.\n\n"+
+			"[FILES by directory]\n%s\n"+
+			"[RULES]\n"+
+			"- max 12 files per chunk\n"+
+			"- files in the same directory should stay together when possible\n"+
+			"- if a directory has >12 files, split it into multiple chunks\n"+
+			"- related directories (e.g. include/x/ and src/x/) can go together if ≤12 total\n\n"+
+			"[OUTPUT FORMAT]\n"+
+			"output ONLY lines like:\n"+
+			"chunk: path/to/file1.hpp, path/to/file2.cpp, path/to/file3.cu\n"+
+			"chunk: path/to/file4.hpp, path/to/file5.cpp\n"+
+			"use EXACT paths from the list. one line per chunk. nothing else.\n",
+		len(files), fileList.String())
+
+	child, err := ForkWithRole(prompt, ".", "theory_planner")
+	if err != nil {
+		log.Printf("theory_plan: %s/%s planner fork failed: %v, using static split", owner, repo, err)
+		return theory_static_split(files)
+	}
+	if m := getMeta(child); m != nil && m.ConvID != "" {
+		RegisterConv(parent_pid, m.ConvID, owner+"/"+repo, "theory_planner", 0)
+	}
+	Wait(child)
+	output := GetResult(child)
+	log.Printf("theory_plan: %s/%s planner returned %d bytes", owner, repo, len(output))
+
+	// parse "chunk: file1, file2, ..." lines
+	fileSet := make(map[string]bool, len(files))
+	for _, f := range files {
+		fileSet[f] = true
+	}
+
+	var chunks [][]string
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(strings.ToLower(line), "chunk:") {
+			continue
+		}
+		rest := strings.TrimSpace(line[6:])
+		if rest == "" {
+			continue
+		}
+		var chunk []string
+		for _, f := range strings.Split(rest, ",") {
+			f = strings.TrimSpace(f)
+			if f != "" && fileSet[f] {
+				chunk = append(chunk, f)
+				delete(fileSet, f)
+			}
+		}
+		if len(chunk) > 0 {
+			chunks = append(chunks, chunk)
+		}
+	}
+
+	// any unclaimed files — append to last chunk or make new one
+	if len(fileSet) > 0 {
+		var unclaimed []string
+		for f := range fileSet {
+			unclaimed = append(unclaimed, f)
+		}
+		if len(chunks) > 0 && len(chunks[len(chunks)-1])+len(unclaimed) <= 15 {
+			chunks[len(chunks)-1] = append(chunks[len(chunks)-1], unclaimed...)
+		} else {
+			// split unclaimed into groups of 12
+			for i := 0; i < len(unclaimed); i += 12 {
+				end := i + 12
+				if end > len(unclaimed) {
+					end = len(unclaimed)
+				}
+				chunks = append(chunks, unclaimed[i:end])
+			}
+		}
+		log.Printf("theory_plan: %d unclaimed files redistributed", len(unclaimed))
+	}
+
+	if len(chunks) == 0 {
+		log.Printf("theory_plan: planner output unparseable, using static split")
+		return theory_static_split(files)
+	}
+
+	log.Printf("theory_plan: %s/%s %d files → %d chunks", owner, repo, len(files), len(chunks))
+	for i, c := range chunks {
+		log.Printf("theory_plan:   chunk %d: %d files", i+1, len(c))
+	}
+	return chunks
+}
+
+// theory_static_split: fallback — group by directory, split large dirs at 12.
+func theory_static_split(files []string) [][]string {
+	dirOrder := []string{}
+	dirFiles := map[string][]string{}
+	for _, f := range files {
+		d := f
+		if idx := strings.LastIndex(f, "/"); idx > 0 {
+			d = f[:idx]
+		}
+		if _, ok := dirFiles[d]; !ok {
+			dirOrder = append(dirOrder, d)
+		}
+		dirFiles[d] = append(dirFiles[d], f)
+	}
+
+	var chunks [][]string
+	for _, d := range dirOrder {
+		fs := dirFiles[d]
+		for i := 0; i < len(fs); i += 12 {
+			end := i + 12
+			if end > len(fs) {
+				end = len(fs)
+			}
+			chunks = append(chunks, fs[i:end])
+		}
+	}
+
+	if len(chunks) == 0 {
+		chunks = [][]string{files}
+	}
+
+	log.Printf("theory_static_split: %d files → %d chunks", len(files), len(chunks))
+	return chunks
 }
 
 func ref_split_fork(parent_pid int64, owner, repo, sha string, files []string, task string, depth int, chunk_idx int, chunk_total int, allChunks [][]string, priorResults []string) int64 {
