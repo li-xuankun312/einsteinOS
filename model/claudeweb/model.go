@@ -499,25 +499,26 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 					stepResults = append(stepResults, stepResult)
 				}
 
-				var allResults strings.Builder
-				allResults.WriteString("[PR PIPELINE ROUND COMPLETE]\n\n")
-				allResults.WriteString(setupResult)
-				allResults.WriteString("\n\n")
+				// pipeline done — do NOT hand results back to the main conversation.
+				// the main conversation must not write code or push to repos.
+				// log the results and stop this conversation.
+				log.Printf("claudeweb: pr_pipeline complete, %d steps ran. stopping main conversation.",
+					len(stepResults))
 				for i, r := range stepResults {
-					allResults.WriteString(fmt.Sprintf("[STEP %d]\n%s\n\n", i+1, r))
+					log.Printf("claudeweb: step %d result: %s", i+1, truncate(r, 200))
 				}
-				allResults.WriteString("\n[LIVE CONVERSATIONS]\n")
-				allResults.WriteString(kernel.ConvRegistryStatus())
-				allResults.WriteString("\nthese conversations are still alive and can be resumed.\n")
-				allResults.WriteString("awaiting user feedback to start next round.\n")
+				log.Printf("claudeweb: conv_registry:\n%s", kernel.ConvRegistryStatus())
 
-				webReq.Prompt = fmt.Sprintf(
-					"[SYSTEM] after %d tool calls the PR pipeline ran automatically. "+
-						"results from %d child processes below. "+
-						"use these results to write code.\n\n%s",
-					st.totalTools, len(stepResults), truncate(allResults.String(), 12000))
-				webReq.CreateConversationParams = nil
-				continue
+				// tell the remote conversation to stop — don't let it continue
+				if st.convID != "" {
+					_ = client.StopResponse(st.convID)
+				}
+
+				// exit the main conversation loop entirely
+				return fmt.Sprintf("[PR PIPELINE COMPLETE] %d steps ran. "+
+					"main conversation stopped to prevent uncontrolled writes.\n"+
+					"use engine_start to continue with next commit.",
+					len(stepResults)), ""
 			}
 		}
 
