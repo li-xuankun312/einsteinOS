@@ -234,7 +234,7 @@ func (pe *ProcEngine) runCommit(cursor int) string {
 	if err != nil || cursor >= len(commits) {
 		return "failed: can't list commits"
 	}
-	sha := commits[cursor]
+	sha := commits[cursor].SHA
 
 	pe.mu.Lock()
 	prior := pe.PriorRun // nil on first attempt, set on retry
