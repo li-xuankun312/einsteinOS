@@ -369,6 +369,31 @@ func (c *Client) DownloadConversation(convID string) (string, error) {
 	return md.String(), nil
 }
 
+// DownloadConversationRaw returns the raw JSON body of a conversation.
+// same request as DownloadConversation but no parsing — caller handles it.
+func (c *Client) DownloadConversationRaw(convID string) ([]byte, error) {
+	url := fmt.Sprintf("%s/api/organizations/%s/chat_conversations/%s?tree=True&rendering_mode=messages&render_all_tools=true&consistency=strong",
+		c.baseURL, c.orgID, convID)
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Cookie", c.cookie)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("download-raw %s: status %d", convID[:8], resp.StatusCode)
+	}
+	return body, nil
+}
+
 // DownloadFile downloads a file from the remote sandbox (create_file outputs).
 // uses the wiggle/download-file endpoint. parameters only, no text content.
 func (c *Client) DownloadFile(convID, filePath string) ([]byte, error) {

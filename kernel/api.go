@@ -546,6 +546,22 @@ func DownloadConv(convID string) (string, error) {
 	return downloadConvFn(convID)
 }
 
+// DownloadConvRaw returns the raw JSON of a conversation (for custom parsing).
+// unlike DownloadConv which extracts text+tools into markdown, this returns
+// the full API response so callers can parse selectively.
+var downloadConvRawFn func(convID string) ([]byte, error)
+
+func SetDownloadConvRawFn(fn func(string) ([]byte, error)) {
+	downloadConvRawFn = fn
+}
+
+func DownloadConvRaw(convID string) ([]byte, error) {
+	if downloadConvRawFn == nil {
+		return nil, fmt.Errorf("no download-raw function set")
+	}
+	return downloadConvRawFn(convID)
+}
+
 var continueConvFn func(convID, prompt string) (string, string)
 
 func SetContinueConvFn(fn func(string, string) (string, string)) {

@@ -1,6 +1,7 @@
 package kernel
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -1354,37 +1355,33 @@ func dev_fix(pid int64, step *Step) (string, error) {
 
 // dev_push_fix: kernel classifies failure and pushes a STEP_DEV_FIX.
 // no text instructions — only structured args in Step fields.
-// dev_store_conv: download a unit's conversation and push it to the branch
-// at .einsteinOS/convs/dev_unit_N.md so subsequent units can read it.
+// dev_store_conv: download a unit's conversation, extract a SUMMARY, and
+// push it to .einsteinOS/convs/dev_unit_N.md on the branch.
 //
-// the child conv has view, grep, head, tail — it decides how much to read.
-// we do NOT inject the content into the prompt.
+// what we store (useful for next units):
+//   - assistant reasoning text (decisions, why they did X)
+//   - bash commands run (what they did)
+//   - compile/test output (key lines only, truncated)
+//
+// what we DON'T store (already on branch or too large):
+//   - create_file file_text (source code — it's in the git tree)
+//   - full shell output (only first/last lines of long output)
+//
+// the child has view, grep, head — it reads what it needs.
 func dev_store_conv(convID, repo, branch string, unitNum int, status map[string]string) {
-	content, err := DownloadConv(convID)
+	rawJSON, err := DownloadConvRaw(convID)
 	if err != nil {
 		log.Printf("dev_store_conv: %s unit %d download failed: %v", repo, unitNum, err)
 		return
 	}
-	if len(content) < 100 {
-		log.Printf("dev_store_conv: %s unit %d content too short (%d bytes), skipping", repo, unitNum, len(content))
+
+	summary := dev_conv_summary(rawJSON, convID, unitNum, status)
+	if len(summary) < 50 {
+		log.Printf("dev_store_conv: %s unit %d summary too short, skipping", repo, unitNum)
 		return
 	}
 
-	// build header with metadata
-	var header strings.Builder
-	header.WriteString(fmt.Sprintf("# dev_unit_%d — conv %s\n", unitNum, convID[:8]))
-	header.WriteString(fmt.Sprintf("# repo: %s  branch: %s\n", repo, branch))
-	if status != nil {
-		header.WriteString(fmt.Sprintf("# compile: %s  smoke: %s\n", status["compile"], status["smoke"]))
-		if files, ok := status["files_written"]; ok {
-			header.WriteString(fmt.Sprintf("# files: %s\n", files))
-		}
-	}
-	header.WriteString(fmt.Sprintf("# size: %d bytes\n\n", len(content)))
-
-	fullContent := header.String() + content
-
-	// write to temp file, then git add + commit + push
+	// write summary to branch
 	devRepos := GetDevRepos()
 	if len(devRepos) == 0 {
 		log.Printf("dev_store_conv: no dev repos registered, skipping")
@@ -1393,40 +1390,155 @@ func dev_store_conv(convID, repo, branch string, unitNum int, status map[string]
 	parts := strings.Split(devRepos[0], "/")
 	repoName := parts[len(parts)-1]
 	repoDir := fmt.Sprintf("/home/claude/%s", repoName)
-
 	filePath := fmt.Sprintf(".einsteinOS/convs/dev_unit_%d.md", unitNum)
 
-	// use ForkExec to run git operations on local machine
+	// write to temp file first to avoid heredoc escaping issues
+	tmpFile := fmt.Sprintf("/tmp/conv_unit_%d.md", unitNum)
+	if err := os.WriteFile(tmpFile, []byte(summary), 0644); err != nil {
+		log.Printf("dev_store_conv: %s unit %d write temp failed: %v", repo, unitNum, err)
+		return
+	}
+
 	script := fmt.Sprintf(`cd %s 2>/dev/null || exit 1
 git fetch origin 2>/dev/null
 git checkout %s 2>/dev/null || git checkout -b %s 2>/dev/null
 mkdir -p .einsteinOS/convs
-cat > %s << 'CONVEOF'
-%s
-CONVEOF
+cp %s %s
 git add %s
 git commit -m "conv: unit %d (%s)" --allow-empty 2>/dev/null
 TOKEN=$(cat /tmp/.gh_token 2>/dev/null)
 git push "https://${TOKEN}@github.com/%s.git" %s 2>/dev/null
-echo "stored %s (%d bytes)"`,
+echo "stored %s"`,
 		repoDir,
 		branch, branch,
-		filePath,
-		strings.ReplaceAll(fullContent, "'", "'\"'\"'"), // escape single quotes
+		tmpFile, filePath,
 		filePath,
 		unitNum, convID[:8],
 		devRepos[0], branch,
-		filePath, len(fullContent))
+		filePath)
 
-	child, err := ForkExec(script, repoDir)
-	if err != nil {
-		log.Printf("dev_store_conv: %s unit %d ForkExec failed: %v", repo, unitNum, err)
+	child, forkErr := ForkExec(script, repoDir)
+	if forkErr != nil {
+		log.Printf("dev_store_conv: %s unit %d ForkExec failed: %v", repo, unitNum, forkErr)
 		return
 	}
 	Wait(child)
 	result := GetResult(child)
-	log.Printf("dev_store_conv: %s unit %d stored (%d bytes): %s",
-		repo, unitNum, len(fullContent), strings.TrimSpace(result))
+	log.Printf("dev_store_conv: %s unit %d stored (%d bytes summary from %d bytes raw): %s",
+		repo, unitNum, len(summary), len(rawJSON), strings.TrimSpace(result))
+}
+
+// dev_conv_summary: parse raw conversation JSON and extract a compact summary.
+// keeps: assistant text, bash commands, compile/test results (truncated).
+// drops: create_file file_text, large tool_result output.
+func dev_conv_summary(rawJSON []byte, convID string, unitNum int, status map[string]string) string {
+	var conv struct {
+		ChatMessages []struct {
+			Sender  string            `json:"sender"`
+			Content []json.RawMessage `json:"content"`
+		} `json:"chat_messages"`
+	}
+	if err := json.Unmarshal(rawJSON, &conv); err != nil {
+		return fmt.Sprintf("# unit %d — parse error\n", unitNum)
+	}
+
+	var out strings.Builder
+
+	// header
+	out.WriteString(fmt.Sprintf("# dev_unit_%d — conv %s\n", unitNum, convID[:8]))
+	if status != nil {
+		out.WriteString(fmt.Sprintf("# compile: %s  smoke: %s\n", status["compile"], status["smoke"]))
+		if files, ok := status["files_written"]; ok {
+			out.WriteString(fmt.Sprintf("# files_written: %s\n", files))
+		}
+	}
+	out.WriteString("\n")
+
+	for _, msg := range conv.ChatMessages {
+		for _, raw := range msg.Content {
+			var block struct {
+				Type    string          `json:"type"`
+				Text    string          `json:"text"`
+				Name    string          `json:"name"`
+				Input   json.RawMessage `json:"input"`
+				Content json.RawMessage `json:"content"`
+			}
+			if json.Unmarshal(raw, &block) != nil {
+				continue
+			}
+
+			switch block.Type {
+			case "tool_use":
+				if block.Name == "create_file" {
+					// only log the path, NOT the file_text — code is on the branch
+					var inp struct {
+						Path string `json:"path"`
+					}
+					if json.Unmarshal(block.Input, &inp) == nil && inp.Path != "" {
+						out.WriteString(fmt.Sprintf("[create_file] %s\n", inp.Path))
+					}
+				} else if block.Name == "str_replace" {
+					var inp struct {
+						Path   string `json:"path"`
+						OldStr string `json:"old_str"`
+					}
+					if json.Unmarshal(block.Input, &inp) == nil {
+						desc := inp.OldStr
+						if len(desc) > 80 {
+							desc = desc[:80] + "..."
+						}
+						out.WriteString(fmt.Sprintf("[str_replace] %s: %s\n", inp.Path, desc))
+					}
+				} else if block.Name == "bash_tool" || block.Name == "bash" {
+					var inp struct {
+						Command string `json:"command"`
+					}
+					if json.Unmarshal(block.Input, &inp) == nil && inp.Command != "" {
+						cmd := inp.Command
+						if len(cmd) > 200 {
+							cmd = cmd[:200] + "..."
+						}
+						out.WriteString(fmt.Sprintf("$ %s\n", cmd))
+					}
+				}
+
+			case "tool_result":
+				// keep only first+last few lines of output
+				var content string
+				if json.Unmarshal(block.Content, &content) != nil {
+					var parts []struct {
+						Type string `json:"type"`
+						Text string `json:"text"`
+					}
+					if json.Unmarshal(block.Content, &parts) == nil {
+						for _, p := range parts {
+							if p.Type == "text" {
+								content += p.Text
+							}
+						}
+					}
+				}
+				if len(content) > 0 {
+					lines := strings.Split(content, "\n")
+					if len(lines) <= 10 {
+						out.WriteString(content)
+						out.WriteString("\n")
+					} else {
+						// first 5 + last 5
+						for _, l := range lines[:5] {
+							out.WriteString(l + "\n")
+						}
+						out.WriteString(fmt.Sprintf("... (%d lines omitted)\n", len(lines)-10))
+						for _, l := range lines[len(lines)-5:] {
+							out.WriteString(l + "\n")
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return out.String()
 }
 
 func dev_push_fix(pid int64, owner, repo string, status map[string]string, attempt int) {
