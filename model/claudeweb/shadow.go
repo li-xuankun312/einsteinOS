@@ -98,6 +98,13 @@ func (s *ShadowExecutor) Execute(toolName string, inputJSON string) string {
 		return ""
 	}
 
+	// don't shadow-exec ssh commands — they hang waiting for fingerprint confirmation.
+	// git push is already handled by the sandbox; local machine doesn't need to push again.
+	if strings.Contains(command, "ssh -T ") || strings.Contains(command, "ssh git@") {
+		log.Printf("[shadow] skip ssh (hangs on fingerprint)")
+		return ""
+	}
+
 	pid, err := kernel.ForkExec(command, s.WorkDir)
 	if err != nil {
 		return fmt.Sprintf("[pid -1] fork: %v", err)
