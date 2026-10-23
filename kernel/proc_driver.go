@@ -33,7 +33,8 @@ type proc_tool_input struct {
 
 func (d *ProcDriver) Match(name string) bool {
 	n := strings.ToLower(name)
-	return n == "proc_start" || n == "proc_status" || n == "proc_stop" || n == "proc_tick"
+	return n == "proc_start" || n == "proc_status" || n == "proc_stop" || n == "proc_tick" ||
+		n == "engine_start" || n == "engine_status" || n == "engine_stop"
 }
 
 func (d *ProcDriver) Execute(name string, inputJSON string, workDir string) string {
@@ -51,6 +52,12 @@ func (d *ProcDriver) Execute(name string, inputJSON string, workDir string) stri
 		return procDriverStop(input.Pid)
 	case "proc_tick":
 		return procDriverTick(input.Pid)
+	case "engine_start":
+		return engineDriverStart(input)
+	case "engine_status":
+		return EngineStatus()
+	case "engine_stop":
+		return EngineStop()
 	}
 	return "unknown proc tool"
 }
@@ -180,6 +187,26 @@ func procDriverTick(pid int64) string {
 	result := ps.ForceTick()
 	return fmt.Sprintf("tick %d: phase=%s action=%q spawned=%v elapsed=%v",
 		result.Tick, result.Phase, result.Action, result.Spawned, result.Elapsed)
+}
+
+// ---------------------------------------------------------------------------
+// engine_start: launch the autonomous puppet loop
+// ---------------------------------------------------------------------------
+
+func engineDriverStart(input proc_tool_input) string {
+	task := input.Task
+	if task == "" {
+		return "engine_start: need task"
+	}
+
+	cfg := DefaultProcConfig()
+	if input.Interval > 0 {
+		cfg.TickInterval = time.Duration(input.Interval * float64(time.Minute))
+	}
+
+	pe := EngineStart(task, cfg)
+
+	return fmt.Sprintf("engine started: ref discovery in progress\n%s", pe.Ps())
 }
 
 // ---------------------------------------------------------------------------
