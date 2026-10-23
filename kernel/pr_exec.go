@@ -504,11 +504,6 @@ func dev_plan(pid int64, repo string, theory string, branch string) []devUnit {
 	}
 
 	devRepos := GetDevRepos()
-	devRepoName := ""
-	if len(devRepos) > 0 {
-		parts := strings.Split(devRepos[0], "/")
-		devRepoName = parts[len(parts)-1]
-	}
 
 	cloneCmd := ""
 	if len(devRepos) > 0 {
