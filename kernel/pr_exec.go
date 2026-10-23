@@ -803,13 +803,11 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 		// WHY a prior unit made a decision, it can DownloadConv(convID).
 		// this keeps the prompt small: ~200 bytes per prior unit, not ~200KB.
 		if i > 0 {
-			p.WriteString(fmt.Sprintf("[PRIOR UNITS 1..%d — code on branch %s]\n", i, branch))
+			p.WriteString(fmt.Sprintf("[PRIOR UNITS 1..%d — code + work logs on branch %s]\n", i, branch))
 			for j := 0; j < i; j++ {
 				rec := FindConv(repo, fmt.Sprintf("dev_unit_%d", j+1), j+1)
-				convAddr := "unknown"
-				convStatus := "unknown"
+				convStatus := "done"
 				if rec != nil {
-					convAddr = rec.ConvID[:8]
 					convStatus = rec.Status
 				}
 				fileList := ""
@@ -819,10 +817,14 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 						fileList = fileList[:120] + "..."
 					}
 				}
-				p.WriteString(fmt.Sprintf("  unit %d: conv=%s status=%s files=[%s]\n",
-					j+1, convAddr, convStatus, fileList))
+				p.WriteString(fmt.Sprintf("  unit %d: status=%s files=[%s]\n",
+					j+1, convStatus, fileList))
+				p.WriteString(fmt.Sprintf("    work log: .einsteinOS/convs/dev_unit_%d.md\n", j+1))
 			}
-			p.WriteString("all code is on the branch. git checkout and READ it.\n")
+			p.WriteString("\nall code is on the branch. git checkout and READ the source files.\n")
+			p.WriteString("work logs in .einsteinOS/convs/ contain each unit's full process:\n")
+			p.WriteString("  tool calls, compile output, decisions. use view/grep to read selectively.\n")
+			p.WriteString("  do NOT cat the whole file — use view with line ranges or grep for specifics.\n")
 			p.WriteString("do NOT rewrite prior code unless your theory REQUIRES it.\n\n")
 		}
 
@@ -955,6 +957,11 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 
 		log.Printf("dev_from_theorems: %s unit %d/%d pass, branch %s updated",
 			repo, i+1, len(units), branch)
+
+		// store conv content to branch so next units can read it via view/grep
+		if m := getMeta(child); m != nil && m.ConvID != "" {
+			dev_store_conv(m.ConvID, repo, branch, i+1, lastStatus)
+		}
 	}
 
 	// all units passed → push vllm benchmark
@@ -1347,6 +1354,81 @@ func dev_fix(pid int64, step *Step) (string, error) {
 
 // dev_push_fix: kernel classifies failure and pushes a STEP_DEV_FIX.
 // no text instructions — only structured args in Step fields.
+// dev_store_conv: download a unit's conversation and push it to the branch
+// at .einsteinOS/convs/dev_unit_N.md so subsequent units can read it.
+//
+// the child conv has view, grep, head, tail — it decides how much to read.
+// we do NOT inject the content into the prompt.
+func dev_store_conv(convID, repo, branch string, unitNum int, status map[string]string) {
+	content, err := DownloadConv(convID)
+	if err != nil {
+		log.Printf("dev_store_conv: %s unit %d download failed: %v", repo, unitNum, err)
+		return
+	}
+	if len(content) < 100 {
+		log.Printf("dev_store_conv: %s unit %d content too short (%d bytes), skipping", repo, unitNum, len(content))
+		return
+	}
+
+	// build header with metadata
+	var header strings.Builder
+	header.WriteString(fmt.Sprintf("# dev_unit_%d — conv %s\n", unitNum, convID[:8]))
+	header.WriteString(fmt.Sprintf("# repo: %s  branch: %s\n", repo, branch))
+	if status != nil {
+		header.WriteString(fmt.Sprintf("# compile: %s  smoke: %s\n", status["compile"], status["smoke"]))
+		if files, ok := status["files_written"]; ok {
+			header.WriteString(fmt.Sprintf("# files: %s\n", files))
+		}
+	}
+	header.WriteString(fmt.Sprintf("# size: %d bytes\n\n", len(content)))
+
+	fullContent := header.String() + content
+
+	// write to temp file, then git add + commit + push
+	devRepos := GetDevRepos()
+	if len(devRepos) == 0 {
+		log.Printf("dev_store_conv: no dev repos registered, skipping")
+		return
+	}
+	parts := strings.Split(devRepos[0], "/")
+	repoName := parts[len(parts)-1]
+	repoDir := fmt.Sprintf("/home/claude/%s", repoName)
+
+	filePath := fmt.Sprintf(".einsteinOS/convs/dev_unit_%d.md", unitNum)
+
+	// use ForkExec to run git operations on local machine
+	script := fmt.Sprintf(`cd %s 2>/dev/null || exit 1
+git fetch origin 2>/dev/null
+git checkout %s 2>/dev/null || git checkout -b %s 2>/dev/null
+mkdir -p .einsteinOS/convs
+cat > %s << 'CONVEOF'
+%s
+CONVEOF
+git add %s
+git commit -m "conv: unit %d (%s)" --allow-empty 2>/dev/null
+TOKEN=$(cat /tmp/.gh_token 2>/dev/null)
+git push "https://${TOKEN}@github.com/%s.git" %s 2>/dev/null
+echo "stored %s (%d bytes)"`,
+		repoDir,
+		branch, branch,
+		filePath,
+		strings.ReplaceAll(fullContent, "'", "'\"'\"'"), // escape single quotes
+		filePath,
+		unitNum, convID[:8],
+		devRepos[0], branch,
+		filePath, len(fullContent))
+
+	child, err := ForkExec(script, repoDir)
+	if err != nil {
+		log.Printf("dev_store_conv: %s unit %d ForkExec failed: %v", repo, unitNum, err)
+		return
+	}
+	Wait(child)
+	result := GetResult(child)
+	log.Printf("dev_store_conv: %s unit %d stored (%d bytes): %s",
+		repo, unitNum, len(fullContent), strings.TrimSpace(result))
+}
+
 func dev_push_fix(pid int64, owner, repo string, status map[string]string, attempt int) {
 	if attempt > 3 {
 		log.Printf("dev_push_fix: %s/%s max fix attempts reached, re-queuing dev_from_theorems for fresh plan",
