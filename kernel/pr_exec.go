@@ -563,11 +563,52 @@ func dev_plan(pid int64, repo string, theory string, branch string) []devUnit {
 	return units
 }
 
-// dev_parse_plan: parse "unit: file1, file2, ..." lines from planner output
+// dev_parse_plan: parse "unit: file1, file2, ..." lines from planner output.
+//
+// the planner sees module names like "expert_cache (expert routing weight cache)"
+// but may output just "expert_cache" in its unit lines. we need fuzzy matching:
+//   1. exact match on sectionMap key
+//   2. prefix match: planner output is a prefix of the section key
+//   3. normalized match: strip parenthetical, lowercase, compare
 func dev_parse_plan(output string, sections []devFileSection) []devUnit {
+	// build exact map and prefix index
 	sectionMap := make(map[string]*devFileSection)
 	for i := range sections {
 		sectionMap[sections[i].path] = &sections[i]
+	}
+
+	// dev_match_section: find the section that best matches a planner name.
+	// returns the section and its map key, or nil if no match.
+	matchSection := func(name string) (*devFileSection, string) {
+		// 1. exact match
+		if sec, ok := sectionMap[name]; ok {
+			return sec, name
+		}
+		// 2. prefix match: "expert_cache" matches "expert_cache (expert routing...)"
+		for key, sec := range sectionMap {
+			if strings.HasPrefix(key, name+" ") || strings.HasPrefix(key, name+"(") {
+				return sec, key
+			}
+		}
+		// 3. normalized: strip parens from both, lowercase compare
+		normName := strings.ToLower(strings.TrimSpace(name))
+		for key, sec := range sectionMap {
+			normKey := key
+			if parenIdx := strings.Index(normKey, "("); parenIdx > 0 {
+				normKey = strings.TrimSpace(normKey[:parenIdx])
+			}
+			normKey = strings.ToLower(normKey)
+			if normKey == normName {
+				return sec, key
+			}
+		}
+		// 4. substring: planner name appears anywhere in section key
+		for key, sec := range sectionMap {
+			if strings.Contains(strings.ToLower(key), normName) {
+				return sec, key
+			}
+		}
+		return nil, ""
 	}
 
 	var units []devUnit
@@ -583,16 +624,18 @@ func dev_parse_plan(output string, sections []devFileSection) []devUnit {
 
 		var files []string
 		var theoryBuf strings.Builder
+		matched := 0
 		for _, f := range strings.Split(rest, ",") {
 			f = strings.TrimSpace(f)
 			if f == "" {
 				continue
 			}
 			files = append(files, f)
-			if sec, ok := sectionMap[f]; ok {
+			if sec, key := matchSection(f); sec != nil {
 				theoryBuf.WriteString(sec.content)
 				theoryBuf.WriteString("\n\n")
-				delete(sectionMap, f) // claimed
+				delete(sectionMap, key) // claimed
+				matched++
 			}
 		}
 		if len(files) > 0 {
@@ -600,29 +643,41 @@ func dev_parse_plan(output string, sections []devFileSection) []devUnit {
 				Files:  files,
 				Theory: strings.TrimSpace(theoryBuf.String()),
 			})
+			if matched < len(files) {
+				log.Printf("dev_parse_plan: unit has %d files but only %d matched theory sections",
+					len(files), matched)
+			}
 		}
 	}
 
-	// any unclaimed sections? append to last unit or make a new one
+	// any unclaimed sections? distribute into chunks, not one giant unit
 	if len(sectionMap) > 0 && len(units) > 0 {
-		var extra []string
-		var extraTheory strings.Builder
+		var unclaimed []*devFileSection
 		for _, sec := range sectionMap {
-			extra = append(extra, sec.path)
-			extraTheory.WriteString(sec.content)
-			extraTheory.WriteString("\n\n")
+			unclaimed = append(unclaimed, sec)
 		}
-		last := &units[len(units)-1]
-		if len(last.Files)+len(extra) <= 15 {
-			last.Files = append(last.Files, extra...)
-			last.Theory += "\n\n" + extraTheory.String()
-		} else {
+		log.Printf("dev_plan: %d unclaimed modules after matching", len(unclaimed))
+
+		// split unclaimed into groups of 8, each becomes its own unit
+		for start := 0; start < len(unclaimed); start += 8 {
+			end := start + 8
+			if end > len(unclaimed) {
+				end = len(unclaimed)
+			}
+			var files []string
+			var theory strings.Builder
+			for _, sec := range unclaimed[start:end] {
+				files = append(files, sec.path)
+				theory.WriteString(sec.content)
+				theory.WriteString("\n\n")
+			}
 			units = append(units, devUnit{
-				Files:  extra,
-				Theory: strings.TrimSpace(extraTheory.String()),
+				Files:  files,
+				Theory: strings.TrimSpace(theory.String()),
 			})
 		}
-		log.Printf("dev_plan: %d unclaimed files added", len(extra))
+		log.Printf("dev_plan: %d unclaimed modules → %d extra units",
+			len(unclaimed), (len(unclaimed)+7)/8)
 	}
 
 	return units
@@ -903,6 +958,15 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 		p.WriteString("         view .einsteinOS/theory.md <start> <end>  — read a section\n")
 		p.WriteString("you decide what to read and how much.\n\n")
 
+		// --- strict scope: execute only, no self-judging ---
+		p.WriteString("[YOUR ROLE]\n")
+		p.WriteString("you are an EXECUTOR — write code, compile, push. that's it.\n")
+		p.WriteString("a separate REVIEW conversation will judge your work after you finish.\n")
+		p.WriteString("do NOT decide whether your work is 'good enough' — just do your best.\n")
+		p.WriteString("do NOT fork new conversations or delegate to sub-tasks.\n")
+		p.WriteString("do NOT spend tools exploring beyond what YOUR modules need.\n")
+		p.WriteString("if you can't finish a module, write what you can and note it in your output.\n\n")
+
 		if i > 0 {
 			p.WriteString(fmt.Sprintf("[EXISTING CODE]\n"+
 				"branch %s has code from units 1..%d.\n"+
@@ -986,20 +1050,13 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 		PRFeedbackAdd(pid, fmt.Sprintf("- dev[%s] unit %d/%d: compile=%s smoke=%s",
 			repo, i+1, len(units), lastStatus["compile"], lastStatus["smoke"]))
 
-		// unit success: compile status starts with "pass" (may have description suffix
-		// like "pass (CPU tests + headers); pending (GPU)"). smoke may be empty if
-		// no GPU available — treat empty smoke as acceptable when compile passes.
-		compile := lastStatus["compile"]
-		compilePassed := strings.HasPrefix(compile, "pass")
-		smokeOK := lastStatus["smoke"] == "" || strings.HasPrefix(lastStatus["smoke"], "pass")
-
 		// interrupted (SSE broke before compile finished): compile is "pending",
 		// empty, or "no_response". this is NOT a failure — the child was cut off.
-		// push a fresh DEV_FROM_THEOREMS to retry, don't count as fix attempt.
-		interrupted := compile == "pending" || compile == "" || compile == "no_response"
+		devCompile := lastStatus["compile"]
+		interrupted := devCompile == "pending" || devCompile == "" || devCompile == "no_response"
 		if interrupted {
 			log.Printf("dev_from_theorems: %s unit %d/%d interrupted (compile=%q), re-queuing dev_from_theorems",
-				repo, i+1, len(units), compile)
+				repo, i+1, len(units), devCompile)
 			pr_push_step(pid, &Step{
 				Kind:  STEP_DEV_FROM_THEOREMS,
 				Owner: step.Owner,
@@ -1008,30 +1065,44 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 			return lastStdout, nil
 		}
 
-		if !compilePassed || !smokeOK {
-			log.Printf("dev_from_theorems: %s unit %d/%d failed (compile=%q smoke=%q), pushing fix",
-				repo, i+1, len(units), compile, lastStatus["smoke"])
+		// store conv content to branch BEFORE review — review_conv reads it
+		if m := getMeta(child); m != nil && m.ConvID != "" {
+			dev_store_conv(m.ConvID, repo, branch, i+1, lastStatus)
+		}
+
+		// --- REVIEW CONV: separate decision from execution ---
+		// dev_unit wrote code and stopped. now fork a review_conv that:
+		//   - reads the branch code + .einsteinOS/convs/dev_unit_N.md
+		//   - checks compile status from dev_collect
+		//   - compares against the theory spec on the branch
+		//   - outputs PASS, FAIL: reason
+		// review_conv does NOT write code. it only judges.
+		reviewVerdict := dev_review_unit(pid, repo, branch, i+1, len(units), unit, lastStatus)
+		log.Printf("dev_from_theorems: %s unit %d/%d review → %s",
+			repo, i+1, len(units), reviewVerdict)
+
+		if strings.HasPrefix(reviewVerdict, "PASS") {
+			log.Printf("dev_from_theorems: %s unit %d/%d pass (review confirmed), branch %s updated",
+				repo, i+1, len(units), branch)
+		} else {
+			// FAIL — push fix, then re-queue remaining units
+			log.Printf("dev_from_theorems: %s unit %d/%d review FAIL: %s, pushing fix",
+				repo, i+1, len(units), reviewVerdict)
+			if lastStatus == nil {
+				lastStatus = map[string]string{}
+			}
+			lastStatus["review"] = reviewVerdict
 			dev_push_fix(pid, step.Owner, step.Repo, lastStatus, i+1)
-			// always re-queue dev_from_theorems after fix so remaining units run.
-			// the pipeline must NOT end with unfinished units.
 			pr_push_step(pid, &Step{
 				Kind:  STEP_DEV_FROM_THEOREMS,
 				Owner: step.Owner,
 				Repo:  step.Repo,
 			})
 			if i+1 < len(units) {
-				log.Printf("dev_from_theorems: %s %d units remaining, re-queued dev_from_theorems after fix",
+				log.Printf("dev_from_theorems: %s %d units remaining, re-queued after fix",
 					repo, len(units)-i-1)
 			}
 			return lastStdout, nil
-		}
-
-		log.Printf("dev_from_theorems: %s unit %d/%d pass, branch %s updated",
-			repo, i+1, len(units), branch)
-
-		// store conv content to branch so next units can read it via view/grep
-		if m := getMeta(child); m != nil && m.ConvID != "" {
-			dev_store_conv(m.ConvID, repo, branch, i+1, lastStatus)
 		}
 	}
 
@@ -1438,6 +1509,129 @@ func dev_fix(pid int64, step *Step) (string, error) {
 //   - full shell output (only first/last lines of long output)
 //
 // the child has view, grep, head — it reads what it needs.
+// ---------------------------------------------------------------------------
+// dev_review_unit: fork a review_conv to judge whether a dev unit's output
+// satisfies the theory spec. the review_conv:
+//   - reads branch code + .einsteinOS/convs/dev_unit_N.md (work log)
+//   - reads theory from .einsteinOS/theory.md (grep for the unit's modules)
+//   - checks compile status from the dev_collect results
+//   - outputs PASS or FAIL: <reason>
+//
+// the review_conv does NOT write code, fix bugs, or modify anything.
+// this separates the decision (is this unit done?) from execution (writing code).
+// dev_unit convs tend to self-assess optimistically ("compile=pass" even when
+// not all modules are implemented). the review_conv catches that.
+// ---------------------------------------------------------------------------
+func dev_review_unit(pid int64, repo, branch string, unitNum, totalUnits int, unit devUnit, status map[string]string) string {
+	devRepos := GetDevRepos()
+	if len(devRepos) == 0 {
+		// no dev repo — can't review, trust the compile status
+		if strings.HasPrefix(status["compile"], "pass") {
+			return "PASS (no dev repo to review)"
+		}
+		return "FAIL: compile=" + status["compile"]
+	}
+
+	// fast path: if dev_collect already says compile failed, skip review conv
+	if status["compile"] == "fail" || status["compile"] == "error" {
+		return "FAIL: compile=" + status["compile"] + " " + status["compile_error"]
+	}
+
+	parts := strings.Split(devRepos[0], "/")
+	repoName := parts[len(parts)-1]
+
+	var prompt strings.Builder
+	prompt.WriteString(fmt.Sprintf("[TASK] review whether dev unit %d/%d is complete and correct.\n\n", unitNum, totalUnits))
+	prompt.WriteString("[YOU ARE A REVIEWER — NOT A DEVELOPER]\n")
+	prompt.WriteString("- do NOT write code, fix bugs, or modify any files\n")
+	prompt.WriteString("- do NOT clone repositories other than the dev repo\n")
+	prompt.WriteString("- ONLY read, check, and judge\n\n")
+
+	prompt.WriteString(fmt.Sprintf("[BRANCH] %s\n", branch))
+	prompt.WriteString(fmt.Sprintf("[DEV REPO] %s → /home/claude/%s/\n\n", devRepos[0], repoName))
+
+	prompt.WriteString(fmt.Sprintf("[UNIT %d MODULES]\n%s\n\n", unitNum, strings.Join(unit.Files, ", ")))
+
+	prompt.WriteString(fmt.Sprintf("[DEV UNIT STATUS from kernel]\n"))
+	for k, v := range status {
+		prompt.WriteString(fmt.Sprintf("  %s = %s\n", k, v))
+	}
+	prompt.WriteString("\n")
+
+	prompt.WriteString("[WHAT TO CHECK]\n")
+	prompt.WriteString("1. git clone the dev repo, checkout the branch\n")
+	prompt.WriteString("2. ls .einsteinOS/convs/ — find dev_unit_" + fmt.Sprintf("%d", unitNum) + ".md\n")
+	prompt.WriteString("3. grep -n 'compile=' .einsteinOS/convs/dev_unit_" + fmt.Sprintf("%d", unitNum) + ".md\n")
+	prompt.WriteString("4. check: does source code exist for EACH module listed above?\n")
+	prompt.WriteString("   grep for the module names in the source files.\n")
+	prompt.WriteString("   a module with no corresponding source file = incomplete.\n")
+	prompt.WriteString("5. check: does the code actually compile? run make or the project's build command.\n")
+	prompt.WriteString("6. compare code structure against theory:\n")
+	prompt.WriteString("   grep -n 'MODULE:' .einsteinOS/theory.md — find sections for THIS unit's modules\n")
+	prompt.WriteString("   read the LAYER 1a spec — does the code match the math?\n\n")
+
+	prompt.WriteString("[OUTPUT FORMAT]\n")
+	prompt.WriteString("your LAST line must be exactly one of:\n")
+	prompt.WriteString("  PASS\n")
+	prompt.WriteString("  FAIL: <one line reason>\n")
+	prompt.WriteString("nothing else on that line. you may write analysis above it.\n")
+
+	log.Printf("dev_review_unit: %s unit %d/%d forking review_conv (%d bytes prompt)",
+		repo, unitNum, totalUnits, prompt.Len())
+
+	child, err := ForkWithRole(prompt.String(), ".", "review_conv")
+	if err != nil {
+		log.Printf("dev_review_unit: %s unit %d fork failed: %v, using compile status",
+			repo, unitNum, err)
+		if strings.HasPrefix(status["compile"], "pass") {
+			return "PASS (review fork failed, using compile status)"
+		}
+		return "FAIL: review fork failed, compile=" + status["compile"]
+	}
+	if m := getMeta(child); m != nil && m.ConvID != "" {
+		RegisterConv(pid, m.ConvID, repo, fmt.Sprintf("review_unit_%d", unitNum), unitNum)
+	}
+	Wait(child)
+
+	result := GetResult(child)
+	log.Printf("dev_review_unit: %s unit %d review_conv returned %d bytes", repo, unitNum, len(result))
+
+	// parse the last lines for PASS or FAIL
+	lines := strings.Split(strings.TrimSpace(result), "\n")
+	for i := len(lines) - 1; i >= 0 && i >= len(lines)-5; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "PASS" {
+			return "PASS"
+		}
+		if strings.HasPrefix(line, "FAIL:") || strings.HasPrefix(line, "FAIL ") {
+			return line
+		}
+	}
+
+	// no clear verdict — check if we can download a longer response
+	if m := getMeta(child); m != nil && m.ConvID != "" {
+		downloaded, err := DownloadConv(m.ConvID)
+		if err == nil && len(downloaded) > len(result) {
+			dLines := strings.Split(strings.TrimSpace(downloaded), "\n")
+			for i := len(dLines) - 1; i >= 0 && i >= len(dLines)-5; i-- {
+				line := strings.TrimSpace(dLines[i])
+				if line == "PASS" {
+					return "PASS"
+				}
+				if strings.HasPrefix(line, "FAIL:") || strings.HasPrefix(line, "FAIL ") {
+					return line
+				}
+			}
+		}
+	}
+
+	// still no verdict — fall back to compile status
+	if strings.HasPrefix(status["compile"], "pass") {
+		return "PASS (review gave no verdict, compile=pass)"
+	}
+	return "FAIL: review gave no verdict, compile=" + status["compile"]
+}
+
 func dev_store_conv(convID, repo, branch string, unitNum int, status map[string]string) {
 	rawJSON, err := DownloadConvRaw(convID)
 	if err != nil {
