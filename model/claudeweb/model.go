@@ -230,17 +230,19 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 	isChild := len(opts) > 0 && opts[0]
 	st := &loopState{convID: convID, isChild: isChild}
 
-	// d2aaf709: role determines lifecycle. consume the role set by ForkWithRole.
+	// d2aaf709 → termination conditions: role determines lifecycle via
+	// composable TerminationCondition, not hardcoded round counts.
 	childRole := kernel.ConsumeForkRole()
-	roleMaxRounds := maxRounds
-	switch childRole {
-	case "hw_probe", "ref_discover":
-		roleMaxRounds = 2 // probe and report, don't explore
-	case "dir_survey", "file_survey":
-		roleMaxRounds = 1 // classify and return, single round
+	termCond := kernel.ConsumeTermination()
+	if termCond == nil && childRole != "" {
+		// fallback: role-based default if no explicit condition was set
+		termCond = kernel.TerminationForRole(childRole)
 	}
-	if childRole != "" {
-		log.Printf("claudeweb: child role=%s maxRounds=%d", childRole, roleMaxRounds)
+	roleMaxRounds := maxRounds // still used as absolute ceiling
+	if termCond != nil {
+		log.Printf("claudeweb: child role=%s termination=%s", childRole, termCond.String())
+	} else if childRole != "" {
+		log.Printf("claudeweb: child role=%s (no termination condition, maxRounds=%d)", childRole, roleMaxRounds)
 	}
 
 	// save the original user prompt BEFORE webReq.Prompt gets mutated by
@@ -588,6 +590,47 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 			}
 		}
 
+		// feed tool events into signal collector + check termination
+		for _, tb := range collectedTools {
+			kernel.ObserveToolCall(tb.name, tb.inputJSON.String(), "", st.rounds)
+		}
+		if termCond != nil {
+			event := kernel.ToolEvent{
+				Round:    st.rounds,
+				HasTools: len(collectedTools) > 0,
+			}
+			// check each tool individually for pattern matches
+			for _, tb := range collectedTools {
+				event.ToolName = tb.name
+				event.InputRaw = tb.inputJSON.String()
+				// find the matching tool result output
+				for _, tr := range toolResults {
+					if tr.ToolUseID == tb.id {
+						event.Output = tr.Content
+						break
+					}
+				}
+				if sig := termCond.Check(event); sig != nil {
+					log.Printf("claudeweb: termination fired: %s (round=%d)", sig.Reason, st.rounds)
+					kernel.StoreSignal(kernel.GetLastForkedPid(), sig)
+					doExit(exitNormal, fmt.Sprintf("[terminated: %s]", sig.Reason))
+					return
+				}
+			}
+			// also check round-based / time-based conditions with a no-tool event
+			if len(collectedTools) == 0 {
+				event.ToolName = ""
+				event.InputRaw = ""
+				event.Output = ""
+				if sig := termCond.Check(event); sig != nil {
+					log.Printf("claudeweb: termination fired (text round): %s", sig.Reason)
+					kernel.StoreSignal(kernel.GetLastForkedPid(), sig)
+					doExit(exitNormal, fmt.Sprintf("[terminated: %s]", sig.Reason))
+					return
+				}
+			}
+		}
+
 		log.Printf("claudeweb: stop_reason=%q tools=%d text=%d", stopReason, len(collectedTools), textBuf.Len())
 		kernel.TouchByConv(convID)
 
@@ -645,7 +688,11 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 		}
 	}
 
-	doExit(exitRounds, fmt.Sprintf("[exceeded %d rounds]", roleMaxRounds))
+	if termCond != nil {
+		doExit(exitRounds, fmt.Sprintf("[exceeded %d rounds, termination=%s never fired]", roleMaxRounds, termCond.String()))
+	} else {
+		doExit(exitRounds, fmt.Sprintf("[exceeded %d rounds]", roleMaxRounds))
+	}
 }
 
 func (m *Model) extractPrompt(req *model.LLMRequest) string {

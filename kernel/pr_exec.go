@@ -993,10 +993,20 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 			repo, i+1, len(units), p.Len(), len(unit.Files), unit.Files)
 
 		prompt := p.String()
+		// termination: git push OR compile success → stop, don't blindly continue 20 rounds
+		devTermination := OrConditions(
+			&BashExitZero{Pattern: "git push"},
+			AndConditions(
+				&CompileResult{BuildCmd: "make"},
+				&ConsecutiveTextRounds{Threshold: 2},
+			),
+			&MaxRounds{Limit: 20},
+			&Timeout{Duration: 20 * time.Minute},
+		)
 		var child int64
 		for attempt := 1; attempt <= 5; attempt++ {
 			var err error
-			child, err = Fork(prompt, ".")
+			child, err = ForkWithTermination(prompt, ".", fmt.Sprintf("dev_unit_%d", i+1), devTermination)
 			if err != nil {
 				log.Printf("dev_from_theorems: %s unit %d/%d fork failed (attempt %d/5): %v",
 					repo, i+1, len(units), attempt, err)
@@ -1579,11 +1589,20 @@ func dev_review_unit(pid int64, repo, branch string, unitNum, totalUnits int, un
 	log.Printf("dev_review_unit: %s unit %d/%d forking review_conv (%d bytes prompt)",
 		repo, unitNum, totalUnits, prompt.Len())
 
-	child, err := ForkWithRole(prompt.String(), ".", "review_conv")
+	// reviewer termination: stop when it runs a compile check, or after
+	// 2 consecutive text-only rounds (done reading, writing verdict), or max 10
+	reviewTerm := OrConditions(
+		&CompileResult{BuildCmd: "make"},
+		&CompileResult{BuildCmd: "go build"},
+		&ConsecutiveTextRounds{Threshold: 2},
+		&MaxRounds{Limit: 10},
+		&Timeout{Duration: 10 * time.Minute},
+	)
+	child, err := ForkWithTermination(prompt.String(), ".", "review_conv", reviewTerm)
 	if err != nil {
 		log.Printf("dev_review_unit: %s unit %d fork failed: %v, using compile status",
 			repo, unitNum, err)
-		if strings.HasPrefix(status["compile"], "pass") {
+		if status["compile"] == "pass" {
 			return "PASS (review fork failed, using compile status)"
 		}
 		return "FAIL: review fork failed, compile=" + status["compile"]
@@ -1596,7 +1615,31 @@ func dev_review_unit(pid int64, repo, branch string, unitNum, totalUnits int, un
 	result := GetResult(child)
 	log.Printf("dev_review_unit: %s unit %d review_conv returned %d bytes", repo, unitNum, len(result))
 
-	// parse the last lines for PASS or FAIL
+	// PRIMARY: check if the reviewer ran a compile command — tool signal is the verdict
+	reviewCollector := GetCollector(child)
+	if reviewCollector != nil {
+		compilePassed, compileFound := reviewCollector.CompileStatus()
+		if compileFound {
+			if compilePassed {
+				log.Printf("dev_review_unit: %s unit %d PASS (reviewer's compile succeeded)", repo, unitNum)
+				return "PASS"
+			}
+			log.Printf("dev_review_unit: %s unit %d FAIL (reviewer's compile failed)", repo, unitNum)
+			return "FAIL: reviewer compile failed: " + truncForSignal(reviewCollector.LastCompileOutput(), 200)
+		}
+	}
+
+	// check termination signal — may contain structured data
+	if sig := GetSignal(child); sig != nil && sig.Data != nil {
+		if sig.Data["compile"] == "pass" {
+			return "PASS"
+		}
+		if sig.Data["compile"] == "fail" {
+			return "FAIL: " + sig.Data["output"]
+		}
+	}
+
+	// FALLBACK: scan text for PASS/FAIL (backward compat during migration)
 	lines := strings.Split(strings.TrimSpace(result), "\n")
 	for i := len(lines) - 1; i >= 0 && i >= len(lines)-5; i-- {
 		line := strings.TrimSpace(lines[i])
@@ -1608,25 +1651,8 @@ func dev_review_unit(pid int64, repo, branch string, unitNum, totalUnits int, un
 		}
 	}
 
-	// no clear verdict — check if we can download a longer response
-	if m := getMeta(child); m != nil && m.ConvID != "" {
-		downloaded, err := DownloadConv(m.ConvID)
-		if err == nil && len(downloaded) > len(result) {
-			dLines := strings.Split(strings.TrimSpace(downloaded), "\n")
-			for i := len(dLines) - 1; i >= 0 && i >= len(dLines)-5; i-- {
-				line := strings.TrimSpace(dLines[i])
-				if line == "PASS" {
-					return "PASS"
-				}
-				if strings.HasPrefix(line, "FAIL:") || strings.HasPrefix(line, "FAIL ") {
-					return line
-				}
-			}
-		}
-	}
-
-	// still no verdict — fall back to compile status
-	if strings.HasPrefix(status["compile"], "pass") {
+	// no verdict from any source — fall back to parent's compile status
+	if status["compile"] == "pass" {
 		return "PASS (review gave no verdict, compile=pass)"
 	}
 	return "FAIL: review gave no verdict, compile=" + status["compile"]
@@ -2004,10 +2030,21 @@ func dev_fix_attempt(step *Step) int {
 func dev_collect_child(childPid int64, repo string) (string, map[string]string) {
 	stdout := GetResult(childPid)
 
-	// try text-based status first (cheapest)
+	// PRIMARY: extract status from tool signal collector (structured, no text parsing)
+	toolStatus := CollectChild(childPid)
+	if toolStatus != nil && toolStatus["compile"] != "" {
+		log.Printf("dev_collect: %s status from tool signals: compile=%s files=%s",
+			repo, toolStatus["compile"], toolStatus["files_written"])
+		if files := dev_child_files(childPid); len(files) > 0 {
+			toolStatus["files_written"] = strings.Join(files, ",")
+		}
+		return stdout, toolStatus
+	}
+
+	// FALLBACK: text-based status (for backward compat during migration)
 	status := parse_last_status(stdout)
 	if status != nil {
-		log.Printf("dev_collect: %s status from text: compile=%s", repo, status["compile"])
+		log.Printf("dev_collect: %s status from text (fallback): compile=%s", repo, status["compile"])
 		// also record files from shadow DB
 		if files := dev_child_files(childPid); len(files) > 0 {
 			status["files_written"] = strings.Join(files, ",")

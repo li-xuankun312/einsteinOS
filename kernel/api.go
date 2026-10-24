@@ -131,8 +131,9 @@ func GetConvExec() func(string) (string, string) {
 }
 
 // ForkWithRole creates a child conversation with a registered role.
-// the role controls the child's lifecycle (max rounds, writeback behavior).
-// this follows d2aaf709: conversations are indexed resources with identity.
+// the role controls the child's lifecycle via TerminationCondition (not hardcoded rounds).
+// also attaches a ToolSignalCollector so the kernel can extract structured
+// results from tool calls instead of parsing text.
 func ForkWithRole(prompt string, pwd string, role string) (int64, error) {
 	SetForkRole(role)
 	pid, err := Fork(prompt, pwd)
@@ -145,6 +146,40 @@ func ForkWithRole(prompt string, pwd string, role string) (int64, error) {
 		m.Role = role
 	}
 	metaMu.Unlock()
+
+	// attach termination condition based on role
+	cond := TerminationForRole(role)
+	SetTermination(pid, cond)
+	log.Printf("fork_role: pid=%d role=%s termination=%s", pid, role, cond.String())
+
+	// attach tool signal collector
+	collector := NewToolSignalCollector()
+	SetCollector(pid, collector)
+
+	return pid, err
+}
+
+// ForkWithTermination creates a child with a custom termination condition.
+// Use when the caller needs finer control than role-based defaults.
+func ForkWithTermination(prompt string, pwd string, role string, cond TerminationCondition) (int64, error) {
+	SetForkRole(role)
+	pid, err := Fork(prompt, pwd)
+	if err != nil {
+		SetForkRole("")
+		return 0, err
+	}
+	metaMu.Lock()
+	if m, ok := taskMeta[pid]; ok {
+		m.Role = role
+	}
+	metaMu.Unlock()
+
+	SetTermination(pid, cond)
+	log.Printf("fork_term: pid=%d role=%s termination=%s", pid, role, cond.String())
+
+	collector := NewToolSignalCollector()
+	SetCollector(pid, collector)
+
 	return pid, err
 }
 
