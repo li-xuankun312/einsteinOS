@@ -1,0 +1,32 @@
+{
+  "unit": 7,
+  "convID": "74a8092d",
+  "status": "compile=pending (interrupted, NOT failed)",
+
+  "timeline": [
+    {"phase": "read_theory", "lines": "1-860", "observation": "theory 占了对话的 60%。4 个文件的 theory，包含 35+ 个 LAYER 1/2 section。子对话读了很长时间。"},
+    {"phase": "read_existing_code", "lines": "1305-1330", "observation": "子对话读了 branch 上所有已有代码：graph.hpp, qsa.hpp, gdn.hpp, shared_expert.cpp 等。理解了命名约定。"},
+    {"phase": "create_files", "lines": "1319-1357", "observation": "创建了 8 个文件（4 headers + 4 impls）+ test + Makefile 更新。用 include/strata/ 路径。"},
+    {"phase": "compile_attempt", "lines": "1337", "observation": "sandbox 没有 corex clang → Error 127。子对话知道 local machine 有，但没法验证。"},
+    {"phase": "output", "lines": "1373-1380", "observation": "输出 compile=pending, smoke=pending。这是正确的自我评估 — 它知道自己没编译成功。"},
+    {"phase": "SSE_break", "observation": "SSE 断了，kernel 收到 315 bytes。probe 救回来但 compile=pending 被当 fail。"},
+    {"phase": "continue_confusion", "lines": "1283-1300", "observation": "【严重】probe 发了 continue → 远程接受了 → 但远程 context 已经丢失！它说 'I don't have context from earlier' 然后开始聊 metamaterials（另一个项目）。这说明 continue 到了错误的对话，或者远程 context 被重置了。"}
+  ],
+
+  "findings": {
+    "F1_unit7_work_quality": "实际上 unit 7 做了大量正确的工作：读了 theory，读了已有代码，创建了 8 个文件 + test + Makefile。它没通过编译不是因为代码写错了，而是 sandbox 没有 corex clang。如果 local machine 能编译，这个 unit 可能直接 pass。",
+    
+    "F2_continue_goes_wrong": "probe 发的 continue 被远程接受后，远程对话回复的是 'I don't have context' 然后开始聊 metamaterials。这说明：(1) continue 可能是新 session，远程没有之前的 context，或 (2) 这个 convID 被另一个用户的对话复用了。probe → 200 只能说明 container 空闲了，但 continue 的内容回到了错误的上下文。",
+    
+    "F3_strata_paths_everywhere": "所有文件都在 include/strata/ 和 src/strata/ 下。theory 用的 ## FILE: 路径，子对话照搬了。这是下次跑新 theory (## MODULE:) 才能解决的。",
+    
+    "F4_prior_units_conv_unknown": "PRIOR UNITS 列表里全是 conv=unknown status=unknown。conv 地址传递在 FindConv 失败了 — 可能是 RegisterConv 的 role 格式不匹配。planner 知道 unit 列表但 FindConv 没找到 conv record。"
+  },
+
+  "action_items": [
+    "A1: compile=pending 处理已修复（c6b9f559），会 retry 不是 fix",
+    "A2: F2 的 continue confusion 需要调查 — probe 的 continue 是否在正确的 conversation context 里",
+    "A3: F4 的 conv=unknown 说明 FindConv(repo, 'dev_unit_N', N) 没找到对应记录，可能是 RegisterConv 时 role 格式不同",
+    "A4: strata 路径问题等下次 ## MODULE theory 解决"
+  ]
+}
