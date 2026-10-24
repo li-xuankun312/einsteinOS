@@ -280,7 +280,7 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 						if staleCount == 0 && curSize > 500 {
 							log.Printf("ref_split: chunk %d/%d poll %d: remote idle, sending ContinueConv to resume",
 								i+1, len(chunks), poll+1)
-							ContinueConv(convID, "continue writing the remaining ## MODULE / ## FILE sections")
+							ContinueConv(convID, "you were interrupted. continue writing ## MODULE sections for YOUR assigned files only. do NOT write theory for files outside your assignment.")
 							// don't count this as stale — give ContinueConv a chance
 						} else {
 							staleCount++
@@ -582,10 +582,13 @@ func ref_split_fork(parent_pid int64, owner, repo, sha string, files []string, t
 	var src strings.Builder
 	src.WriteString(fmt.Sprintf("[TASK] %s\n\n", task))
 	src.WriteString(fmt.Sprintf("[REFERENCE] %s/%s commit %s\n", owner, repo, short_sha(sha)))
-	src.WriteString(fmt.Sprintf("[CHUNK %d/%d] %d files (depth %d)\n", chunk_idx+1, chunk_total, len(files), depth))
-	src.WriteString("produce LAYER 1/2 ONLY for YOUR files below.\n\n")
+	src.WriteString(fmt.Sprintf("[YOUR ASSIGNMENT] %d files (depth %d)\n", len(files), depth))
+	src.WriteString("produce LAYER 1/2 ONLY for YOUR files listed below. nothing else.\n")
+	src.WriteString("other files in this repo are handled by OTHER conversations — not your concern.\n")
+	src.WriteString("do NOT explore the repo to find more files to theorize. YOUR scope is FIXED.\n\n")
 
-	// prior chunks: give child the conversation links to download
+	// prior chunks: give child conv addresses for context, but do NOT
+	// reveal how many chunks exist or what files other chunks cover.
 	if len(priorResults) > 0 {
 		hasPrior := false
 		for j := range priorResults {
@@ -595,14 +598,14 @@ func ref_split_fork(parent_pid int64, owner, repo, sha string, files []string, t
 				continue
 			}
 			if !hasPrior {
-				src.WriteString("[PRIOR CHUNKS — already completed by sibling conversations]\n")
+				src.WriteString("[PRIOR WORK — other conversations already produced theory for other files]\n")
 				hasPrior = true
 			}
-			src.WriteString(fmt.Sprintf("  chunk %d/%d: conv=%s (%d bytes output)\n",
-				j+1, chunk_total, rec.ConvID, len(priorResults[j])))
+			src.WriteString(fmt.Sprintf("  conv=%s (%d bytes)\n",
+				rec.ConvID, len(priorResults[j])))
 		}
 		if hasPrior {
-			src.WriteString("download their artifacts if you need context. produce theory for YOUR files only.\n\n")
+			src.WriteString("you may download these for context if needed. produce theory for YOUR files only.\n\n")
 		}
 	}
 
@@ -636,14 +639,15 @@ func ref_split_fork(parent_pid int64, owner, repo, sha string, files []string, t
 		"- do NOT write .cu, .cpp, .py, or any implementation code\n" +
 		"- do NOT create build scripts, Makefiles, or test files\n" +
 		"- do NOT push to any git repository\n" +
-		"- ONLY output: ## FILE headers + LAYER 1a (LaTeX) + LAYER 1b (Lean 4) + LAYER 2 (form template)\n" +
-		"- write theory as TEXT in your response, or use create_file for .md files only\n\n" +
+		"- ONLY output: ## MODULE headers + LAYER 1a (LaTeX) + LAYER 1b (Lean 4) + LAYER 2 (form template)\n" +
+		"- write theory as TEXT in your response, or use create_file for .md files only\n" +
+		"- STOP when you have covered every file in YOUR assignment. do NOT look for more files.\n\n" +
 		"you may use git to read other files for CONTEXT (understanding types, interfaces, dependencies).\n" +
 		"the bare repo is at " + dir + " — use `git --git-dir=" + dir + " show " + short_sha(sha) + ":<path>`.\n" +
-		"but produce LAYER 1/2 ONLY for YOUR files listed above. other chunks handle the rest.\n" +
+		"but produce LAYER 1/2 ONLY for YOUR assigned files. when those are done, you are done.\n" +
 		"if any single file is too large to fully analyze, " +
 		"list its functions and produce both layers for the most important ones.\n\n" +
-		"[SOURCE CODE for your chunk — read these, then write THEORY (not code) for them]\n\n" +
+		"[SOURCE CODE — your complete assignment. write THEORY for these files, then stop]\n\n" +
 		src_text
 
 	pid, err := Fork(prompt, ".")
