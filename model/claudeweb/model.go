@@ -813,6 +813,17 @@ func (m *Model) ContinueConversation(existingConvID, prompt string) (string, str
 
 	kernel.SetForkConvID(existingConvID)
 
+	// look up this process's termination condition from the process table.
+	// the condition was stored at fork time (ForkWithRole / ForkWithTermination).
+	// set it as pending so completionLoop's ConsumeTermination() picks it up —
+	// same mechanism as fork, process table is the source of truth.
+	if cond := kernel.GetTerminationByConvID(existingConvID); cond != nil {
+		cond.Reset() // reset state (round counters etc.) for the new continuation
+		kernel.SetPendingTermination(cond)
+		log.Printf("claudeweb: continue %s using termination from process table: %s",
+			existingConvID[:8], cond.String())
+	}
+
 	m.toolLog.Reset()
 	var result strings.Builder
 	ctx := context.Background()

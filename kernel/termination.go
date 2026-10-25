@@ -290,6 +290,38 @@ func ConsumeTermination() TerminationCondition {
 	return cond
 }
 
+// --- per-pid termination storage ---
+// Stored at fork time by ForkWithTermination / ForkWithRole.
+// Any code that knows the pid (or convID → pid) can retrieve the condition.
+// Used by ContinueConversation to apply the same termination as the original fork.
+
+var (
+	pidTerminations   = map[int64]TerminationCondition{}
+	pidTerminationsMu sync.Mutex
+)
+
+func StorePidTermination(pid int64, cond TerminationCondition) {
+	pidTerminationsMu.Lock()
+	pidTerminations[pid] = cond
+	pidTerminationsMu.Unlock()
+}
+
+func GetPidTermination(pid int64) TerminationCondition {
+	pidTerminationsMu.Lock()
+	defer pidTerminationsMu.Unlock()
+	return pidTerminations[pid]
+}
+
+// GetTerminationByConvID looks up the termination condition for a convID
+// by scanning the process table for the matching pid.
+func GetTerminationByConvID(convID string) TerminationCondition {
+	pid := FindPidByConvID(convID)
+	if pid <= 0 {
+		return nil
+	}
+	return GetPidTermination(pid)
+}
+
 // --- per-pid signal storage (written after child exits, read by parent) ---
 
 var (

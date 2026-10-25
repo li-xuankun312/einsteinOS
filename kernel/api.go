@@ -158,6 +158,9 @@ func ForkWithRole(prompt string, pwd string, role string) (int64, error) {
 	collector := NewToolSignalCollector()
 	SetCollector(pid, collector)
 
+	// store termination per-pid so ContinueConv can look it up by convID
+	StorePidTermination(pid, cond)
+
 	return pid, err
 }
 
@@ -184,6 +187,9 @@ func ForkWithTermination(prompt string, pwd string, role string, cond Terminatio
 	// attach tool signal collector for this child
 	collector := NewToolSignalCollector()
 	SetCollector(pid, collector)
+
+	// store termination per-pid so ContinueConv can look it up by convID
+	StorePidTermination(pid, cond)
 
 	return pid, err
 }
@@ -567,6 +573,19 @@ func TaskCtx(t *TaskStruct) context.Context {
 func SetConvID(pid int64, convID string) {
 	m := getMeta(pid)
 	m.ConvID = convID
+}
+
+// FindPidByConvID scans the process table for a matching convID.
+// Returns the pid, or 0 if not found.
+func FindPidByConvID(convID string) int64 {
+	metaMu.Lock()
+	defer metaMu.Unlock()
+	for pid, m := range taskMeta {
+		if m != nil && m.ConvID == convID {
+			return pid
+		}
+	}
+	return 0
 }
 
 func TouchByConv(convID string) {
