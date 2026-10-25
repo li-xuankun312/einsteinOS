@@ -521,8 +521,6 @@ func (ps *ProcState) runNextStep(snap tickState) (string, []string) {
 		ps.Phase = PHASE_WAIT
 	case STEP_DEV_FROM_THEOREMS:
 		ps.Phase = PHASE_DEV_START
-	case STEP_VLLM_UP, STEP_VLLM_BENCH:
-		ps.Phase = PHASE_MILESTONE_BENCH
 	case STEP_OPEN_PR:
 		ps.Phase = PHASE_DEV_DONE
 	default:
@@ -579,16 +577,6 @@ func (ps *ProcState) postStep(step *Step, result string, err error, spawned *[]s
 		} else {
 			log.Printf("proc: %s cursor=%d dev failed: %v", repo, rp.Cursor, err)
 		}
-
-	case STEP_VLLM_BENCH:
-		// parse benchmark result
-		bm := parseBenchmarkResult(result)
-		bm.Repo = repo
-		bm.CursorAt = rp.Cursor
-		bm.RecordedAt = time.Now()
-		ps.Benchmarks = append(ps.Benchmarks, bm)
-		log.Printf("proc: %s benchmark tok/s=%.1f p99=%.1fms",
-			repo, bm.TokPerSec, bm.LatencyP99ms)
 
 	case STEP_OPEN_PR:
 		// record PR in queue
@@ -657,28 +645,7 @@ func (ps *ProcState) maybeAdvanceCursor(lastStep *Step, action *string, spawned 
 	})
 	*spawned = append(*spawned, fmt.Sprintf("ref_bind(%s,%d)", name, cursor))
 
-	// milestone benchmark: push at module boundaries
-	if ps.isMilestone(cursor, total) {
-		PRPushStep(ps.Pid, &Step{
-			Kind:    STEP_VLLM_UP,
-			Owner:   owner,
-			Repo:    name,
-			Command: ps.gpuList(),
-		})
-		PRPushStep(ps.Pid, &Step{
-			Kind:  STEP_VLLM_BENCH,
-			Owner: owner,
-			Repo:  name,
-		})
-		*spawned = append(*spawned, "vllm_bench")
-
-		ps.mu.Lock()
-		ps.Status = PROC_FINISHING
-		ps.Phase = PHASE_MILESTONE_BENCH
-		ps.mu.Unlock()
-	}
-
-	// also push OPEN_PR for the just-completed round
+	// push OPEN_PR for the just-completed round
 	PRPushStep(ps.Pid, &Step{
 		Kind:    STEP_OPEN_PR,
 		Owner:   owner,

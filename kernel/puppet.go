@@ -471,37 +471,13 @@ echo "MERGE_OK"`,
 }
 
 // ---------------------------------------------------------------------------
-// runBenchmark — run vllm benchmark on the current branch
+// runBenchmark — removed. benchmarking is the main conversation's job.
+// the main conv runs on the real machine with shadow+writeback and will
+// build, deploy, and benchmark itself after the pipeline completes.
 // ---------------------------------------------------------------------------
 
 func (pe *ProcEngine) runBenchmark(pid int64, branch string) float64 {
-	// push benchmark steps
-	PRPushStep(pid, &Step{
-		Kind:    STEP_VLLM_UP,
-		Owner:   pe.RefOwner,
-		Repo:    pe.RefName,
-		Command: pe.gpuList(),
-	})
-	PRPushStep(pid, &Step{
-		Kind:  STEP_VLLM_BENCH,
-		Owner: pe.RefOwner,
-		Repo:  pe.RefName,
-	})
-
-	// run them
-	for i := 0; i < 5; i++ {
-		result := PRDriverStep(pid)
-		if result == "" || strings.Contains(result, "no more steps") {
-			break
-		}
-	}
-
-	// parse result
-	pr := GetPR(pid)
-	if pr != nil && pr.BenchResult != "" {
-		bm := parseBenchmarkResult(pr.BenchResult)
-		return bm.TokPerSec
-	}
+	log.Printf("proc_engine: benchmark skipped — main conv handles deployment on real hardware")
 	return 0
 }
 
