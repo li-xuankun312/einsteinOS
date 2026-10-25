@@ -232,8 +232,11 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 
 	// d2aaf709 → termination conditions: role determines lifecycle via
 	// composable TerminationCondition, not hardcoded round counts.
+	// Both role and termination are consumed from pending slots set by
+	// parent before Fork — atomic, no pid race.
 	childRole := kernel.ConsumeForkRole()
 	termCond := kernel.ConsumeTermination()
+	childCollector := kernel.ConsumePendingCollector()
 	if termCond == nil && childRole != "" {
 		// fallback: role-based default if no explicit condition was set
 		termCond = kernel.TerminationForRole(childRole)
@@ -591,19 +594,26 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 		}
 
 		// feed tool events into signal collector + check termination
+		// first pass: observe all tools with their results (for collector)
 		for _, tb := range collectedTools {
-			kernel.ObserveToolCall(tb.name, tb.inputJSON.String(), "", st.rounds)
+			toolOutput := ""
+			for _, tr := range toolResults {
+				if tr.ToolUseID == tb.id {
+					toolOutput = tr.Content
+					break
+				}
+			}
+			kernel.ObserveToolCall(childCollector, tb.name, tb.inputJSON.String(), toolOutput, st.rounds)
 		}
+		// second pass: check termination conditions
 		if termCond != nil {
 			event := kernel.ToolEvent{
 				Round:    st.rounds,
 				HasTools: len(collectedTools) > 0,
 			}
-			// check each tool individually for pattern matches
 			for _, tb := range collectedTools {
 				event.ToolName = tb.name
 				event.InputRaw = tb.inputJSON.String()
-				// find the matching tool result output
 				for _, tr := range toolResults {
 					if tr.ToolUseID == tb.id {
 						event.Output = tr.Content
@@ -617,7 +627,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 					return
 				}
 			}
-			// also check round-based / time-based conditions with a no-tool event
+			// check round-based / time-based conditions on text-only rounds
 			if len(collectedTools) == 0 {
 				event.ToolName = ""
 				event.InputRaw = ""

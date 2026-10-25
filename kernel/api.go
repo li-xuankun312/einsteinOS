@@ -135,10 +135,15 @@ func GetConvExec() func(string) (string, string) {
 // also attaches a ToolSignalCollector so the kernel can extract structured
 // results from tool calls instead of parsing text.
 func ForkWithRole(prompt string, pwd string, role string) (int64, error) {
+	// set role + termination BEFORE fork — child consumes both atomically
+	cond := TerminationForRole(role)
 	SetForkRole(role)
+	SetPendingTermination(cond)
+
 	pid, err := Fork(prompt, pwd)
 	if err != nil {
-		SetForkRole("") // clear on failure
+		SetForkRole("")
+		SetPendingTermination(nil)
 		return 0, err
 	}
 	metaMu.Lock()
@@ -147,12 +152,9 @@ func ForkWithRole(prompt string, pwd string, role string) (int64, error) {
 	}
 	metaMu.Unlock()
 
-	// attach termination condition based on role
-	cond := TerminationForRole(role)
-	SetTermination(pid, cond)
 	log.Printf("fork_role: pid=%d role=%s termination=%s", pid, role, cond.String())
 
-	// attach tool signal collector
+	// attach tool signal collector for this child
 	collector := NewToolSignalCollector()
 	SetCollector(pid, collector)
 
@@ -162,10 +164,15 @@ func ForkWithRole(prompt string, pwd string, role string) (int64, error) {
 // ForkWithTermination creates a child with a custom termination condition.
 // Use when the caller needs finer control than role-based defaults.
 func ForkWithTermination(prompt string, pwd string, role string, cond TerminationCondition) (int64, error) {
+	// set both role and termination BEFORE fork — child consumes atomically
 	SetForkRole(role)
+	SetPendingTermination(cond)
+	log.Printf("fork_term: role=%s termination=%s", role, cond.String())
+
 	pid, err := Fork(prompt, pwd)
 	if err != nil {
 		SetForkRole("")
+		SetPendingTermination(nil)
 		return 0, err
 	}
 	metaMu.Lock()
@@ -174,9 +181,7 @@ func ForkWithTermination(prompt string, pwd string, role string, cond Terminatio
 	}
 	metaMu.Unlock()
 
-	SetTermination(pid, cond)
-	log.Printf("fork_term: pid=%d role=%s termination=%s", pid, role, cond.String())
-
+	// attach tool signal collector for this child
 	collector := NewToolSignalCollector()
 	SetCollector(pid, collector)
 

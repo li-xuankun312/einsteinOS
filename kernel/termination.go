@@ -269,35 +269,33 @@ func (c *And) String() string {
 	return fmt.Sprintf("And(%s)", strings.Join(parts, ", "))
 }
 
-// --- per-pid termination registry ---
+// --- slot-based termination passing ---
+// Same pattern as ForkRole: parent sets a global slot before Fork,
+// child consumes it in completionLoop. No pid lookup, no race.
+// Protected by forkConvMu (shared with ForkRole for atomicity).
 
-var (
-	pidTermination   = make(map[int64]TerminationCondition)
-	pidTerminationMu sync.Mutex
-	pidSignals       = make(map[int64]*StopSignal)
-	pidSignalsMu     sync.Mutex
-)
+var pendingTermination TerminationCondition // set by parent, consumed by child
 
-func SetTermination(pid int64, cond TerminationCondition) {
-	pidTerminationMu.Lock()
-	pidTermination[pid] = cond
-	pidTerminationMu.Unlock()
-}
-
-func GetTermination(pid int64) TerminationCondition {
-	pidTerminationMu.Lock()
-	defer pidTerminationMu.Unlock()
-	return pidTermination[pid]
+func SetPendingTermination(cond TerminationCondition) {
+	forkConvMu.Lock()
+	pendingTermination = cond
+	forkConvMu.Unlock()
 }
 
 func ConsumeTermination() TerminationCondition {
-	pid := int64(SysGetpid())
-	pidTerminationMu.Lock()
-	cond := pidTermination[pid]
-	delete(pidTermination, pid)
-	pidTerminationMu.Unlock()
+	forkConvMu.Lock()
+	cond := pendingTermination
+	pendingTermination = nil
+	forkConvMu.Unlock()
 	return cond
 }
+
+// --- per-pid signal storage (written after child exits, read by parent) ---
+
+var (
+	pidSignals   = make(map[int64]*StopSignal)
+	pidSignalsMu sync.Mutex
+)
 
 func StoreSignal(pid int64, sig *StopSignal) {
 	pidSignalsMu.Lock()

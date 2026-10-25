@@ -206,17 +206,38 @@ func (c *ToolSignalCollector) ToStatusMap() map[string]string {
 	return status
 }
 
-// --- per-pid collector registry ---
+// --- collector registry ---
+// Uses both:
+// 1. A pending slot (like ForkRole) for passing collector to child
+// 2. A pid map for parent to read child's results after Wait
 
 var (
-	pidCollectors   = make(map[int64]*ToolSignalCollector)
-	pidCollectorsMu sync.Mutex
+	pidCollectors      = make(map[int64]*ToolSignalCollector)
+	pidCollectorsMu    sync.Mutex
+	pendingCollector   *ToolSignalCollector
+	pendingCollectorMu sync.Mutex
 )
 
+// SetCollector stores a collector for a specific child pid (parent-side).
+// Also sets it as pending so the child's completionLoop can find it.
 func SetCollector(pid int64, c *ToolSignalCollector) {
 	pidCollectorsMu.Lock()
 	pidCollectors[pid] = c
 	pidCollectorsMu.Unlock()
+
+	pendingCollectorMu.Lock()
+	pendingCollector = c
+	pendingCollectorMu.Unlock()
+}
+
+// ConsumePendingCollector is called by the child's completionLoop to get
+// its collector. Returns nil if none was set (bare Fork without ForkWithRole).
+func ConsumePendingCollector() *ToolSignalCollector {
+	pendingCollectorMu.Lock()
+	c := pendingCollector
+	pendingCollector = nil
+	pendingCollectorMu.Unlock()
+	return c
 }
 
 func GetCollector(pid int64) *ToolSignalCollector {
@@ -226,27 +247,12 @@ func GetCollector(pid int64) *ToolSignalCollector {
 }
 
 // ObserveToolCall is called from model/claudeweb to feed tool events
-// into the current process's collector.
-func ObserveToolCall(toolName, inputJSON, output string, round int) {
-	pid := int64(SysGetpid())
-	pidCollectorsMu.Lock()
-	c := pidCollectors[pid]
-	pidCollectorsMu.Unlock()
-	if c != nil {
-		c.Observe(toolName, inputJSON, output, round)
-	}
-
-	// also check termination for the latest forked child
-	forkConvMu.Lock()
-	childPid := lastForkedPid
-	forkConvMu.Unlock()
-	if childPid > 0 && childPid != pid {
-		pidCollectorsMu.Lock()
-		cc := pidCollectors[childPid]
-		pidCollectorsMu.Unlock()
-		if cc != nil {
-			cc.Observe(toolName, inputJSON, output, round)
-		}
+// into the active collector for the current child process.
+// The collector reference is held by completionLoop (passed via consume),
+// so this function takes it as a parameter.
+func ObserveToolCall(collector *ToolSignalCollector, toolName, inputJSON, output string, round int) {
+	if collector != nil {
+		collector.Observe(toolName, inputJSON, output, round)
 	}
 }
 
