@@ -1589,12 +1589,13 @@ func dev_review_unit(pid int64, repo, branch string, unitNum, totalUnits int, un
 	log.Printf("dev_review_unit: %s unit %d/%d forking review_conv (%d bytes prompt)",
 		repo, unitNum, totalUnits, prompt.Len())
 
-	// reviewer termination: stop when it runs a compile check, or after
-	// 2 consecutive text-only rounds (done reading, writing verdict), or max 10
+	// reviewer termination: let the reviewer FINISH its analysis (theory comparison
+	// + compile check + verdict), then stop. Do NOT terminate on CompileResult —
+	// compile is one piece of evidence, not the verdict. The reviewer's job is to
+	// compare implementation against theory spec; cutting it short on compile
+	// skips the most valuable check.
 	reviewTerm := OrConditions(
-		&CompileResult{BuildCmd: "make"},
-		&CompileResult{BuildCmd: "go build"},
-		&ConsecutiveTextRounds{Threshold: 2},
+		&ConsecutiveTextRounds{Threshold: 2}, // reviewer done reading → writes verdict
 		&MaxRounds{Limit: 10},
 		&Timeout{Duration: 10 * time.Minute},
 	)
@@ -1615,35 +1616,34 @@ func dev_review_unit(pid int64, repo, branch string, unitNum, totalUnits int, un
 	result := GetResult(child)
 	log.Printf("dev_review_unit: %s unit %d review_conv returned %d bytes", repo, unitNum, len(result))
 
-	// PRIMARY: check if the reviewer ran a compile command — tool signal is the verdict
+	// collect compile evidence from tool signals (but NOT as the verdict)
 	reviewCollector := GetCollector(child)
+	compileEvidence := ""
 	if reviewCollector != nil {
 		compilePassed, compileFound := reviewCollector.CompileStatus()
 		if compileFound {
 			if compilePassed {
-				log.Printf("dev_review_unit: %s unit %d PASS (reviewer's compile succeeded)", repo, unitNum)
-				return "PASS"
+				compileEvidence = "pass"
+			} else {
+				compileEvidence = "fail"
 			}
-			log.Printf("dev_review_unit: %s unit %d FAIL (reviewer's compile failed)", repo, unitNum)
-			return "FAIL: reviewer compile failed: " + truncForSignal(reviewCollector.LastCompileOutput(), 200)
+			log.Printf("dev_review_unit: %s unit %d compile evidence=%s (from tool signal)",
+				repo, unitNum, compileEvidence)
 		}
 	}
 
-	// check termination signal — may contain structured data
-	if sig := GetSignal(child); sig != nil && sig.Data != nil {
-		if sig.Data["compile"] == "pass" {
-			return "PASS"
-		}
-		if sig.Data["compile"] == "fail" {
-			return "FAIL: " + sig.Data["output"]
-		}
-	}
-
-	// FALLBACK: scan text for PASS/FAIL (backward compat during migration)
+	// PRIMARY: the reviewer's own verdict — it compared code against theory spec.
+	// scan text for PASS/FAIL.
 	lines := strings.Split(strings.TrimSpace(result), "\n")
 	for i := len(lines) - 1; i >= 0 && i >= len(lines)-5; i-- {
 		line := strings.TrimSpace(lines[i])
 		if line == "PASS" {
+			// safety override: reviewer says PASS but compile actually failed
+			if compileEvidence == "fail" {
+				log.Printf("dev_review_unit: %s unit %d reviewer said PASS but compile failed — overriding to FAIL",
+					repo, unitNum)
+				return "FAIL: reviewer said PASS but compile failed: " + truncForSignal(reviewCollector.LastCompileOutput(), 200)
+			}
 			return "PASS"
 		}
 		if strings.HasPrefix(line, "FAIL:") || strings.HasPrefix(line, "FAIL ") {
@@ -1651,9 +1651,37 @@ func dev_review_unit(pid int64, repo, branch string, unitNum, totalUnits int, un
 		}
 	}
 
-	// no verdict from any source — fall back to parent's compile status
+	// reviewer gave no text verdict — try downloading full conversation
+	if m := getMeta(child); m != nil && m.ConvID != "" {
+		downloaded, err := DownloadConv(m.ConvID)
+		if err == nil && len(downloaded) > len(result) {
+			dLines := strings.Split(strings.TrimSpace(downloaded), "\n")
+			for i := len(dLines) - 1; i >= 0 && i >= len(dLines)-5; i-- {
+				line := strings.TrimSpace(dLines[i])
+				if line == "PASS" {
+					if compileEvidence == "fail" {
+						return "FAIL: reviewer said PASS but compile failed"
+					}
+					return "PASS"
+				}
+				if strings.HasPrefix(line, "FAIL:") || strings.HasPrefix(line, "FAIL ") {
+					return line
+				}
+			}
+		}
+	}
+
+	// no verdict from reviewer at all — compile evidence is last resort,
+	// but we note that theory comparison was not performed
+	if compileEvidence == "pass" {
+		return "PASS (review gave no verdict, compile=pass, theory comparison unknown)"
+	}
+	if compileEvidence == "fail" {
+		return "FAIL: review gave no verdict, compile failed"
+	}
+	// no compile evidence either — fall back to parent's compile status
 	if status["compile"] == "pass" {
-		return "PASS (review gave no verdict, compile=pass)"
+		return "PASS (review gave no verdict, compile=pass, theory comparison unknown)"
 	}
 	return "FAIL: review gave no verdict, compile=" + status["compile"]
 }
