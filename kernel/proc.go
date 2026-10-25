@@ -50,7 +50,7 @@ const (
 	PHASE_DEV_DONE                 // all units pass → open PR, advance cursor
 	PHASE_PARALLEL                 // next round started while prior PR pending
 	PHASE_STEADY_STATE             // repeating pattern
-	PHASE_MILESTONE_BENCH          // benchmark pushed at module boundary
+	// PHASE_MILESTONE_BENCH removed — no pipeline benchmark step, main conv handles it
 	PHASE_BENCHMARK_DONE           // benchmark recorded, continue
 	PHASE_EXHAUSTED                // all commits processed
 )

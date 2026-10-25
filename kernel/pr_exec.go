@@ -990,7 +990,8 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 			repo, i+1, len(units), p.Len(), len(unit.Files), unit.Files)
 
 		prompt := p.String()
-		// termination: git push OR compile success → stop, don't blindly continue 20 rounds
+		// termination: behavioral signals only, no hard timeout.
+		// ProbeConvBusy handles liveness detection at the transport layer.
 		devTermination := OrConditions(
 			&BashExitZero{Pattern: "git push"},
 			AndConditions(
@@ -998,7 +999,6 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 				&ConsecutiveTextRounds{Threshold: 2},
 			),
 			&MaxRounds{Limit: 20},
-			&Timeout{Duration: 20 * time.Minute},
 		)
 		var child int64
 		for attempt := 1; attempt <= 5; attempt++ {
@@ -1458,7 +1458,6 @@ func dev_review_unit(pid int64, repo, branch string, unitNum, totalUnits int, un
 	reviewTerm := OrConditions(
 		&ConsecutiveTextRounds{Threshold: 2}, // reviewer done reading → writes verdict
 		&MaxRounds{Limit: 10},
-		&Timeout{Duration: 10 * time.Minute},
 	)
 	child, err := ForkWithTermination(prompt.String(), ".", "review_conv", reviewTerm)
 	if err != nil {

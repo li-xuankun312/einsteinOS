@@ -378,12 +378,23 @@ func boolStr(b bool) string {
 // --- preset termination profiles for common roles ---
 
 func TerminationForRole(role string) TerminationCondition {
+	// NO hard timeouts. the system detects completion by behavior, not wall clock:
+	//   - ConsecutiveTextRounds: conv stopped using tools → it's done or stuck
+	//   - MaxRounds: absolute safety ceiling (prevents infinite loops)
+	//   - BashExitZero: task-specific success signal (e.g. git push succeeded)
+	//
+	// for liveness detection (is the remote conv still working?), einsteinOS uses
+	// ProbeConvBusy which sends a probe request and checks for "container_in_use" /
+	// "Another response is already running". this is the correct mechanism —
+	// it checks actual state, not guesses based on elapsed time.
+	//
+	// hard timeouts were killing active dev_units (theory_chunk_5 took 85min,
+	// dev_unit_2 took 194min, both legitimately working). removing them.
 	switch role {
 	case "hw_probe", "ref_discover":
 		return OrConditions(
 			&MaxRounds{Limit: 3},
 			&ConsecutiveTextRounds{Threshold: 2},
-			&Timeout{Duration: 5 * time.Minute},
 		)
 	case "dir_survey", "file_survey":
 		return OrConditions(
@@ -394,20 +405,17 @@ func TerminationForRole(role string) TerminationCondition {
 		return OrConditions(
 			&MaxRounds{Limit: 5},
 			&ConsecutiveTextRounds{Threshold: 2},
-			&Timeout{Duration: 10 * time.Minute},
 		)
 	case "review_conv":
 		return OrConditions(
 			&MaxRounds{Limit: 10},
-			&ConsecutiveTextRounds{Threshold: 2}, // reviewer reads, then writes verdict = text round
-			&Timeout{Duration: 10 * time.Minute},
+			&ConsecutiveTextRounds{Threshold: 2},
 		)
 	default:
-		// dev_unit and other roles: stop on git push success, or max 20, or timeout
+		// dev_unit and other roles
 		return OrConditions(
 			&BashExitZero{Pattern: "git push"},
 			&MaxRounds{Limit: 20},
-			&Timeout{Duration: 20 * time.Minute},
 		)
 	}
 }
