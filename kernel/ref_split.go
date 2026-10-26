@@ -496,12 +496,17 @@ func ref_store_chunk(convID string, chunkIdx int, owner, repo string) {
 		log.Printf("ref_store_chunk: %s downloaded %s (%d bytes)", chunkName, baseName, len(fileBytes))
 	}
 
-	// 4. build git script: checkout branch, copy everything, commit, push
+	// 4. build git script: push to conv/<convID> branch (one branch per chunk)
+	convBranch := fmt.Sprintf("conv/%s", convID[:12])
+	baseBranch := "einsteinOS/theory"
+
 	var script strings.Builder
 	script.WriteString(fmt.Sprintf("cd %s 2>/dev/null || git clone https://$(cat /tmp/.gh_token 2>/dev/null)@github.com/%s.git %s 2>/dev/null && cd %s\n",
 		repoDir, devRepos[0], repoDir, repoDir))
-	script.WriteString(fmt.Sprintf("git fetch origin 2>/dev/null\n"))
-	script.WriteString(fmt.Sprintf("git checkout %s 2>/dev/null || git checkout -b %s 2>/dev/null\n", branch, branch))
+	script.WriteString("git fetch origin 2>/dev/null\n")
+	// branch off the theory base (or main if theory branch doesn't exist yet)
+	script.WriteString(fmt.Sprintf("git checkout %s 2>/dev/null || git checkout -b %s 2>/dev/null\n", baseBranch, baseBranch))
+	script.WriteString(fmt.Sprintf("git checkout -b %s 2>/dev/null\n", convBranch))
 	script.WriteString(fmt.Sprintf("mkdir -p .einsteinOS/chunks/%s\n", chunkName))
 
 	// copy conv JSON
@@ -518,8 +523,8 @@ func ref_store_chunk(convID string, chunkIdx int, owner, repo string) {
 	script.WriteString(fmt.Sprintf("git commit -m \"theory: %s — conv %s, %d files\" --allow-empty 2>/dev/null\n",
 		chunkName, convID[:8], len(downloadedFiles)))
 	script.WriteString("TOKEN=$(cat /tmp/.gh_token 2>/dev/null)\n")
-	script.WriteString(fmt.Sprintf("git push \"https://${TOKEN}@github.com/%s.git\" %s 2>/dev/null\n", devRepos[0], branch))
-	script.WriteString(fmt.Sprintf("echo \"stored %s: conv.json + %d files\"\n", chunkName, len(downloadedFiles)))
+	script.WriteString(fmt.Sprintf("git push \"https://${TOKEN}@github.com/%s.git\" %s 2>/dev/null\n", devRepos[0], convBranch))
+	script.WriteString(fmt.Sprintf("echo \"pushed %s\"\n", convBranch))
 
 	child, forkErr := ForkExec(script.String(), repoDir)
 	if forkErr != nil {
@@ -527,13 +532,49 @@ func ref_store_chunk(convID string, chunkIdx int, owner, repo string) {
 		return
 	}
 	Wait(child)
-	result := GetResult(child)
-	stderrOut := GetStderr(child)
+	pushResult := GetResult(child)
 	log.Printf("ref_store_chunk: %s pushed to %s:%s — %d files, conv.json (%d bytes raw): %s",
-		chunkName, devRepos[0], branch, len(downloadedFiles), len(rawJSON), strings.TrimSpace(result))
-	if stderrOut != "" {
-		log.Printf("ref_store_chunk: %s stderr: %s", chunkName, truncSplit(stderrOut, 200))
+		chunkName, devRepos[0], convBranch, len(downloadedFiles), len(rawJSON), strings.TrimSpace(pushResult))
+
+	// 5. open PR: conv/<convID> → einsteinOS/theory via GitHub API
+	devParts := strings.Split(devRepos[0], "/")
+	if len(devParts) != 2 {
+		log.Printf("ref_store_chunk: %s can't parse owner/repo from %s, skipping PR", chunkName, devRepos[0])
+		return
 	}
+	prTitle := fmt.Sprintf("theory: %s — %d files", chunkName, len(downloadedFiles))
+	prBody := fmt.Sprintf("conv: %s\\nchunk: %d\\nfiles: %d\\nraw: %d bytes", convID[:8], chunkIdx, len(downloadedFiles), len(rawJSON))
+
+	prScript := fmt.Sprintf(`TOKEN=$(cat /tmp/.gh_token 2>/dev/null)
+# ensure base branch exists on remote (first chunk creates it)
+cd %s
+git push "https://${TOKEN}@github.com/%s.git" %s 2>/dev/null || true
+# open PR
+curl -s -X POST \
+  -H "Authorization: token ${TOKEN}" \
+  -H "Accept: application/vnd.github.v3+json" \
+  "https://api.github.com/repos/%s/%s/pulls" \
+  -d '{
+    "title": "%s",
+    "body": "%s",
+    "head": "%s",
+    "base": "%s"
+  }' 2>&1`,
+		repoDir,
+		devRepos[0], baseBranch,
+		devParts[0], devParts[1],
+		prTitle, prBody,
+		convBranch, baseBranch)
+
+	prPid, prErr := ForkExec(prScript, ".")
+	if prErr != nil {
+		log.Printf("ref_store_chunk: %s PR creation failed: %v", chunkName, prErr)
+		return
+	}
+	Wait(prPid)
+	prResult := GetResult(prPid)
+	log.Printf("ref_store_chunk: %s PR %s → %s: %s",
+		chunkName, convBranch, baseBranch, truncSplit(prResult, 200))
 }
 
 func truncSplit(s string, n int) string {
