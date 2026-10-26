@@ -1,8 +1,11 @@
 package kernel
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -87,47 +90,9 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 					i+1, len(chunks), len(result), err)
 			}
 
-			// DownloadFile: theory is in create_file outputs, not conversation text.
-			// scan GetResult for /mnt/user-data/outputs/*.md paths and download them.
-			// these files have ## FILE: headers that dev_split_theory needs.
-			for _, line := range strings.Split(GetStderr(child_pid), "\n") {
-				// shadow exec logs: [pid N] exec: mkdir -p ... && cat > '/mnt/user-data/outputs/xxx.md'
-				if strings.Contains(line, "/mnt/user-data/outputs/") && strings.Contains(line, ".md") {
-					// extract path
-					start := strings.Index(line, "/mnt/user-data/outputs/")
-					if start < 0 {
-						continue
-					}
-					rest := line[start:]
-					// find end of path (quote, space, or EOL)
-					end := len(rest)
-					for _, delim := range []byte{'\'', '"', ' ', '\t', '\n', '\r'} {
-						if idx := strings.IndexByte(rest, delim); idx > 0 && idx < end {
-							end = idx
-						}
-					}
-					path := rest[:end]
-					if !strings.HasSuffix(path, ".md") {
-						continue
-					}
-
-					fileBytes, err := DownloadFile(convID, path)
-					if err != nil {
-						log.Printf("ref_split: chunk %d/%d download-file %s failed: %v", i+1, len(chunks), path, err)
-						continue
-					}
-					fileStr := string(fileBytes)
-					if strings.Contains(fileStr, "## MODULE:") || strings.Contains(fileStr, "## FILE:") || strings.Contains(fileStr, "LAYER 1") {
-						log.Printf("ref_split: chunk %d/%d download-file %s: %d bytes (has theory headers!)",
-							i+1, len(chunks), path, len(fileStr))
-						if len(fileStr) > len(result) {
-							result = fileStr
-						} else {
-							result = result + "\n\n" + fileStr
-						}
-					}
-				}
-			}
+			// push everything (conv JSON + all created files) to GitHub.
+			// subsequent chunks git checkout and read prior work directly.
+			ref_store_chunk(convID, i+1, owner, repo)
 		}
 
 		// theory completeness: count ## MODULE: or ## FILE: headers vs assigned files.
@@ -429,6 +394,157 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 }
 
 // ---------------------------------------------------------------------------
+// ref_store_chunk: after a theory chunk completes, download everything it
+// produced and push to the dev branch on GitHub. "everything" means:
+//   1. the full conversation JSON (DownloadConvRaw)
+//   2. every file the child created (DownloadFile for all create_file paths)
+//
+// stored under .einsteinOS/ on the branch so subsequent children can
+// git checkout and read all prior work. no conversation_search needed,
+// no kernel prompt injection of convIDs, no .md-only filter.
+// ---------------------------------------------------------------------------
+
+func ref_store_chunk(convID string, chunkIdx int, owner, repo string) {
+	devRepos := GetDevRepos()
+	if len(devRepos) == 0 || convID == "" {
+		return
+	}
+	branch := "einsteinOS/theory"
+	parts := strings.Split(devRepos[0], "/")
+	repoName := parts[len(parts)-1]
+	repoDir := fmt.Sprintf("/home/claude/%s", repoName)
+	chunkName := fmt.Sprintf("theorize_chunk_%d", chunkIdx)
+
+	// 1. download raw conversation JSON
+	rawJSON, err := DownloadConvRaw(convID)
+	if err != nil {
+		log.Printf("ref_store_chunk: %s download raw failed: %v", chunkName, err)
+		return
+	}
+
+	// write conv JSON to temp
+	convTmp := fmt.Sprintf("/tmp/chunk_%d_conv.json", chunkIdx)
+	if err := os.WriteFile(convTmp, rawJSON, 0644); err != nil {
+		log.Printf("ref_store_chunk: %s write conv tmp failed: %v", chunkName, err)
+		return
+	}
+
+	// 2. extract all create_file paths from the conversation JSON
+	var conv struct {
+		ChatMessages []struct {
+			Content []json.RawMessage `json:"content"`
+		} `json:"chat_messages"`
+	}
+	filePaths := []string{}
+	if json.Unmarshal(rawJSON, &conv) == nil {
+		for _, msg := range conv.ChatMessages {
+			for _, raw := range msg.Content {
+				var block struct {
+					Type  string          `json:"type"`
+					Name  string          `json:"name"`
+					Input json.RawMessage `json:"input"`
+				}
+				if json.Unmarshal(raw, &block) != nil {
+					continue
+				}
+				if block.Type == "tool_use" && (block.Name == "create_file" || block.Name == "write_file") {
+					var inp struct {
+						Path string `json:"path"`
+					}
+					if json.Unmarshal(block.Input, &inp) == nil && inp.Path != "" {
+						filePaths = append(filePaths, inp.Path)
+					}
+				}
+			}
+		}
+	}
+
+	// deduplicate (child may rewrite same file)
+	seen := map[string]bool{}
+	uniquePaths := []string{}
+	for _, p := range filePaths {
+		if !seen[p] {
+			seen[p] = true
+			uniquePaths = append(uniquePaths, p)
+		}
+	}
+
+	// 3. download each file from remote sandbox
+	chunkDir := fmt.Sprintf("/tmp/chunk_%d_files", chunkIdx)
+	os.MkdirAll(chunkDir, 0755)
+
+	downloadedFiles := []string{} // local tmp paths
+	destPaths := []string{}       // paths under .einsteinOS/
+	for _, remotePath := range uniquePaths {
+		fileBytes, err := DownloadFile(convID, remotePath)
+		if err != nil {
+			log.Printf("ref_store_chunk: %s download-file %s failed: %v", chunkName, remotePath, err)
+			continue
+		}
+		if len(fileBytes) == 0 {
+			continue
+		}
+		// local temp path
+		baseName := filepath.Base(remotePath)
+		localTmp := fmt.Sprintf("%s/%s", chunkDir, baseName)
+		if err := os.WriteFile(localTmp, fileBytes, 0644); err != nil {
+			log.Printf("ref_store_chunk: %s write file %s failed: %v", chunkName, baseName, err)
+			continue
+		}
+		downloadedFiles = append(downloadedFiles, localTmp)
+		destPaths = append(destPaths, fmt.Sprintf(".einsteinOS/chunks/%s/%s", chunkName, baseName))
+		log.Printf("ref_store_chunk: %s downloaded %s (%d bytes)", chunkName, baseName, len(fileBytes))
+	}
+
+	// 4. build git script: checkout branch, copy everything, commit, push
+	var script strings.Builder
+	script.WriteString(fmt.Sprintf("cd %s 2>/dev/null || git clone https://$(cat /tmp/.gh_token 2>/dev/null)@github.com/%s.git %s 2>/dev/null && cd %s\n",
+		repoDir, devRepos[0], repoDir, repoDir))
+	script.WriteString(fmt.Sprintf("git fetch origin 2>/dev/null\n"))
+	script.WriteString(fmt.Sprintf("git checkout %s 2>/dev/null || git checkout -b %s 2>/dev/null\n", branch, branch))
+	script.WriteString(fmt.Sprintf("mkdir -p .einsteinOS/chunks/%s\n", chunkName))
+
+	// copy conv JSON
+	convDest := fmt.Sprintf(".einsteinOS/chunks/%s/conv.json", chunkName)
+	script.WriteString(fmt.Sprintf("cp %s %s\n", convTmp, convDest))
+	script.WriteString(fmt.Sprintf("git add %s\n", convDest))
+
+	// copy all downloaded files
+	for i, localTmp := range downloadedFiles {
+		script.WriteString(fmt.Sprintf("cp %s %s\n", localTmp, destPaths[i]))
+		script.WriteString(fmt.Sprintf("git add %s\n", destPaths[i]))
+	}
+
+	script.WriteString(fmt.Sprintf("git commit -m \"theory: %s — conv %s, %d files\" --allow-empty 2>/dev/null\n",
+		chunkName, convID[:8], len(downloadedFiles)))
+	script.WriteString("TOKEN=$(cat /tmp/.gh_token 2>/dev/null)\n")
+	script.WriteString(fmt.Sprintf("git push \"https://${TOKEN}@github.com/%s.git\" %s 2>/dev/null\n", devRepos[0], branch))
+	script.WriteString(fmt.Sprintf("echo \"stored %s: conv.json + %d files\"\n", chunkName, len(downloadedFiles)))
+
+	child, forkErr := ForkExec(script.String(), repoDir)
+	if forkErr != nil {
+		log.Printf("ref_store_chunk: %s ForkExec failed: %v", chunkName, forkErr)
+		return
+	}
+	Wait(child)
+	result := GetResult(child)
+	stderrOut := GetStderr(child)
+	log.Printf("ref_store_chunk: %s pushed to %s:%s — %d files, conv.json (%d bytes raw): %s",
+		chunkName, devRepos[0], branch, len(downloadedFiles), len(rawJSON), strings.TrimSpace(result))
+	if stderrOut != "" {
+		log.Printf("ref_store_chunk: %s stderr: %s", chunkName, truncSplit(stderrOut, 200))
+	}
+}
+
+func truncSplit(s string, n int) string {
+	s = strings.TrimSpace(s)
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
+}
+
+// ---------------------------------------------------------------------------
 // theory_plan: fork a theory_planner conv to decide file grouping.
 // the planner sees the file list with directory structure and decides
 // which files go together. each group ≤ 12 files so theory conv can
@@ -598,25 +714,21 @@ func ref_split_fork(parent_pid int64, owner, repo, sha string, files []string, t
 	src.WriteString("other files in this repo are handled by OTHER conversations — not your concern.\n")
 	src.WriteString("do NOT explore the repo to find more files to theorize. YOUR scope is FIXED.\n\n")
 
-	// prior chunks: give child conv addresses for context, but do NOT
-	// reveal how many chunks exist or what files other chunks cover.
+	// prior chunks: tell child where prior work lives on the dev branch.
+	// each completed chunk's conv JSON + all created files are pushed to
+	// .einsteinOS/chunks/theorize_chunk_N/ on the einsteinOS/theory branch.
+	// child can git clone the dev repo and read prior theory for context.
 	if len(priorResults) > 0 {
-		hasPrior := false
-		for j := range priorResults {
-			role := fmt.Sprintf("theorize_chunk_%d", j+1)
-			rec := FindConv(owner+"/"+repo, role, 0)
-			if rec == nil {
-				continue
-			}
-			if !hasPrior {
-				src.WriteString("[PRIOR WORK — other conversations already produced theory for other files]\n")
-				hasPrior = true
-			}
-			src.WriteString(fmt.Sprintf("  conv=%s (%d bytes)\n",
-				rec.ConvID, len(priorResults[j])))
-		}
-		if hasPrior {
-			src.WriteString("you may download these for context if needed. produce theory for YOUR files only.\n\n")
+		devRepos := GetDevRepos()
+		if len(devRepos) > 0 {
+			src.WriteString("[PRIOR WORK — earlier chunks pushed theory to the dev repo]\n")
+			src.WriteString(fmt.Sprintf("  repo: %s  branch: einsteinOS/theory\n", devRepos[0]))
+			src.WriteString(fmt.Sprintf("  path: .einsteinOS/chunks/  (%d prior chunks)\n", len(priorResults)))
+			src.WriteString("  each chunk dir has: conv.json (full conversation) + all created files\n")
+			src.WriteString("  TOKEN=$(cat /tmp/.gh_token 2>/dev/null)\n")
+			src.WriteString(fmt.Sprintf("  git clone https://${TOKEN}@github.com/%s.git /tmp/devrepo && cd /tmp/devrepo && git checkout einsteinOS/theory\n", devRepos[0]))
+			src.WriteString("  ls .einsteinOS/chunks/  — see all prior chunk outputs\n")
+			src.WriteString("you may read these for context if needed. produce theory for YOUR files only.\n\n")
 		}
 	}
 
