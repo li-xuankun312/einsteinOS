@@ -223,7 +223,8 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 			prevSize := len(result)
 			maxSeen := len(result)
 			stableCount := 0
-			staleCount := 0 // consecutive polls with no growth (including errors)
+			staleCount := 0     // consecutive polls with no growth (including errors)
+			continueWaste := 0  // consecutive ContinueConv with tiny pure-text response (child says "done")
 			for poll := 0; staleCount < 5; poll++ {
 				time.Sleep(3 * time.Minute)
 				redownloaded, dlErr := DownloadConv(convID)
@@ -277,11 +278,21 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 					} else {
 						// remote idle + content stale → try ContinueConv to resume
 						// (probe no longer sends continue, so we do it properly here)
-						if staleCount == 0 && curSize > 500 {
+						if continueWaste >= 2 {
+							log.Printf("ref_split: chunk %d/%d poll %d: ContinueConv returned waste %d times, child is done",
+								i+1, len(chunks), poll+1, continueWaste)
+							staleCount = 5 // force exit
+						} else if staleCount == 0 && curSize > 500 {
 							log.Printf("ref_split: chunk %d/%d poll %d: remote idle, sending ContinueConv to resume",
 								i+1, len(chunks), poll+1)
-							ContinueConv(convID, "you were interrupted. continue writing ## MODULE sections for YOUR assigned files only. do NOT write theory for files outside your assignment.")
-							// don't count this as stale — give ContinueConv a chance
+							contOut, contErr := ContinueConv(convID, "you were interrupted. continue writing ## MODULE sections for YOUR assigned files only. do NOT write theory for files outside your assignment.")
+							if len(contOut) < 4000 && len(contErr) == 0 {
+								continueWaste++
+								log.Printf("ref_split: chunk %d/%d poll %d: ContinueConv waste (stdout=%d stderr=0) %d/2",
+									i+1, len(chunks), poll+1, len(contOut), continueWaste)
+							} else {
+								continueWaste = 0
+							}
 						} else {
 							staleCount++
 						}
