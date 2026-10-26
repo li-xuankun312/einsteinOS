@@ -411,7 +411,6 @@ func ref_store_chunk(convID string, chunkIdx int, owner, repo string) {
 	}
 	parts := strings.Split(devRepos[0], "/")
 	repoName := parts[len(parts)-1]
-	repoDir := fmt.Sprintf("/home/claude/%s", repoName)
 	chunkName := fmt.Sprintf("theorize_chunk_%d", chunkIdx)
 
 	// 1. download raw conversation JSON
@@ -500,8 +499,15 @@ func ref_store_chunk(convID string, chunkIdx int, owner, repo string) {
 	baseBranch := "einsteinOS/theory"
 
 	var script strings.Builder
-	script.WriteString(fmt.Sprintf("cd %s 2>/dev/null || git clone https://$(cat /tmp/.gh_token 2>/dev/null)@github.com/%s.git %s 2>/dev/null && cd %s\n",
-		repoDir, devRepos[0], repoDir, repoDir))
+	// clone to /tmp if not already there — ForkExec runs from /tmp
+	script.WriteString(fmt.Sprintf("TOKEN=$(cat /tmp/.gh_token 2>/dev/null)\n"))
+	script.WriteString(fmt.Sprintf("REPO_DIR=/tmp/ref_store_%s\n", repoName))
+	script.WriteString(fmt.Sprintf("if [ ! -d \"$REPO_DIR/.git\" ]; then\n"))
+	script.WriteString(fmt.Sprintf("  git clone \"https://${TOKEN}@github.com/%s.git\" \"$REPO_DIR\" 2>/dev/null\n", devRepos[0]))
+	script.WriteString(fmt.Sprintf("fi\n"))
+	script.WriteString(fmt.Sprintf("cd \"$REPO_DIR\"\n"))
+	script.WriteString(fmt.Sprintf("git config user.email \"einsteinOS@kernel\" 2>/dev/null\n"))
+	script.WriteString(fmt.Sprintf("git config user.name \"einsteinOS\" 2>/dev/null\n"))
 	script.WriteString("git fetch origin 2>/dev/null\n")
 	// branch off the theory base (or main if theory branch doesn't exist yet)
 	script.WriteString(fmt.Sprintf("git checkout %s 2>/dev/null || git checkout -b %s 2>/dev/null\n", baseBranch, baseBranch))
@@ -522,7 +528,6 @@ func ref_store_chunk(convID string, chunkIdx int, owner, repo string) {
 	script.WriteString(fmt.Sprintf("git commit -m \"theory: %s — conv %s, %d files\" --allow-empty 2>/dev/null\n",
 		chunkName, convID[:8], len(downloadedFiles)))
 	// git push with retry — TLS handshake timeouts are frequent on this machine
-	script.WriteString("TOKEN=$(cat /tmp/.gh_token 2>/dev/null)\n")
 	script.WriteString(fmt.Sprintf(`PUSH_OK=0
 for attempt in 1 2 3 4 5; do
   git push "https://${TOKEN}@github.com/%s.git" %s 2>/dev/null && PUSH_OK=1 && break
@@ -537,7 +542,7 @@ else
 fi
 `, devRepos[0], convBranch, convBranch))
 
-	child, forkErr := ForkExec(script.String(), repoDir)
+	child, forkErr := ForkExec(script.String(), "/tmp")
 	if forkErr != nil {
 		log.Printf("ref_store_chunk: %s ForkExec failed: %v", chunkName, forkErr)
 		return
@@ -562,7 +567,7 @@ fi
 
 	// ensure base branch + open PR, both with retry
 	prScript := fmt.Sprintf(`TOKEN=$(cat /tmp/.gh_token 2>/dev/null)
-cd %s
+cd /tmp/ref_store_%s
 # ensure base branch exists on remote (first chunk creates it)
 for attempt in 1 2 3; do
   git push "https://${TOKEN}@github.com/%s.git" %s 2>/dev/null && break
@@ -594,13 +599,13 @@ done
 if [ "$PR_OK" = "0" ]; then
   echo "PR failed after 3 attempts"
 fi`,
-		repoDir,
+		repoName,
 		devRepos[0], baseBranch,
 		devParts[0], devParts[1],
 		prTitle, prBody,
 		convBranch, baseBranch)
 
-	prPid, prErr := ForkExec(prScript, ".")
+	prPid, prErr := ForkExec(prScript, "/tmp")
 	if prErr != nil {
 		log.Printf("ref_store_chunk: %s PR creation failed: %v", chunkName, prErr)
 		return
