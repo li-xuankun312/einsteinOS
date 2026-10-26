@@ -409,7 +409,6 @@ func ref_store_chunk(convID string, chunkIdx int, owner, repo string) {
 	if len(devRepos) == 0 || convID == "" {
 		return
 	}
-	branch := "einsteinOS/theory"
 	parts := strings.Split(devRepos[0], "/")
 	repoName := parts[len(parts)-1]
 	repoDir := fmt.Sprintf("/home/claude/%s", repoName)
