@@ -521,17 +521,33 @@ func ref_store_chunk(convID string, chunkIdx int, owner, repo string) {
 
 	script.WriteString(fmt.Sprintf("git commit -m \"theory: %s — conv %s, %d files\" --allow-empty 2>/dev/null\n",
 		chunkName, convID[:8], len(downloadedFiles)))
+	// git push with retry — TLS handshake timeouts are frequent on this machine
 	script.WriteString("TOKEN=$(cat /tmp/.gh_token 2>/dev/null)\n")
-	script.WriteString(fmt.Sprintf("git push \"https://${TOKEN}@github.com/%s.git\" %s 2>/dev/null\n", devRepos[0], convBranch))
-	script.WriteString(fmt.Sprintf("echo \"pushed %s\"\n", convBranch))
+	script.WriteString(fmt.Sprintf(`PUSH_OK=0
+for attempt in 1 2 3 4 5; do
+  git push "https://${TOKEN}@github.com/%s.git" %s 2>/dev/null && PUSH_OK=1 && break
+  echo "push attempt $attempt failed, retrying in 10s..."
+  sleep 10
+done
+if [ "$PUSH_OK" = "1" ]; then
+  echo "pushed %s"
+else
+  echo "push failed after 5 attempts"
+  exit 1
+fi
+`, devRepos[0], convBranch, convBranch))
 
 	child, forkErr := ForkExec(script.String(), repoDir)
 	if forkErr != nil {
 		log.Printf("ref_store_chunk: %s ForkExec failed: %v", chunkName, forkErr)
 		return
 	}
-	Wait(child)
+	_, pushExit, _ := Wait(child)
 	pushResult := GetResult(child)
+	if pushExit != 0 {
+		log.Printf("ref_store_chunk: %s push failed after retries: %s", chunkName, truncSplit(pushResult, 200))
+		return
+	}
 	log.Printf("ref_store_chunk: %s pushed to %s:%s — %d files, conv.json (%d bytes raw): %s",
 		chunkName, devRepos[0], convBranch, len(downloadedFiles), len(rawJSON), strings.TrimSpace(pushResult))
 
@@ -544,21 +560,40 @@ func ref_store_chunk(convID string, chunkIdx int, owner, repo string) {
 	prTitle := fmt.Sprintf("theory: %s — %d files", chunkName, len(downloadedFiles))
 	prBody := fmt.Sprintf("conv: %s\\nchunk: %d\\nfiles: %d\\nraw: %d bytes", convID[:8], chunkIdx, len(downloadedFiles), len(rawJSON))
 
+	// ensure base branch + open PR, both with retry
 	prScript := fmt.Sprintf(`TOKEN=$(cat /tmp/.gh_token 2>/dev/null)
-# ensure base branch exists on remote (first chunk creates it)
 cd %s
-git push "https://${TOKEN}@github.com/%s.git" %s 2>/dev/null || true
-# open PR
-curl -s -X POST \
-  -H "Authorization: token ${TOKEN}" \
-  -H "Accept: application/vnd.github.v3+json" \
-  "https://api.github.com/repos/%s/%s/pulls" \
-  -d '{
-    "title": "%s",
-    "body": "%s",
-    "head": "%s",
-    "base": "%s"
-  }' 2>&1`,
+# ensure base branch exists on remote (first chunk creates it)
+for attempt in 1 2 3; do
+  git push "https://${TOKEN}@github.com/%s.git" %s 2>/dev/null && break
+  sleep 5
+done
+# open PR with retry
+PR_OK=0
+for attempt in 1 2 3; do
+  RESULT=$(curl -s -w "\n%%%%{http_code}" -X POST \
+    -H "Authorization: token ${TOKEN}" \
+    -H "Accept: application/vnd.github.v3+json" \
+    "https://api.github.com/repos/%s/%s/pulls" \
+    -d '{
+      "title": "%s",
+      "body": "%s",
+      "head": "%s",
+      "base": "%s"
+    }' 2>&1)
+  HTTP_CODE=$(echo "$RESULT" | tail -1)
+  BODY=$(echo "$RESULT" | sed '$d')
+  if [ "$HTTP_CODE" = "201" ] || [ "$HTTP_CODE" = "422" ]; then
+    echo "$BODY"
+    PR_OK=1
+    break
+  fi
+  echo "PR attempt $attempt got $HTTP_CODE, retrying in 10s..."
+  sleep 10
+done
+if [ "$PR_OK" = "0" ]; then
+  echo "PR failed after 3 attempts"
+fi`,
 		repoDir,
 		devRepos[0], baseBranch,
 		devParts[0], devParts[1],
