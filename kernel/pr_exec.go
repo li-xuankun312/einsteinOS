@@ -196,7 +196,7 @@ func PRRunNext(pid int64) (string, error) {
 		if feedback != "" {
 			devPrompt += fmt.Sprintf("\n\n[DEVELOPMENT DISCIPLINE from prior review]\n%s", feedback)
 		}
-		childPid, e := Fork(devPrompt, ".")
+		childPid, e := ForkWithRole(devPrompt, ".", "dev_legacy")
 		err = e
 		if err == nil {
 			Wait(childPid)
@@ -1173,7 +1173,7 @@ func open_pr(pid int64, step *Step) (string, error) {
 		devRepo, devRepo, devRepo,
 	)
 
-	verifyChild, err := Fork(verifyPrompt, ".")
+	verifyChild, err := ForkWithRole(verifyPrompt, ".", "verify_conv")
 	if err != nil {
 		return "", fmt.Errorf("open_pr: verify fork failed: %w", err)
 	}
@@ -1336,7 +1336,7 @@ func dev_fix(pid int64, step *Step) (string, error) {
 	log.Printf("dev_fix: %s attempt=%d failure=%s gpu_usable=%s",
 		repo, attempt, step.Command, gpuUsable)
 
-	child, err := Fork(prompt.String(), ".")
+	child, err := ForkWithRole(prompt.String(), ".", fmt.Sprintf("dev_fix_%d", attempt))
 	if err != nil {
 		return "", err
 	}

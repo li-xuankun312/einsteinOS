@@ -793,7 +793,7 @@ func ref_theorize_leaf(parent int64, owner, name, sha string, files []string, ta
 		"write your LAYER 1 and LAYER 2 however you prefer — text, Artifact, or create_file all work. " +
 		"the kernel will download the full conversation after you finish."
 
-	child, err := Fork(prompt, ".")
+	child, err := ForkWithRole(prompt, ".", "theorize_full")
 	if err != nil {
 		return fmt.Sprintf("ref_theorize fork: %v", err)
 	}
