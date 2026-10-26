@@ -654,9 +654,24 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 		// causing "I don't have context" confusion.
 		// instead: send a bare "Continue" without tool results, letting
 		// the remote finish its current generation naturally.
+		//
+		// BUT: state-changing tools (create_file, str_replace) must still
+		// shadow-exec locally so the local filesystem stays consistent.
+		// otherwise later ContinueConv rounds run grep/cat on files that
+		// don't exist locally → shadow returns "No such file" → writeback
+		// overrides remote's correct result → child enters fix loop.
 		if stopReason == "" && len(collectedTools) > 0 {
 			log.Printf("claudeweb: stop_reason empty with %d tools — SSE broke mid-stream, sending bare Continue (no writeback)",
 				len(collectedTools))
+			// shadow-exec state-changing tools to keep local fs consistent
+			for _, tb := range collectedTools {
+				if isCreateFile(tb.name) || isStrReplace(tb.name) {
+					result := m.Shadow.Execute(tb.name, tb.inputJSON.String())
+					if result != "" {
+						log.Printf("[shadow] SSE-break state sync: %s → %s", tb.name, truncate(result, 80))
+					}
+				}
+			}
 			webReq.Prompt = "Continue"
 			webReq.CreateConversationParams = nil
 			continue
