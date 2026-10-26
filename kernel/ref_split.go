@@ -650,7 +650,8 @@ func ref_split_fork(parent_pid int64, owner, repo, sha string, files []string, t
 		"[SOURCE CODE — your complete assignment. write THEORY for these files, then stop]\n\n" +
 		src_text
 
-	pid, err := Fork(prompt, ".")
+	role := fmt.Sprintf("theorize_chunk_%d", chunk_idx+1)
+	pid, err := ForkWithRole(prompt, ".", role)
 	if err != nil {
 		log.Printf("ref_split_fork: %v", err)
 		return 0
@@ -699,7 +700,7 @@ func ref_split_leaf(parent_pid int64, owner, repo, sha string, files []string, t
 		"do NOT write to /mnt/user-data/outputs/. " +
 		"your text response IS the output. just print the math and templates."
 
-	pid, err := Fork(prompt, ".")
+	pid, err := ForkWithRole(prompt, ".", "theorize_leaf")
 	if err != nil {
 		return fmt.Sprintf("ref_split_leaf: %v", err)
 	}
