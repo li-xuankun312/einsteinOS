@@ -569,12 +569,16 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 		var toolResults []ToolResult
 		for _, tb := range collectedTools {
 			result := m.Shadow.Execute(tb.name, tb.inputJSON.String())
-			// if shadow returned "" for axle commands, don't writeback —
-			// the remote sandbox has valid Axle results, don't override
-			// them with empty "[LOCAL MACHINE RESULT]". the child needs
-			// Axle feedback to stay in theory-writing mode.
+			// if shadow returned "" for skipped commands, don't writeback —
+			// the remote sandbox has the real results. overriding with
+			// empty "[LOCAL MACHINE RESULT]" or truncated output poisons
+			// the child's view.
+			// - axle: remote runs Lean4 verification, child needs feedback
+			// - git: remote gets full output, local truncates to 2000 chars
+			//   which causes children to re-read files in infinite loops
 			if result == "" && (strings.Contains(tb.inputJSON.String(), "axle.axiommath.ai") ||
-				strings.Contains(tb.inputJSON.String(), "verify_proof")) {
+				strings.Contains(tb.inputJSON.String(), "verify_proof") ||
+				isGitToolCall(tb.inputJSON.String())) {
 				continue // let remote result stand
 			}
 			toolResults = append(toolResults, ToolResult{
@@ -912,6 +916,26 @@ func (m *Model) RunConversation(prompt string) (string, string) {
 	log.Printf("claudeweb: fork %s done, stdout=%d stderr=%d",
 		convID[:8], len(stdout), len(stderr))
 	return stdout, stderr
+}
+
+func isGitToolCall(inputJSON string) bool {
+	// check if the tool call's command is a git operation.
+	// matches the same patterns as isGitCommand in shadow.go.
+	return strings.Contains(inputJSON, "git clone") ||
+		strings.Contains(inputJSON, "git --git-dir") ||
+		strings.Contains(inputJSON, "git show") ||
+		strings.Contains(inputJSON, "git log") ||
+		strings.Contains(inputJSON, "git ls-tree") ||
+		strings.Contains(inputJSON, "git cat-file") ||
+		strings.Contains(inputJSON, "git rev-parse") ||
+		strings.Contains(inputJSON, "git fetch") ||
+		strings.Contains(inputJSON, "git pull") ||
+		strings.Contains(inputJSON, "git push") ||
+		strings.Contains(inputJSON, "git checkout") ||
+		strings.Contains(inputJSON, "git branch") ||
+		strings.Contains(inputJSON, "git tag") ||
+		strings.Contains(inputJSON, "git diff") ||
+		strings.Contains(inputJSON, "GIT_DIR=")
 }
 
 func truncate(s string, n int) string {

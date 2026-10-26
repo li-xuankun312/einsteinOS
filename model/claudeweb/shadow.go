@@ -98,6 +98,17 @@ func (s *ShadowExecutor) Execute(toolName string, inputJSON string) string {
 		return ""
 	}
 
+	// don't shadow-exec git commands locally.
+	// remote sandbox runs them and gets full output; local shadow truncates
+	// stdout to 2000 chars, and writeback overrides the remote's complete
+	// result with the truncated version. this causes children to re-read
+	// the same file 10+ times in a loop trying to get untruncated content.
+	// git state is shared via GitHub — no local side-effects needed.
+	if isGitCommand(command) {
+		log.Printf("[shadow] skip git (remote has full output)")
+		return ""
+	}
+
 	// don't shadow-exec ssh commands — they hang waiting for fingerprint confirmation.
 	// git push is already handled by the sandbox; local machine doesn't need to push again.
 	if strings.Contains(command, "ssh -T ") || strings.Contains(command, "ssh git@") {
@@ -168,6 +179,29 @@ func isStrReplace(name string) bool {
 func isMemoryTool(name string) bool {
 	n := strings.ToLower(name)
 	return n == "search_project_memory" || n == "project_status" || n == "load_memory"
+}
+
+func isGitCommand(command string) bool {
+	// match any command that starts with git or uses git --git-dir / GIT_DIR=
+	// these are read operations the remote sandbox handles; local execution
+	// adds nothing (state syncs via GitHub) and the 2000-char truncation
+	// destroys the result.
+	trimmed := strings.TrimSpace(command)
+	if strings.HasPrefix(trimmed, "git ") || strings.HasPrefix(trimmed, "git\t") {
+		return true
+	}
+	if strings.HasPrefix(trimmed, "GIT_DIR=") {
+		return true
+	}
+	// cd /tmp && git ..., cd /tmp/ref_* && git ...
+	if strings.Contains(trimmed, "&& git ") || strings.Contains(trimmed, "; git ") {
+		return true
+	}
+	// git clone as a subcommand
+	if strings.Contains(command, "git clone") || strings.Contains(command, "git --git-dir") {
+		return true
+	}
+	return false
 }
 
 func truncateCmd(s string, n int) string {
