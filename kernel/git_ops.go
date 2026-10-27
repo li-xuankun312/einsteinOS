@@ -33,22 +33,65 @@ func CloneURL(ownerRepo string) string {
 	return fmt.Sprintf("https://github.com/%s.git", ownerRepo)
 }
 
-// GitCloneOrReuse clones a repo to dir if not already there, returns the dir.
+// GitCloneOrReuse ensures dir is a usable clone of ownerRepo, synced to remote HEAD.
+// If .git exists → fetch + reset (TLS may fail, retry).
+// If .git missing or corrupt → remove residue, clone fresh (TLS may fail, retry).
+// 5 attempts, 10s apart — matches GitPushRetry's tolerance for GnuTLS flaps.
 func GitCloneOrReuse(ownerRepo, dir string) error {
-	if _, err := os.Stat(dir + "/.git"); err == nil {
-		return nil // already cloned
+	var lastErr error
+	for attempt := 1; attempt <= 5; attempt++ {
+		if _, err := os.Stat(dir + "/.git"); err == nil {
+			// .git exists — fetch + reset to remote HEAD.
+			// do NOT rm -rf: the local repo is valid, only the network failed.
+			cmd := fmt.Sprintf("cd %q && git fetch origin 2>&1 && git reset --hard origin/HEAD 2>&1", dir)
+			pid, forkErr := ForkExec(cmd, dir)
+			if forkErr != nil {
+				lastErr = fmt.Errorf("fetch fork: %w", forkErr)
+				log.Printf("git_clone_or_reuse: %s attempt %d/5 fetch fork error: %v", ownerRepo, attempt, forkErr)
+				time.Sleep(10 * time.Second)
+				continue
+			}
+			Wait(pid)
+			result := GetResult(pid)
+			// fetch success: result contains "From https://..." or "Already up to date"
+			// fetch fail: result contains "GnuTLS" or "TLS" or "fatal"
+			if strings.Contains(result, "GnuTLS") || strings.Contains(result, "TLS handshake") ||
+				strings.Contains(result, "the remote end hung up") {
+				lastErr = fmt.Errorf("fetch TLS error: %s", truncStr(result, 200))
+				log.Printf("git_clone_or_reuse: %s attempt %d/5 fetch TLS error", ownerRepo, attempt)
+				time.Sleep(10 * time.Second)
+				continue
+			}
+			log.Printf("git_clone_or_reuse: %s synced (attempt %d)", ownerRepo, attempt)
+			return nil
+		}
+
+		// .git missing or corrupt — clean residue, clone fresh
+		os.RemoveAll(dir)
+		cmd := fmt.Sprintf("git clone %q %q 2>&1", CloneURL(ownerRepo), dir)
+		pid, forkErr := ForkExec(cmd, "/tmp")
+		if forkErr != nil {
+			lastErr = fmt.Errorf("clone fork: %w", forkErr)
+			log.Printf("git_clone_or_reuse: %s attempt %d/5 clone fork error: %v", ownerRepo, attempt, forkErr)
+			time.Sleep(10 * time.Second)
+			continue
+		}
+		Wait(pid)
+		result := GetResult(pid)
+		if _, err := os.Stat(dir + "/.git"); err != nil {
+			// clone failed — clean the broken residue so next attempt starts fresh
+			os.RemoveAll(dir)
+			lastErr = fmt.Errorf("clone failed: %s", truncStr(result, 200))
+			log.Printf("git_clone_or_reuse: %s attempt %d/5 clone failed", ownerRepo, attempt)
+			if attempt < 5 {
+				time.Sleep(10 * time.Second)
+			}
+			continue
+		}
+		log.Printf("git_clone_or_reuse: %s cloned (attempt %d)", ownerRepo, attempt)
+		return nil
 	}
-	cmd := fmt.Sprintf("git clone %q %q 2>&1", CloneURL(ownerRepo), dir)
-	pid, err := ForkExec(cmd, "/tmp")
-	if err != nil {
-		return fmt.Errorf("clone fork: %w", err)
-	}
-	Wait(pid)
-	result := GetResult(pid)
-	if _, err := os.Stat(dir + "/.git"); err != nil {
-		return fmt.Errorf("clone failed: %s", result)
-	}
-	return nil
+	return fmt.Errorf("GitCloneOrReuse %s failed after 5 attempts: %v", ownerRepo, lastErr)
 }
 
 // GitCheckoutOrCreate checks out a branch, creating it if needed.
