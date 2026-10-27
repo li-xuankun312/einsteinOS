@@ -794,22 +794,14 @@ func ref_split_fork(parent_pid int64, owner, repo, sha string, files []string, t
 	src.WriteString("other files in this repo are handled by OTHER conversations — not your concern.\n")
 	src.WriteString("do NOT explore the repo to find more files to theorize. YOUR scope is FIXED.\n\n")
 
-	// prior chunks: tell child where prior work lives on the dev branch.
-	// each completed chunk's conv JSON + all created files are pushed to
-	// .einsteinOS/chunks/theorize_chunk_N/ on the einsteinOS/theory branch.
-	// child can git clone the dev repo and read prior theory for context.
+	// prior chunks: tell child that prior theory exists, but do NOT give
+	// git clone/push instructions. children waste 10+ rounds trying to push
+	// when they see git URLs and tokens. kernel handles all git operations.
 	if len(priorResults) > 0 {
-		devRepos := GetDevRepos()
-		if len(devRepos) > 0 {
-			src.WriteString("[PRIOR WORK — earlier chunks pushed theory to the dev repo]\n")
-			src.WriteString(fmt.Sprintf("  repo: %s  branch: einsteinOS/theory\n", devRepos[0]))
-			src.WriteString(fmt.Sprintf("  path: .einsteinOS/chunks/  (%d prior chunks)\n", len(priorResults)))
-			src.WriteString("  each chunk dir has: conv.json (full conversation) + all created files\n")
-			src.WriteString("  TOKEN=$(cat /tmp/.gh_token 2>/dev/null)\n")
-			src.WriteString(fmt.Sprintf("  git clone https://${TOKEN}@github.com/%s.git /tmp/devrepo && cd /tmp/devrepo && git checkout einsteinOS/theory\n", devRepos[0]))
-			src.WriteString("  ls .einsteinOS/chunks/  — see all prior chunk outputs\n")
-			src.WriteString("you may read these for context if needed. produce theory for YOUR files only.\n\n")
-		}
+		src.WriteString(fmt.Sprintf("[PRIOR WORK — %d earlier chunks already produced theory for other files]\n", len(priorResults)))
+		src.WriteString("the kernel stores and shares theory across chunks automatically.\n")
+		src.WriteString("do NOT clone, push, or interact with any git repository for storage.\n")
+		src.WriteString("just produce theory for YOUR assigned files, then stop.\n\n")
 	}
 
 	for _, f := range files {
