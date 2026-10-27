@@ -95,8 +95,10 @@ func GitCloneOrReuse(ownerRepo, dir string) error {
 }
 
 // GitCheckoutOrCreate checks out a branch, creating it if needed.
+// No fetch — caller (GitCloneOrReuse) already synced to remote HEAD.
+// An extra fetch here hangs on TLS-flaky networks with no timeout.
 func GitCheckoutOrCreate(repoDir, branch, baseBranch string) error {
-	cmd := fmt.Sprintf("cd %q && git fetch origin 2>/dev/null; "+
+	cmd := fmt.Sprintf("cd %q && "+
 		"git checkout %s 2>/dev/null || (git checkout %s 2>/dev/null || git checkout -b %s 2>/dev/null; git checkout -b %s 2>/dev/null)",
 		repoDir, branch, baseBranch, baseBranch, branch)
 	pid, err := ForkExec(cmd, repoDir)
