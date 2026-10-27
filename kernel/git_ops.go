@@ -41,7 +41,7 @@ func gitStartGuard(gitCmd string, workDir string) (string, bool) {
 	script := "tmpout=$(mktemp)\n" +
 		gitCmd + " >\"$tmpout\" 2>&1 &\n" +
 		"gpid=$!\n" +
-		"sleep 5\n" +
+		"sleep 10\n" +
 		"if [ ! -s \"$tmpout\" ]; then\n" +
 		"  kill $gpid 2>/dev/null; wait $gpid 2>/dev/null\n" +
 		"  rm -f \"$tmpout\"\n" +
@@ -78,7 +78,7 @@ func GitCloneOrReuse(ownerRepo, dir string) error {
 			fetchCmd := fmt.Sprintf("git -C %q fetch origin", dir)
 			result, started := gitStartGuard(fetchCmd, dir)
 			if !started {
-				log.Printf("git_clone_or_reuse: %s attempt %d/10 fetch start timeout (5s)", ownerRepo, attempt)
+				log.Printf("git_clone_or_reuse: %s attempt %d/10 fetch start timeout (10s)", ownerRepo, attempt)
 				lastErr = fmt.Errorf("fetch start timeout")
 				continue // no sleep — only waited 2s
 			}
@@ -104,7 +104,7 @@ func GitCloneOrReuse(ownerRepo, dir string) error {
 		_, started := gitStartGuard(cloneCmd, "/tmp")
 		if !started {
 			os.RemoveAll(dir)
-			log.Printf("git_clone_or_reuse: %s attempt %d/10 clone start timeout (5s)", ownerRepo, attempt)
+			log.Printf("git_clone_or_reuse: %s attempt %d/10 clone start timeout (10s)", ownerRepo, attempt)
 			lastErr = fmt.Errorf("clone start timeout")
 			continue // no sleep — only waited 2s
 		}
@@ -162,7 +162,7 @@ func GitPushRetry(repoDir, ownerRepo, branch string, maxRetry int) error {
 		pushCmd := fmt.Sprintf("cd %q && git push %q %s", repoDir, pushURL, branch)
 		result, started := gitStartGuard(pushCmd, repoDir)
 		if !started {
-			log.Printf("git_push: attempt %d/%d start timeout (5s), retrying", attempt, maxRetry)
+			log.Printf("git_push: attempt %d/%d start timeout (10s), retrying", attempt, maxRetry)
 			continue // no sleep — only waited 2s
 		}
 		// success indicators
