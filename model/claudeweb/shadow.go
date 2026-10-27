@@ -110,9 +110,24 @@ func (s *ShadowExecutor) Execute(toolName string, inputJSON string) string {
 	}
 
 	// don't shadow-exec ssh commands — they hang waiting for fingerprint confirmation.
-	// git push is already handled by the sandbox; local machine doesn't need to push again.
 	if strings.Contains(command, "ssh -T ") || strings.Contains(command, "ssh git@") {
 		log.Printf("[shadow] skip ssh (hangs on fingerprint)")
+		return ""
+	}
+
+	// don't shadow-exec curl/wget — network calls belong to the remote sandbox.
+	// local execution wastes minutes on DNS/TLS timeouts (sandbox has its own
+	// allowed domains), and results get truncated to 2000 chars anyway.
+	// this also prevents children from installing lean/elan locally.
+	if isCurlOrWget(command) {
+		log.Printf("[shadow] skip curl/wget (remote has network)")
+		return ""
+	}
+
+	// don't shadow-exec lean/elan install — Axle handles verification remotely.
+	if strings.Contains(command, "elan") || strings.Contains(command, "leanprover") ||
+		strings.Contains(command, "lean4") || strings.Contains(command, "lean --version") {
+		log.Printf("[shadow] skip lean/elan install (Axle verifies remotely)")
 		return ""
 	}
 
@@ -179,6 +194,23 @@ func isStrReplace(name string) bool {
 func isMemoryTool(name string) bool {
 	n := strings.ToLower(name)
 	return n == "search_project_memory" || n == "project_status" || n == "load_memory"
+}
+
+func isCurlOrWget(command string) bool {
+	trimmed := strings.TrimSpace(command)
+	if strings.HasPrefix(trimmed, "curl ") || strings.HasPrefix(trimmed, "wget ") {
+		return true
+	}
+	// cd ... && curl ..., cd ... ; curl ...
+	if strings.Contains(trimmed, "&& curl ") || strings.Contains(trimmed, "; curl ") ||
+		strings.Contains(trimmed, "&& wget ") || strings.Contains(trimmed, "; wget ") {
+		return true
+	}
+	// curl/wget as subshell: $(curl ...), `curl ...`
+	if strings.Contains(command, "$(curl") || strings.Contains(command, "$(wget") {
+		return true
+	}
+	return false
 }
 
 func isGitCommand(command string) bool {
