@@ -221,6 +221,7 @@ type loopState struct {
 	decidedOnce          bool
 	isChild              bool
 	convID               string
+	sseRecovery          bool // set when we sent bare "Continue" after SSE break; cleared after one round
 }
 
 func (m *Model) completionLoop(ctx context.Context, convID string, webReq *CompletionRequest, stream bool, yield func(*model.LLMResponse, error) bool, opts ...bool) {
@@ -482,6 +483,18 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 				text = "(empty response)"
 			}
 
+			// SSE recovery: the end_turn after a bare "Continue" is the remote
+			// finishing what it was already doing, not a completion signal.
+			// don't let decideNext judge it — the child hasn't even started
+			// its real work yet. send "Continue" and let it keep going.
+			if st.sseRecovery {
+				st.sseRecovery = false
+				log.Printf("claudeweb: SSE recovery round — skipping decideNext, sending Continue")
+				webReq.Prompt = "Continue"
+				webReq.CreateConversationParams = nil
+				continue
+			}
+
 			if st.rounds > 0 && !st.decidedOnce {
 				st.decidedOnce = true
 				var next string
@@ -668,6 +681,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 					}
 				}
 			}
+			st.sseRecovery = true
 			webReq.Prompt = "Continue"
 			webReq.CreateConversationParams = nil
 			continue
