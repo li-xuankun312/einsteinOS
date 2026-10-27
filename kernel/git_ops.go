@@ -155,8 +155,8 @@ func GitCommit(repoDir, message string) bool {
 // 10 attempts: each start-timeout costs 2s, each real failure gets 10s backoff.
 func GitPushRetry(repoDir, ownerRepo, branch string, maxRetry int) error {
 	pushURL := CloneURL(ownerRepo)
-	if maxRetry < 10 {
-		maxRetry = 10 // with 2s start guard, attempts are cheap
+	if maxRetry < 20 {
+		maxRetry = 20 // with 10s start guard, attempts are cheap; network needs 200s window
 	}
 	for attempt := 1; attempt <= maxRetry; attempt++ {
 		pushCmd := fmt.Sprintf("cd %q && git push %q %s", repoDir, pushURL, branch)
