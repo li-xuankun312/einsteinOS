@@ -767,20 +767,13 @@ func ref_split_fork(parent_pid int64, owner, repo, sha string, files []string, t
 	// if source comes first, the child reads 2000+ lines of CUDA and starts
 	// "porting" it instead of writing mathematical theory. instruction must
 	// be the first thing the child sees after the task header.
-	prompt := theorize_instruction +
-		"\nCRITICAL RULES:\n" +
-		"- do NOT write .cu, .cpp, .py, or any implementation code\n" +
-		"- do NOT create build scripts, Makefiles, or test files\n" +
-		"- do NOT push to any git repository\n" +
-		"- ONLY output: ## MODULE headers + LAYER 1a (LaTeX) + LAYER 1b (Lean 4) + LAYER 2 (form template)\n" +
-		"- write theory as TEXT in your response, or use create_file for .md files only\n" +
-		"- STOP when you have covered every file in YOUR assignment. do NOT look for more files.\n\n" +
-		"you may use git to read other files for CONTEXT (understanding types, interfaces, dependencies).\n" +
-		"the bare repo is at " + dir + " — use `git --git-dir=" + dir + " show " + short_sha(sha) + ":<path>`.\n" +
-		"but produce LAYER 1/2 ONLY for YOUR assigned files. when those are done, you are done.\n" +
-		"if any single file is too large to fully analyze, " +
-		"list its functions and produce both layers for the most important ones.\n\n" +
-		"[SOURCE CODE — your complete assignment. write THEORY for these files, then stop]\n\n" +
+	prompt := formatTheorizeInstruction() +
+		fmt.Sprintf("\nyou may use git to read other files for CONTEXT (types, interfaces, dependencies).\n"+
+			"the bare repo is at %s — use `git --git-dir=%s show %s:<path>`.\n"+
+			"produce theory ONLY for YOUR assigned files. when those are done, you are done.\n"+
+			"if any single file is too large, list its functions and cover the most important ones.\n\n"+
+			"[SOURCE CODE — your complete assignment. write .lean theory for these files, then stop]\n\n",
+			dir, dir, short_sha(sha)) +
 		src_text
 
 	role := fmt.Sprintf("theorize_chunk_%d", chunk_idx+1)
@@ -823,12 +816,8 @@ func ref_split_leaf(parent_pid int64, owner, repo, sha string, files []string, t
 
 	src_text := src.String()
 
-	prompt := src_text + theorize_instruction +
-		"the repo is at " + dir + " if you need git.\n\n" +
-		"CRITICAL: output your LAYER 1 and LAYER 2 directly as text in your response. " +
-		"do NOT use create_file, Artifact, or present_files. " +
-		"do NOT write to /mnt/user-data/outputs/. " +
-		"your text response IS the output. just print the math and templates."
+	prompt := src_text + formatTheorizeInstruction() +
+		fmt.Sprintf("the repo is at %s if you need git for context.\n\n", dir)
 
 	pid, err := ForkWithRole(prompt, ".", "theorize_leaf")
 	if err != nil {

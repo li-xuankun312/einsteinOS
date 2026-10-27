@@ -19,77 +19,127 @@ type theorem_entry struct {
 	read_by int64
 }
 
-const theorize_instruction = `OUTPUT FORMAT: for each source file, emit a section headed by:
+// theorize_instruction is a format string. callers must fill:
+//   %[1]s = Axle session cookie
+//   %[2]s = Axle CSRF token
+const theorize_instruction = `OUTPUT FORMAT: one .lean FILE per module, created via create_file.
 
-## MODULE: <short_descriptive_name>
+## FILE NAMING
 
-the module name is an ABSTRACT name you choose based on what the code DOES,
-not the source file path. examples:
-  ## MODULE: expert_cache (expert routing weight cache)
-  ## MODULE: quantized_scaled_attention (QSA kernel)
-  ## MODULE: cuda_graph_executor (graph capture + replay)
-do NOT use the source repo's directory structure or namespaces.
-the downstream developer will create their OWN project layout.
+create_file: /mnt/user-data/outputs/<ModuleName>.lean
 
-under that header, produce THREE layers for every function / struct / method.
+<ModuleName> is an ABSTRACT CamelCase name based on what the code DOES:
+  ExpertResidencyCache.lean   (not expert_cache.hpp)
+  QuantizedScaledAttention.lean (not kernels/qsa.hpp)
+do NOT use the source repo's file paths or namespaces.
 
-[LAYER 1a — MATH (LaTeX)]
-formal specification: types, preconditions, postconditions, invariants.
-use LaTeX. example:
-  \text{SetPosition}: \mathcal{S} \times \mathbb{Z}_{\geq 0} \to \{\top, \bot\},
-  \quad s.\text{pos} \leftarrow p \iff s.\text{handle} \neq \text{null}
+## FILE STRUCTURE
 
-[LAYER 1b — VERIFY (Lean 4)]
-translate the LAYER 1a spec into a Lean 4 theorem with proof.
-the formal_statement has 'sorry', the content has the real proof.
-use omega, decide, simp, norm_num — NOT native_decide.
-example:
-  -- formal_statement
-  theorem set_position_spec (handle : Option Ptr) (pos : Nat) :
-    (handle.isSome → set_position handle pos = true) ∧
-    (handle.isNone → set_position handle pos = false) := by sorry
-  -- proof
-  theorem set_position_spec (handle : Option Ptr) (pos : Nat) :
-    (handle.isSome → set_position handle pos = true) ∧
-    (handle.isNone → set_position handle pos = false) := by
-    constructor <;> intro h <;> simp [set_position, h]
-mark each theorem with: -- axle_verify: formal_statement / content
+every .lean file must follow this structure exactly:
 
-[LAYER 2 — FORM TEMPLATE]
-rewrite every identifier with its structural role:
-  - project namespace  → prjname
-  - adjective prefix   → adj
-  - object class       → Obj
-  - type alias         → typenameType
-  - member handle      → objtype
-  - local result var   → argname
-  - callback/closure   → cbname
-  - index/counter      → idx
-preserve the code structure, braces, control flow, operators exactly.
-example — before:
-  bool LocalFileStream::SetPosition(musik::core::sdk::PositionType position) {
-      if (!this->file) return false;
-      return fseek(this->file, (long)position, SEEK_SET) == 0;
-  }
-after:
-  bool adjObjStream::SetPosition(prjname::core::sdk::typenameType position) {
-      if (!this->objtype) return false;
-      return fseek(this->objtype, (long)position, SEEK_SET) == 0;
-  }
+/-!
+# MODULE: <snake_case_name>
+<1-3 sentences: what this module does>
 
-CRITICAL: do NOT use the source repo's file paths, directory names, or namespaces
-in your ## MODULE headers. the theory is ABSTRACT — the developer reads it to
-understand WHAT to build, not WHERE the source lives. they will NEVER see the
-original source code. if you write "## FILE: include/strata/kernels/qsa.hpp",
-the developer will create that exact path in their own project, which is WRONG.
-write "## MODULE: quantized_scaled_attention" instead.
+## Source semantics
+<the core contract / invariants in natural language — replaces LaTeX>
 
-all three layers are required for every semantic unit. do not skip any layer.
-LAYER 1b is verified by machine (Lean 4 kernel) — if you are unsure of the proof,
-write the formal_statement with sorry and note "proof_needed" so a later pass can fill it.
-the form template is not regex — you must understand each identifier's ROLE
-(handle vs argument vs return value vs namespace) to assign the right tag.
+## Form template identifiers
+<role mapping table for downstream code generation:>
+- project namespace → prjname
+- adjective prefix → adj
+- object class → Obj
+- type alias → typenameType
+- member handle → objtype
+- local result var → argname
+- callback/closure → cbname
+- index/counter → idx
+-/
+
+-- ============================================================
+-- § <semantic_unit_name>
+-- <1-2 line description of this function/struct>
+-- ============================================================
+
+/-- <formal specification as Lean docstring> -/
+theorem <name> ... := by ...
+
+## RULES
+
+1. every theorem MUST type-check. use omega, decide, simp, norm_num.
+   do NOT use native_decide (banned by Axle).
+   if unsure of proof, write sorry with: -- TODO: proof_needed
+2. do NOT write LaTeX. math specs go in Lean type signatures + docstrings.
+3. do NOT write implementation code (.cu, .cpp, .go, .py). the form template
+   identifier mapping goes in the /-! -/ header block as comments, not code.
+4. do NOT write .md files. the ONLY output format is .lean via create_file.
+5. do NOT push to git. the kernel stores your output automatically.
+
+## AXLE VERIFICATION
+
+after writing each .lean file, verify EVERY theorem through Axle.
+for each theorem, run:
+
+  curl -s https://axle.axiommath.ai/api/v1/verify_proof \
+    -H 'content-type: application/json' \
+    -b 'provertools_session=%[1]s' \
+    -H 'x-browser-api-csrf: %[2]s' \
+    -H 'x-request-source: web' \
+    -H 'origin: https://axle.axiommath.ai' \
+    --data-raw '{"formal_statement":"<theorem with sorry>","content":"<theorem with proof>","ignore_imports":true,"environment":"lean-4.35.0","timeout_seconds":120}'
+
+if Axle returns {"okay": false}, FIX the proof and re-verify.
+the verify → fix → re-verify loop is the core of your job.
+do NOT move to the next file until the current file's last theorem passes.
+after the LAST assigned file's LAST theorem passes Axle, write a brief
+summary and stop. the kernel detects Axle success as your completion signal.
+
+## EXAMPLE
+
+-- file: /mnt/user-data/outputs/ExpertResidencyCache.lean
+/-!
+# MODULE: expert_residency_cache
+VRAM slot storage and residency table for expert weight blobs.
+
+## Source semantics
+A fixed-capacity cache in device memory. No eviction.
+Two admission policies: global counter and per-layer (R4.2g).
+
+## Form template identifiers
+- strata::core → prjname::core
+- ExpertCache → AdjCache
+- kNotResident → kNotResident
+- base_ → base_
+- residency_ → residency_
+-/
+
+/-- Flat index injectivity: prevents blob(0,512) aliasing blob(1,0). -/
+theorem flat_index_injective (l1 e1 l2 e2 ne : Nat)
+    (hne : 0 < ne) (he1 : e1 < ne) (he2 : e2 < ne)
+    (h : l1 * ne + e1 = l2 * ne + e2) :
+    l1 = l2 ∧ e1 = e2 := by
+  constructor <;> omega
 `
+
+// axleCredentials returns the session cookie and CSRF token for Axle API calls.
+// reads from env vars AXLE_SESSION and AXLE_CSRF; falls back to built-in defaults.
+func axleCredentials() (session, csrf string) {
+	session = os.Getenv("AXLE_SESSION")
+	csrf = os.Getenv("AXLE_CSRF")
+	if session == "" {
+		session = "eyJicm93c2VyX2FwaV9jc3JmIjogIllGYm5BZ2FQS3ZQdTgwR21KUFVaTkhWVzVHY0hfWF9ZYnhFZnhKcElDdU0ifQ==.atBFEQ.XT1vAvHEhv3QOhNsvZlJwDItLcQ"
+	}
+	if csrf == "" {
+		csrf = "YFbnAgaPKvPu80GmJPUZNHVW5GcH_X_YbxEfxJpICuM"
+	}
+	return
+}
+
+// formatTheorizeInstruction fills the prompt template with Axle credentials.
+func formatTheorizeInstruction() string {
+	session, csrf := axleCredentials()
+	return fmt.Sprintf(theorize_instruction, session, csrf)
+}
 
 var (
 	theorem_table [NR_THEOREMS]theorem_entry
@@ -785,13 +835,12 @@ func ref_theorize_leaf(parent int64, owner, name, sha string, files []string, ta
 			read, dir, sha[:12], sha[:12])
 	}
 
-	prompt := src.String() + extra + theorize_instruction +
-		"you may use git to read other files for CONTEXT (understanding types, interfaces, dependencies).\n" +
-		"the bare repo is at " + dir + " — use `git --git-dir=" + dir + " show " + sha[:12] + ":<path>`.\n" +
-		"do NOT clone the repo again.\n" +
-		"produce LAYER 1/2 ONLY for the files listed above.\n\n" +
-		"write your LAYER 1 and LAYER 2 however you prefer — text, Artifact, or create_file all work. " +
-		"the kernel will download the full conversation after you finish."
+	prompt := src.String() + extra + formatTheorizeInstruction() +
+		fmt.Sprintf("you may use git to read other files for CONTEXT.\n"+
+			"the bare repo is at %s — use `git --git-dir=%s show %s:<path>`.\n"+
+			"do NOT clone the repo again.\n"+
+			"produce .lean theory ONLY for the files listed above.\n",
+			dir, dir, sha[:12])
 
 	child, err := ForkWithRole(prompt, ".", "theorize_full")
 	if err != nil {

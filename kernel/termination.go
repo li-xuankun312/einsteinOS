@@ -407,6 +407,52 @@ func boolStr(b bool) string {
 	return "fail"
 }
 
+// --- AxleVerifyDone: the theory child finished verifying and stopped ---
+// Fires when: (1) at least one Axle verify_proof returned "okay": true,
+// AND (2) a subsequent round had no tool calls (child wrote its summary).
+//
+// This is the natural completion signal for theory chunks: the child
+// processes files in order, calls Axle for each theorem, and after the
+// last file's last theorem passes, it stops calling tools and writes
+// a summary. The kernel doesn't need to know file names or theorem
+// counts — it observes the behavioral transition.
+//
+// If Axle never succeeds (all proofs fail, network down), this never
+// fires and MaxRounds is the safety net.
+
+type AxleVerifyDone struct {
+	verified int  // count of successful Axle verifications
+	postIdle int  // consecutive text-only rounds AFTER at least one verify
+}
+
+func (c *AxleVerifyDone) Check(e ToolEvent) *StopSignal {
+	if e.HasTools {
+		// check if this round had an axle success
+		out := e.Output
+		if (strings.Contains(e.InputRaw, "verify_proof") || strings.Contains(e.InputRaw, "axle")) &&
+			strings.Contains(out, "\"okay\"") && strings.Contains(out, "true") {
+			c.verified++
+			c.postIdle = 0
+		} else {
+			c.postIdle = 0 // still calling tools, reset idle counter
+		}
+	} else {
+		// text-only round
+		if c.verified > 0 {
+			c.postIdle++
+		}
+	}
+	if c.verified > 0 && c.postIdle >= 1 {
+		return &StopSignal{
+			Reason: fmt.Sprintf("axle_done: %d verified, %d idle rounds after", c.verified, c.postIdle),
+			Data:   map[string]string{"axle_verified": fmt.Sprintf("%d", c.verified)},
+		}
+	}
+	return nil
+}
+func (c *AxleVerifyDone) Reset()        { c.verified = 0; c.postIdle = 0 }
+func (c *AxleVerifyDone) String() string { return "AxleVerifyDone" }
+
 // --- preset termination profiles for common roles ---
 
 func TerminationForRole(role string) TerminationCondition {
@@ -422,26 +468,37 @@ func TerminationForRole(role string) TerminationCondition {
 	//
 	// hard timeouts were killing active dev_units (theory_chunk_5 took 85min,
 	// dev_unit_2 took 194min, both legitimately working). removing them.
-	switch role {
-	case "hw_probe", "ref_discover":
+	switch {
+	case role == "hw_probe" || role == "ref_discover":
 		return OrConditions(
 			&MaxRounds{Limit: 3},
 			&ConsecutiveTextRounds{Threshold: 2},
 		)
-	case "dir_survey", "file_survey":
+	case role == "dir_survey" || role == "file_survey":
 		return OrConditions(
 			&MaxRounds{Limit: 2},
 			&ConsecutiveTextRounds{Threshold: 1},
 		)
-	case "theory_planner", "dev_planner":
+	case role == "theory_planner" || role == "dev_planner":
 		return OrConditions(
 			&MaxRounds{Limit: 5},
 			&ConsecutiveTextRounds{Threshold: 2},
 		)
-	case "review_conv":
+	case role == "review_conv":
 		return OrConditions(
 			&MaxRounds{Limit: 10},
 			&ConsecutiveTextRounds{Threshold: 2},
+		)
+	case strings.HasPrefix(role, "theorize_chunk") || role == "theorize_leaf" || role == "theorize_full":
+		// Theory children: done when last file's last theorem passes Axle,
+		// then the child writes a summary (1 text-only round after verify).
+		// MaxRounds{40} is generous — a chunk of 8 files may need 30+ rounds
+		// if proofs fail and need fixing. But without any Axle success,
+		// ConsecutiveTextRounds{3} catches a child that gave up.
+		return OrConditions(
+			&AxleVerifyDone{},
+			&MaxRounds{Limit: 40},
+			&ConsecutiveTextRounds{Threshold: 3},
 		)
 	default:
 		// dev_unit and other roles

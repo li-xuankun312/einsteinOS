@@ -91,11 +91,17 @@ func (s *ShadowExecutor) Execute(toolName string, inputJSON string) string {
 		return ""
 	}
 
-	// don't shadow-exec Axle proof verification locally.
-	// remote sandbox runs it; local machine has no business re-running curl to axiommath.
+	// Axle proof verification runs on the REAL MACHINE, not remote sandbox.
+	// remote sandbox has no network access to axle.axiommath.ai.
+	// real machine can reach it but TLS is flaky — same start-guard + retry as git.
 	if strings.Contains(command, "axle.axiommath.ai") || strings.Contains(command, "verify_proof") {
-		log.Printf("[shadow] skip axle verify_proof")
-		return ""
+		result := axleExecWithRetry(command, s.WorkDir)
+		if result != "" {
+			log.Printf("[shadow] axle verify_proof: got %d bytes", len(result))
+			return result
+		}
+		log.Printf("[shadow] axle verify_proof: all retries failed, letting remote result stand")
+		return "" // empty → writeback skip (model.go) → remote's result stands
 	}
 
 	// don't shadow-exec git commands locally.
@@ -234,6 +240,61 @@ func isGitCommand(command string) bool {
 		return true
 	}
 	return false
+}
+
+// axleExecWithRetry runs an Axle curl command on the real machine with retry.
+// Same strategy as gitStartGuard: background the command, check for output after
+// a timeout, kill if TLS hung. Axle proof verification can take 30-120s for complex
+// proofs, so the start guard is generous (15s for first bytes) but we kill fast if
+// nothing comes back (TLS hang produces zero bytes).
+//
+// returns the curl output on success, "" if all retries exhausted.
+func axleExecWithRetry(command string, workDir string) string {
+	const maxRetry = 5
+	const guardSeconds = 15 // Axle needs time to compile Lean; 15s for first byte is reasonable
+
+	for attempt := 1; attempt <= maxRetry; attempt++ {
+		// start guard: run curl in background, check for output after guardSeconds.
+		// no output = TLS hung or DNS timeout → kill and retry immediately.
+		script := fmt.Sprintf("tmpout=$(mktemp)\n"+
+			"%s >\"$tmpout\" 2>&1 &\n"+
+			"cpid=$!\n"+
+			"sleep %d\n"+
+			"if [ ! -s \"$tmpout\" ]; then\n"+
+			"  kill $cpid 2>/dev/null; wait $cpid 2>/dev/null\n"+
+			"  rm -f \"$tmpout\"\n"+
+			"  exit 124\n"+
+			"fi\n"+
+			"wait $cpid\n"+
+			"code=$?\n"+
+			"cat \"$tmpout\"\n"+
+			"rm -f \"$tmpout\"\n"+
+			"exit $code", command, guardSeconds)
+
+		pid, err := kernel.ForkExec(script, workDir)
+		if err != nil {
+			log.Printf("[shadow] axle attempt %d/%d: fork error: %v", attempt, maxRetry, err)
+			continue
+		}
+		kernel.Wait(pid)
+		result := kernel.GetResult(pid)
+		if strings.TrimSpace(result) == "" {
+			log.Printf("[shadow] axle attempt %d/%d: start timeout (%ds, TLS hung?)", attempt, maxRetry, guardSeconds)
+			continue
+		}
+		// got output — check if it looks like a valid Axle response
+		if strings.Contains(result, "\"okay\"") || strings.Contains(result, "\"error\"") ||
+			strings.Contains(result, "\"timings\"") {
+			log.Printf("[shadow] axle attempt %d/%d: success (%d bytes)", attempt, maxRetry, len(result))
+			return fmt.Sprintf("[pid %d exit=0] %s", pid, result)
+		}
+		// got output but not a valid response (partial, HTML error page, etc)
+		log.Printf("[shadow] axle attempt %d/%d: unexpected response (%d bytes): %s",
+			attempt, maxRetry, len(result), truncateCmd(result, 200))
+		// still return it — the child can parse the error
+		return fmt.Sprintf("[pid %d exit=0] %s", pid, result)
+	}
+	return ""
 }
 
 func truncateCmd(s string, n int) string {
