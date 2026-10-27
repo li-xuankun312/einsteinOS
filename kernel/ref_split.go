@@ -794,14 +794,21 @@ func ref_split_fork(parent_pid int64, owner, repo, sha string, files []string, t
 	src.WriteString("other files in this repo are handled by OTHER conversations — not your concern.\n")
 	src.WriteString("do NOT explore the repo to find more files to theorize. YOUR scope is FIXED.\n\n")
 
-	// prior chunks: tell child that prior theory exists, but do NOT give
-	// git clone/push instructions. children waste 10+ rounds trying to push
-	// when they see git URLs and tokens. kernel handles all git operations.
+	// prior chunks: child can clone the dev repo to READ prior theory.
+	// remote sandbox has fast network. but child must NOT push anything —
+	// kernel handles all git push via ref_store_chunk.
 	if len(priorResults) > 0 {
-		src.WriteString(fmt.Sprintf("[PRIOR WORK — %d earlier chunks already produced theory for other files]\n", len(priorResults)))
-		src.WriteString("the kernel stores and shares theory across chunks automatically.\n")
-		src.WriteString("do NOT clone, push, or interact with any git repository for storage.\n")
-		src.WriteString("just produce theory for YOUR assigned files, then stop.\n\n")
+		devRepos := GetDevRepos()
+		if len(devRepos) > 0 {
+			src.WriteString(fmt.Sprintf("[PRIOR WORK — %d earlier chunks already produced theory for other files]\n", len(priorResults)))
+			src.WriteString("you can READ prior theory for context:\n")
+			src.WriteString(fmt.Sprintf("  git clone https://$(cat /tmp/.gh_token 2>/dev/null)@github.com/%s.git /tmp/devrepo 2>/dev/null\n", devRepos[0]))
+			src.WriteString("  cd /tmp/devrepo && git checkout einsteinOS/theory 2>/dev/null\n")
+			src.WriteString("  ls .einsteinOS/chunks/\n")
+			src.WriteString("this is READ-ONLY context. do NOT git push, git commit, or store anything there.\n")
+			src.WriteString("the kernel stores your output automatically after you finish.\n")
+			src.WriteString("produce theory for YOUR assigned files, then stop.\n\n")
+		}
 	}
 
 	for _, f := range files {
