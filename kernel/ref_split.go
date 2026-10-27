@@ -752,8 +752,8 @@ func ref_split_fork(parent_pid int64, owner, repo, sha string, files []string, t
 		if err != nil {
 			continue
 		}
-		if len(content) > 30000 {
-			content = content[:30000]
+		if len(content) > 300000 {
+			content = content[:300000]
 		}
 		src.WriteString(fmt.Sprintf("=== %s (%d lines) ===\n", f, strings.Count(content, "\n")+1))
 		src.WriteString(content)
@@ -761,9 +761,6 @@ func ref_split_fork(parent_pid int64, owner, repo, sha string, files []string, t
 	}
 
 	src_text := src.String()
-	if len(src_text) > 100000 {
-		src_text = src_text[:100000]
-	}
 
 	// INSTRUCTION FIRST, source code second.
 	// if source comes first, the child reads 2000+ lines of CUDA and starts
@@ -815,8 +812,8 @@ func ref_split_leaf(parent_pid int64, owner, repo, sha string, files []string, t
 		if err != nil {
 			continue
 		}
-		if len(content) > 50000 {
-			content = content[:50000]
+		if len(content) > 300000 {
+			content = content[:300000]
 		}
 		src.WriteString(fmt.Sprintf("=== %s (%d lines) ===\n", f, strings.Count(content, "\n")+1))
 		src.WriteString(content)
@@ -824,9 +821,6 @@ func ref_split_leaf(parent_pid int64, owner, repo, sha string, files []string, t
 	}
 
 	src_text := src.String()
-	if len(src_text) > 120000 {
-		src_text = src_text[:120000]
-	}
 
 	prompt := src_text + theorize_instruction +
 		"the repo is at " + dir + " if you need git.\n\n" +
