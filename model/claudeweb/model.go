@@ -485,8 +485,6 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 
 			// SSE recovery: the end_turn after a bare "Continue" is the remote
 			// finishing what it was already doing, not a completion signal.
-			// don't let decideNext judge it — the child hasn't even started
-			// its real work yet. send "Continue" and let it keep going.
 			if st.sseRecovery {
 				st.sseRecovery = false
 				log.Printf("claudeweb: SSE recovery round — skipping decideNext, sending Continue")
@@ -495,25 +493,34 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 				continue
 			}
 
-			if st.rounds > 0 && !st.decidedOnce {
-				st.decidedOnce = true
-				var next string
-				if stream && kernel.GetConvExec() != nil {
-					next = m.decideNext(text)
-				} else {
-					next = m.decideNextLocal(text)
+			// when a termination condition is set, it is the SOLE authority on
+			// when to stop. text-only rounds feed into ConsecutiveTextRounds /
+			// AxleVerifyDone / MaxRounds — they must NOT shortcut to exitNormal.
+			// the termination check runs below (line ~640) on collectedTools==0.
+			if termCond != nil {
+				log.Printf("claudeweb: text-only round %d, deferring to termination condition", st.rounds)
+				// fall through to the termination check below
+			} else {
+				// no termination condition: original behavior (decideNext / exitNormal)
+				if st.rounds > 0 && !st.decidedOnce {
+					st.decidedOnce = true
+					var next string
+					if stream && kernel.GetConvExec() != nil {
+						next = m.decideNext(text)
+					} else {
+						next = m.decideNextLocal(text)
+					}
+					if next != "" {
+						log.Printf("claudeweb: end_turn -> continue: %s", truncate(next, 120))
+						st.consecutiveContinues = 0
+						webReq.Prompt = next
+						webReq.CreateConversationParams = nil
+						continue
+					}
 				}
-				if next != "" {
-					log.Printf("claudeweb: end_turn -> continue: %s", truncate(next, 120))
-					st.consecutiveContinues = 0
-					webReq.Prompt = next
-					webReq.CreateConversationParams = nil
-					continue
-				}
+				doExit(exitNormal, text)
+				return
 			}
-
-			doExit(exitNormal, text)
-			return
 		}
 
 		if m.Shadow == nil {
