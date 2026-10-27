@@ -494,134 +494,76 @@ func ref_store_chunk(convID string, chunkIdx int, owner, repo string) {
 		log.Printf("ref_store_chunk: %s downloaded %s (%d bytes)", chunkName, baseName, len(fileBytes))
 	}
 
-	// 4. build git script: push to conv/<convID> branch (one branch per chunk)
+	// 4. push to conv/<convID> branch (one branch per chunk)
 	convBranch := fmt.Sprintf("conv/%s", convID[:12])
 	baseBranch := "einsteinOS/theory"
+	repoDir := fmt.Sprintf("/tmp/ref_store_%s", repoName)
 
-	var script strings.Builder
-	// clone to /tmp if not already there — ForkExec runs from /tmp
-	script.WriteString(fmt.Sprintf("TOKEN=$(cat /tmp/.gh_token 2>/dev/null)\n"))
-	script.WriteString(fmt.Sprintf("REPO_DIR=/tmp/ref_store_%s\n", repoName))
-	script.WriteString(fmt.Sprintf("if [ ! -d \"$REPO_DIR/.git\" ]; then\n"))
-	script.WriteString(fmt.Sprintf("  git clone \"https://${TOKEN}@github.com/%s.git\" \"$REPO_DIR\" 2>/dev/null\n", devRepos[0]))
-	script.WriteString(fmt.Sprintf("fi\n"))
-	script.WriteString(fmt.Sprintf("cd \"$REPO_DIR\"\n"))
-	script.WriteString(fmt.Sprintf("git config user.email \"einsteinOS@kernel\" 2>/dev/null\n"))
-	script.WriteString(fmt.Sprintf("git config user.name \"einsteinOS\" 2>/dev/null\n"))
-	script.WriteString("git fetch origin 2>/dev/null\n")
-	// branch off the theory base (or main if theory branch doesn't exist yet)
-	script.WriteString(fmt.Sprintf("git checkout %s 2>/dev/null || git checkout -b %s 2>/dev/null\n", baseBranch, baseBranch))
-	script.WriteString(fmt.Sprintf("git checkout -b %s 2>/dev/null\n", convBranch))
-	script.WriteString(fmt.Sprintf("mkdir -p .einsteinOS/chunks/%s\n", chunkName))
+	// clone, checkout, copy files, commit — all via Go functions
+	if err := GitCloneOrReuse(devRepos[0], repoDir); err != nil {
+		log.Printf("ref_store_chunk: %s clone failed: %v", chunkName, err)
+		return
+	}
+	if err := GitCheckoutOrCreate(repoDir, convBranch, baseBranch); err != nil {
+		log.Printf("ref_store_chunk: %s checkout failed: %v", chunkName, err)
+		return
+	}
 
-	// copy conv JSON
-	convDest := fmt.Sprintf(".einsteinOS/chunks/%s/conv.json", chunkName)
-	script.WriteString(fmt.Sprintf("cp %s %s\n", convTmp, convDest))
-	script.WriteString(fmt.Sprintf("git add %s\n", convDest))
+	// copy conv JSON + downloaded files into the work tree
+	gitChunkDir := fmt.Sprintf("%s/.einsteinOS/chunks/%s", repoDir, chunkName)
+	os.MkdirAll(chunkDir, 0755)
 
-	// copy all downloaded files
+	convDest := fmt.Sprintf("%s/conv.json", gitChunkDir)
+	copyFile(convTmp, convDest)
 	for i, localTmp := range downloadedFiles {
-		script.WriteString(fmt.Sprintf("cp %s %s\n", localTmp, destPaths[i]))
-		script.WriteString(fmt.Sprintf("git add %s\n", destPaths[i]))
+		copyFile(localTmp, fmt.Sprintf("%s/%s", repoDir, destPaths[i]))
 	}
 
-	script.WriteString(fmt.Sprintf("git commit -m \"theory: %s — conv %s, %d files\" --allow-empty 2>/dev/null\n",
-		chunkName, convID[:8], len(downloadedFiles)))
-	// git push with retry — TLS handshake timeouts are frequent on this machine
-	script.WriteString(fmt.Sprintf(`PUSH_OK=0
-for attempt in 1 2 3 4 5; do
-  git push "https://${TOKEN}@github.com/%s.git" %s 2>/dev/null && PUSH_OK=1 && break
-  echo "push attempt $attempt failed, retrying in 10s..."
-  sleep 10
-done
-if [ "$PUSH_OK" = "1" ]; then
-  echo "pushed %s"
-else
-  echo "push failed after 5 attempts"
-  exit 1
-fi
-`, devRepos[0], convBranch, convBranch))
+	commitMsg := fmt.Sprintf("theory: %s — conv %s, %d files", chunkName, convID[:8], len(downloadedFiles))
+	GitCommit(repoDir, commitMsg)
 
-	child, forkErr := ForkExec(script.String(), "/tmp")
-	if forkErr != nil {
-		log.Printf("ref_store_chunk: %s ForkExec failed: %v", chunkName, forkErr)
+	// push with retry (Go-native, not bash)
+	if err := GitPushRetry(repoDir, devRepos[0], convBranch, 5); err != nil {
+		log.Printf("ref_store_chunk: %s push failed: %v", chunkName, err)
 		return
 	}
-	_, pushExit, _ := Wait(child)
-	pushResult := GetResult(child)
-	if pushExit != 0 {
-		log.Printf("ref_store_chunk: %s push failed after retries: %s", chunkName, truncSplit(pushResult, 200))
-		return
-	}
-	log.Printf("ref_store_chunk: %s pushed to %s:%s — %d files, conv.json (%d bytes raw): %s",
-		chunkName, devRepos[0], convBranch, len(downloadedFiles), len(rawJSON), strings.TrimSpace(pushResult))
+	log.Printf("ref_store_chunk: %s pushed to %s:%s — %d files, conv.json (%d bytes raw)",
+		chunkName, devRepos[0], convBranch, len(downloadedFiles), len(rawJSON))
 
-	// 5. open PR: conv/<convID> → einsteinOS/theory via GitHub API
+	// 5. ensure base branch exists on remote, then open PR
+	_ = GitPushRetry(repoDir, devRepos[0], baseBranch, 3)
+
 	devParts := strings.Split(devRepos[0], "/")
 	if len(devParts) != 2 {
 		log.Printf("ref_store_chunk: %s can't parse owner/repo from %s, skipping PR", chunkName, devRepos[0])
 		return
 	}
 	prTitle := fmt.Sprintf("theory: %s — %d files", chunkName, len(downloadedFiles))
-	prBody := fmt.Sprintf("conv: %s\\nchunk: %d\\nfiles: %d\\nraw: %d bytes", convID[:8], chunkIdx, len(downloadedFiles), len(rawJSON))
+	prBody := fmt.Sprintf("conv: %s\nchunk: %d\nfiles: %d\nraw: %d bytes", convID[:8], chunkIdx, len(downloadedFiles), len(rawJSON))
 
-	// ensure base branch + open PR, both with retry
-	prScript := fmt.Sprintf(`TOKEN=$(cat /tmp/.gh_token 2>/dev/null)
-cd /tmp/ref_store_%s
-# ensure base branch exists on remote (first chunk creates it)
-for attempt in 1 2 3; do
-  git push "https://${TOKEN}@github.com/%s.git" %s 2>/dev/null && break
-  sleep 5
-done
-# open PR with retry
-PR_OK=0
-for attempt in 1 2 3; do
-  RESULT=$(curl -s -w "\n%%%%{http_code}" -X POST \
-    -H "Authorization: token ${TOKEN}" \
-    -H "Accept: application/vnd.github.v3+json" \
-    "https://api.github.com/repos/%s/%s/pulls" \
-    -d '{
-      "title": "%s",
-      "body": "%s",
-      "head": "%s",
-      "base": "%s"
-    }' 2>&1)
-  HTTP_CODE=$(echo "$RESULT" | tail -1)
-  BODY=$(echo "$RESULT" | sed '$d')
-  if [ "$HTTP_CODE" = "201" ] || [ "$HTTP_CODE" = "422" ]; then
-    echo "$BODY"
-    PR_OK=1
-    break
-  fi
-  echo "PR attempt $attempt got $HTTP_CODE, retrying in 10s..."
-  sleep 10
-done
-if [ "$PR_OK" = "0" ]; then
-  echo "PR failed after 3 attempts"
-fi`,
-		repoName,
-		devRepos[0], baseBranch,
-		devParts[0], devParts[1],
-		prTitle, prBody,
-		convBranch, baseBranch)
-
-	prPid, prErr := ForkExec(prScript, "/tmp")
+	prResult, prErr := CreateGitHubPR(devParts[0], devParts[1], convBranch, baseBranch, prTitle, prBody)
 	if prErr != nil {
 		log.Printf("ref_store_chunk: %s PR creation failed: %v", chunkName, prErr)
-		return
+	} else {
+		log.Printf("ref_store_chunk: %s PR %s → %s: %s",
+			chunkName, convBranch, baseBranch, truncSplit(prResult, 200))
 	}
-	Wait(prPid)
-	prResult := GetResult(prPid)
-	log.Printf("ref_store_chunk: %s PR %s → %s: %s",
-		chunkName, convBranch, baseBranch, truncSplit(prResult, 200))
 }
 
 func truncSplit(s string, n int) string {
-	s = strings.TrimSpace(s)
-	if len(s) <= n {
-		return s
+	return truncStr(strings.TrimSpace(s), n)
+}
+
+func copyFile(src, dst string) error {
+	// ensure parent dir exists
+	if idx := strings.LastIndex(dst, "/"); idx > 0 {
+		os.MkdirAll(dst[:idx], 0755)
 	}
-	return s[:n] + "..."
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(dst, data, 0644)
 }
 
 // ---------------------------------------------------------------------------
@@ -794,20 +736,11 @@ func ref_split_fork(parent_pid int64, owner, repo, sha string, files []string, t
 	src.WriteString("other files in this repo are handled by OTHER conversations — not your concern.\n")
 	src.WriteString("do NOT explore the repo to find more files to theorize. YOUR scope is FIXED.\n\n")
 
-	// prior chunks: child can clone the dev repo to READ prior theory.
-	// remote sandbox has fast network. but child must NOT push anything —
-	// kernel handles all git push via ref_store_chunk.
+	// prior chunks: dynamically constructed from GetDevRepos()
 	if len(priorResults) > 0 {
 		devRepos := GetDevRepos()
 		if len(devRepos) > 0 {
-			src.WriteString(fmt.Sprintf("[PRIOR WORK — %d earlier chunks already produced theory for other files]\n", len(priorResults)))
-			src.WriteString("you can READ prior theory for context:\n")
-			src.WriteString(fmt.Sprintf("  git clone https://$(cat /tmp/.gh_token 2>/dev/null)@github.com/%s.git /tmp/devrepo 2>/dev/null\n", devRepos[0]))
-			src.WriteString("  cd /tmp/devrepo && git checkout einsteinOS/theory 2>/dev/null\n")
-			src.WriteString("  ls .einsteinOS/chunks/\n")
-			src.WriteString("this is READ-ONLY context. do NOT git push, git commit, or store anything there.\n")
-			src.WriteString("the kernel stores your output automatically after you finish.\n")
-			src.WriteString("produce theory for YOUR assigned files, then stop.\n\n")
+			src.WriteString(PriorChunksContext(len(priorResults), devRepos[0]))
 		}
 	}
 
