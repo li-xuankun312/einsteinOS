@@ -251,12 +251,14 @@ func isGitCommand(command string) bool {
 // returns the curl output on success, "" if all retries exhausted.
 func axleExecWithRetry(command string, workDir string) string {
 	const maxRetry = 20
-	const guardSeconds = 10 // TLS either connects in 2-3s or hangs; 10s is generous for first byte
 
 	for attempt := 1; attempt <= maxRetry; attempt++ {
-		// start guard: run curl in background, check for output after guardSeconds.
-		// no output = TLS hung or DNS timeout → kill and retry immediately.
-		// 20 attempts × 10s = 200s window — catches flaky TLS that 5×15s misses.
+		// two-phase guard: first 10 attempts × 10s (fast scan for quick recovery),
+		// next 10 × 20s (patient wait for longer outages). total window ~300s.
+		guardSeconds := 10
+		if attempt > 10 {
+			guardSeconds = 20
+		}
 		script := fmt.Sprintf("tmpout=$(mktemp)\n"+
 			"%s >\"$tmpout\" 2>&1 &\n"+
 			"cpid=$!\n"+
