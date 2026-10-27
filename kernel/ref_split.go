@@ -65,6 +65,7 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 		}
 
 		result := GetResult(child_pid)
+		rawResult := result // keep original stdout for refusal detection (before download overwrites)
 
 		// always try DownloadConv — child writes theory to create_file
 		// (e.g. strata_chunk2_analysis.md with ## FILE: headers),
@@ -167,10 +168,10 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 			log.Printf("ref_split: chunk %d/%d result too thin (%d bytes)", i+1, len(chunks), len(result))
 			needsRetry = true
 		}
-		if strings.Contains(result, "don't have any prior context") ||
-			strings.Contains(result, "social engineering") ||
-			strings.Contains(result, "no earlier tool calls") ||
-			strings.Contains(result, "don't have context") {
+		if strings.Contains(rawResult, "don't have any prior context") ||
+			strings.Contains(rawResult, "social engineering") ||
+			strings.Contains(rawResult, "no earlier tool calls") ||
+			strings.Contains(rawResult, "don't have context") {
 			log.Printf("ref_split: chunk %d/%d child refused (writeback confusion), retrying fresh",
 				i+1, len(chunks))
 			needsRetry = true
