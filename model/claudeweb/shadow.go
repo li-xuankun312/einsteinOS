@@ -1,10 +1,14 @@
 package claudeweb
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
+	"os/exec"
 	"strings"
+	"time"
 
 	"google.golang.org/adk/v2/kernel"
 )
@@ -251,47 +255,26 @@ func isGitCommand(command string) bool {
 // returns the curl output on success, "" if all retries exhausted.
 // axleExecWithRetry runs an Axle curl on the real machine.
 //
-// the proxy (socks5://127.0.0.1:1080) is the primary path — usually faster and more
-// reliable than direct. but when the proxy has a bad moment, all attempts through it
-// hang on TLS. strategy: proxy 3x → direct 1x (probe) → proxy 3x.
-// the direct probe breaks a proxy-down streak; the second proxy round catches recovery.
-// total: 7 attempts, ~105s worst case.
+// proxy (socks5://127.0.0.1:1080) is the primary path. direct is a single fallback
+// probe when proxy has a bad streak. strategy: proxy 3x → direct 1x → proxy 3x.
+//
+// uses Go-native exec.CommandContext with context.WithTimeout instead of shell sleep,
+// because ForkExec's bash sleep was being skipped (20 attempts logged in 1 second).
 func axleExecWithRetry(command string, workDir string) string {
 	type round struct {
-		name   string
-		prefix string
-		tries  int
+		name    string
+		envUnset bool // true = unset proxy env vars (direct path)
+		tries   int
 	}
 	rounds := []round{
-		{"proxy", "", 3},                                                           // primary path
-		{"direct", "env -u https_proxy -u http_proxy -u all_proxy ", 1},            // fallback probe
-		{"proxy", "", 3},                                                           // proxy may have recovered
+		{"proxy", false, 3},
+		{"direct", true, 1},
+		{"proxy", false, 3},
 	}
 
 	for _, r := range rounds {
 		for attempt := 1; attempt <= r.tries; attempt++ {
-			script := fmt.Sprintf("tmpout=$(mktemp)\n"+
-				"%s%s >\"$tmpout\" 2>&1 &\n"+
-				"cpid=$!\n"+
-				"sleep 15\n"+
-				"if [ ! -s \"$tmpout\" ]; then\n"+
-				"  kill $cpid 2>/dev/null; wait $cpid 2>/dev/null\n"+
-				"  rm -f \"$tmpout\"\n"+
-				"  exit 124\n"+
-				"fi\n"+
-				"wait $cpid\n"+
-				"code=$?\n"+
-				"cat \"$tmpout\"\n"+
-				"rm -f \"$tmpout\"\n"+
-				"exit $code", r.prefix, command)
-
-			pid, err := kernel.ForkExec(script, workDir)
-			if err != nil {
-				log.Printf("[shadow] axle %s %d/%d: fork error: %v", r.name, attempt, r.tries, err)
-				continue
-			}
-			kernel.Wait(pid)
-			result := kernel.GetResult(pid)
+			result := axleExecOnce(command, workDir, r.envUnset, 15*time.Second)
 			if strings.TrimSpace(result) == "" {
 				log.Printf("[shadow] axle %s %d/%d: timeout (15s)", r.name, attempt, r.tries)
 				continue
@@ -299,15 +282,50 @@ func axleExecWithRetry(command string, workDir string) string {
 			if strings.Contains(result, "\"okay\"") || strings.Contains(result, "\"error\"") ||
 				strings.Contains(result, "\"timings\"") || strings.Contains(result, "\"user_error\"") {
 				log.Printf("[shadow] axle %s %d/%d: success (%d bytes)", r.name, attempt, r.tries, len(result))
-				return fmt.Sprintf("[pid %d exit=0] %s", pid, result)
+				return fmt.Sprintf("[pid 0 exit=0] %s", result)
 			}
 			log.Printf("[shadow] axle %s %d/%d: unexpected (%d bytes): %s",
 				r.name, attempt, r.tries, len(result), truncateCmd(result, 200))
-			return fmt.Sprintf("[pid %d exit=0] %s", pid, result)
+			return fmt.Sprintf("[pid 0 exit=0] %s", result)
 		}
 	}
 	log.Printf("[shadow] axle: all rounds exhausted (proxy 3 + direct 1 + proxy 3)")
 	return ""
+}
+
+// axleExecOnce runs a curl command with a Go-native timeout. no shell sleep, no ForkExec.
+func axleExecOnce(command string, workDir string, unsetProxy bool, timeout time.Duration) string {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "bash", "-c", command)
+	if workDir != "" {
+		cmd.Dir = workDir
+	}
+	// inherit env, optionally strip proxy
+	env := os.Environ()
+	if unsetProxy {
+		filtered := make([]string, 0, len(env))
+		for _, e := range env {
+			lower := strings.ToLower(e)
+			if strings.HasPrefix(lower, "https_proxy=") || strings.HasPrefix(lower, "http_proxy=") ||
+				strings.HasPrefix(lower, "all_proxy=") {
+				continue
+			}
+			filtered = append(filtered, e)
+		}
+		env = filtered
+	}
+	cmd.Env = env
+
+	out, err := cmd.Output()
+	if ctx.Err() == context.DeadlineExceeded {
+		return "" // timeout — caller logs it
+	}
+	if err != nil && len(out) == 0 {
+		return "" // failed with no output
+	}
+	return string(out)
 }
 
 func truncateCmd(s string, n int) string {
