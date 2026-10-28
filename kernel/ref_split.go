@@ -91,9 +91,8 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 					i+1, len(chunks), len(result), err)
 			}
 
-			// push everything (conv JSON + all created files) to GitHub.
-			// subsequent chunks git checkout and read prior work directly.
-			ref_store_chunk(convID, i+1, owner, repo)
+			// ref_store_chunk is called AFTER thin-check + polling below.
+			// don't push until we have final data.
 		}
 
 		// theory completeness: count ## MODULE: or ## FILE: headers vs assigned files.
@@ -378,6 +377,16 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 		}
 
 		results = append(results, result)
+		// push final data to GitHub (after all polling, retries, ContinueConv).
+		// use the best convID: retry conv if it produced more, else original.
+		storeConvID := convID
+		if lastRetryConvID != "" {
+			storeConvID = lastRetryConvID
+		}
+		if storeConvID != "" {
+			ref_store_chunk(storeConvID, i+1, owner, repo)
+		}
+
 		log.Printf("ref_split: %s/%s@%s chunk %d/%d done (%d bytes)",
 			owner, repo, short_sha(sha), i+1, len(chunks), len(result))
 	}
