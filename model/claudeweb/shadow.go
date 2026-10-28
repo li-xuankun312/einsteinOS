@@ -251,25 +251,25 @@ func isGitCommand(command string) bool {
 // returns the curl output on success, "" if all retries exhausted.
 // axleExecWithRetry runs an Axle curl on the real machine.
 //
-// the real machine may have https_proxy=socks5://127.0.0.1:1080 set, which routes
-// curl through a SOCKS proxy. when the proxy is down, every attempt through it hangs
-// on TLS — retrying 20 times wastes 300s on a dead path.
-//
-// strategy: try TWO paths (direct, then proxy), 3 attempts each. if both paths time
-// out, the network is genuinely down and retrying won't help. total worst case: 6
-// attempts × 15s = 90s, not 300s.
+// the proxy (socks5://127.0.0.1:1080) is the primary path — usually faster and more
+// reliable than direct. but when the proxy has a bad moment, all attempts through it
+// hang on TLS. strategy: proxy 3x → direct 1x (probe) → proxy 3x.
+// the direct probe breaks a proxy-down streak; the second proxy round catches recovery.
+// total: 7 attempts, ~105s worst case.
 func axleExecWithRetry(command string, workDir string) string {
-	// try direct first (bypass proxy), then with proxy
-	paths := []struct {
+	type round struct {
 		name   string
-		prefix string // prepended to the curl command
-	}{
-		{"direct", "env -u https_proxy -u http_proxy -u all_proxy "},
-		{"proxy", ""}, // inherits the environment's proxy
+		prefix string
+		tries  int
+	}
+	rounds := []round{
+		{"proxy", "", 3},                                                           // primary path
+		{"direct", "env -u https_proxy -u http_proxy -u all_proxy ", 1},            // fallback probe
+		{"proxy", "", 3},                                                           // proxy may have recovered
 	}
 
-	for _, path := range paths {
-		for attempt := 1; attempt <= 3; attempt++ {
+	for _, r := range rounds {
+		for attempt := 1; attempt <= r.tries; attempt++ {
 			script := fmt.Sprintf("tmpout=$(mktemp)\n"+
 				"%s%s >\"$tmpout\" 2>&1 &\n"+
 				"cpid=$!\n"+
@@ -283,33 +283,30 @@ func axleExecWithRetry(command string, workDir string) string {
 				"code=$?\n"+
 				"cat \"$tmpout\"\n"+
 				"rm -f \"$tmpout\"\n"+
-				"exit $code", path.prefix, command)
+				"exit $code", r.prefix, command)
 
 			pid, err := kernel.ForkExec(script, workDir)
 			if err != nil {
-				log.Printf("[shadow] axle %s attempt %d/3: fork error: %v", path.name, attempt, err)
+				log.Printf("[shadow] axle %s %d/%d: fork error: %v", r.name, attempt, r.tries, err)
 				continue
 			}
 			kernel.Wait(pid)
 			result := kernel.GetResult(pid)
 			if strings.TrimSpace(result) == "" {
-				log.Printf("[shadow] axle %s attempt %d/3: timeout (15s)", path.name, attempt)
+				log.Printf("[shadow] axle %s %d/%d: timeout (15s)", r.name, attempt, r.tries)
 				continue
 			}
-			// got output — check if it's a valid Axle response
 			if strings.Contains(result, "\"okay\"") || strings.Contains(result, "\"error\"") ||
 				strings.Contains(result, "\"timings\"") || strings.Contains(result, "\"user_error\"") {
-				log.Printf("[shadow] axle %s attempt %d/3: success (%d bytes)", path.name, attempt, len(result))
+				log.Printf("[shadow] axle %s %d/%d: success (%d bytes)", r.name, attempt, r.tries, len(result))
 				return fmt.Sprintf("[pid %d exit=0] %s", pid, result)
 			}
-			// got output but not a valid response
-			log.Printf("[shadow] axle %s attempt %d/3: unexpected (%d bytes): %s",
-				path.name, attempt, len(result), truncateCmd(result, 200))
+			log.Printf("[shadow] axle %s %d/%d: unexpected (%d bytes): %s",
+				r.name, attempt, r.tries, len(result), truncateCmd(result, 200))
 			return fmt.Sprintf("[pid %d exit=0] %s", pid, result)
 		}
-		log.Printf("[shadow] axle %s: 3 attempts exhausted, trying next path", path.name)
 	}
-	log.Printf("[shadow] axle: both direct and proxy paths failed")
+	log.Printf("[shadow] axle: all rounds exhausted (proxy 3 + direct 1 + proxy 3)")
 	return ""
 }
 
