@@ -42,17 +42,15 @@ const thi_structure = `each .lean file:
 then sections (-- § name) with theorems. every theorem gets a /-- docstring -/.
 `
 
-const thi_proofs = `PROOF STYLE — study the reference repo before writing.
+const thi_proofs = `PROOF STYLE — BEFORE writing any .lean file, run this:
 
-git clone https://github.com/openai/math.git /tmp/openai_math
-browse lean/OAI/ for real Lean 4 proofs of research-level theorems.
-notice: proofs are STRUCTURED — main theorems cite helper lemmas,
-complex goals are decomposed with 'have' and 'obtain', tactics only
-close small leaf goals. do NOT write flat 'by omega' proofs for
-nontrivial goals. decompose first, then close each piece.
+  git clone --depth=1 https://github.com/openai/math.git /tmp/openai_math
 
-if a goal has variable multiplication (a * b < c * d), omega will fail.
-use nlinarith, or factor with have-steps so each step is linear.
+then read 3-5 files under /tmp/openai_math/lean/OAI/ to see how real
+Lean 4 proofs are structured. notice: they decompose goals with 'have'
+and 'obtain', main theorems cite helper lemmas, tactics only close
+small leaf goals. model your proofs after what you see there.
+
 do NOT use native_decide (Axle bans it).
 if you cannot prove something, write sorry. do NOT change the theorem statement.
 `
