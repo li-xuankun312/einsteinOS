@@ -66,8 +66,13 @@ theorem <name> ... := by ...
 
 ## RULES
 
-1. every theorem MUST type-check. use omega, decide, simp, norm_num.
+1. every theorem MUST type-check. tactic priority (try in this order):
+   simp, ring, linarith, nlinarith, omega, norm_num, exact?, aesop.
+   omega ONLY handles linear integer arithmetic — if the goal has
+   multiplication of variables (a * b), use nlinarith or ring instead.
    do NOT use native_decide (banned by Axle).
+   if a proof fails and you cannot fix it, write sorry — do NOT change
+   the theorem statement (name, parameters, conclusion) to make it easier.
    if unsure of proof, write sorry with: -- TODO: proof_needed
 2. do NOT write LaTeX. math specs go in Lean type signatures + docstrings.
 3. do NOT write implementation code (.cu, .cpp, .go, .py). the form template

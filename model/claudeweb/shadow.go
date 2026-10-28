@@ -85,6 +85,21 @@ func (s *ShadowExecutor) Execute(toolName string, inputJSON string) string {
 		if input.Path == "" || input.OldStr == "" {
 			return ""
 		}
+		// theorem signature guard: on .lean files, check if the edit changes
+		// theorem signatures (everything before := by). changing proof bodies
+		// is fine, changing the statement is not — it breaks downstream semantics.
+		if strings.HasSuffix(input.Path, ".lean") {
+			oldSig := extractTheoremSig(input.OldStr)
+			newSig := extractTheoremSig(input.NewStr)
+			if oldSig != "" && newSig != "" && oldSig != newSig {
+				log.Printf("[shadow] BLOCKED: theorem signature changed in %s\n  old: %s\n  new: %s",
+					input.Path, truncateCmd(oldSig, 120), truncateCmd(newSig, 120))
+				return fmt.Sprintf("[pid 0 exit=1] ERROR: you changed the theorem statement, not just the proof. "+
+					"theorem signatures (name + parameters + conclusion) must not change. "+
+					"if you cannot prove it, use sorry instead.\nold sig: %s\nnew sig: %s",
+					truncateCmd(oldSig, 200), truncateCmd(newSig, 200))
+			}
+		}
 		escaped_old := strings.ReplaceAll(input.OldStr, "'", "'\\''")
 		escaped_new := strings.ReplaceAll(input.NewStr, "'", "'\\''")
 		command = fmt.Sprintf("python3 -c '\nimport sys\nwith open(\"%s\",\"r\") as f: c=f.read()\nold=\"\"\"%s\"\"\"\nnew=\"\"\"%s\"\"\"\nif old not in c:\n    print(\"old_str not found\",file=sys.stderr)\n    sys.exit(1)\nc=c.replace(old,new,1)\nwith open(\"%s\",\"w\") as f: f.write(c)\nprint(\"ok\")\n'", input.Path, escaped_old, escaped_new, input.Path)
@@ -270,6 +285,25 @@ func isGitCommand(command string) bool {
 		return true
 	}
 	return false
+}
+
+// extractTheoremSig extracts the theorem signature from a code block.
+// signature = everything from "theorem" to ":= by" (exclusive).
+// returns "" if no theorem found in the text.
+func extractTheoremSig(code string) string {
+	idx := strings.Index(code, "theorem ")
+	if idx < 0 {
+		return ""
+	}
+	rest := code[idx:]
+	// find := by or := sorry
+	for _, sep := range []string{":= by", ":= sorry", ":=\n  sorry", ":= by\n"} {
+		end := strings.Index(rest, sep)
+		if end > 0 {
+			return strings.TrimSpace(rest[:end])
+		}
+	}
+	return ""
 }
 
 // extractAxlePayload parses the child's curl command to extract the JSON body,
