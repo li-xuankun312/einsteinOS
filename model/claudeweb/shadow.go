@@ -335,10 +335,17 @@ func axleExecWithRetry(payload, session, csrf string) string {
 
 	for _, r := range rounds {
 		for attempt := 1; attempt <= r.tries; attempt++ {
+			t0 := time.Now()
 			result := axleHTTPOnce(payload, session, csrf, r.proxy == "direct", r.guard)
+			elapsed := time.Since(t0)
 			trimmed := strings.TrimSpace(result)
 			if trimmed == "" {
-				log.Printf("[shadow] axle %s %d/%d: timeout (%s)", r.name, attempt, r.tries, r.guard)
+				log.Printf("[shadow] axle %s %d/%d: timeout (%s, took %s)", r.name, attempt, r.tries, r.guard, elapsed.Round(time.Second))
+				// if request returned instantly (connection refused, not timeout),
+				// wait to avoid 11 attempts in 1 second
+				if elapsed < 3*time.Second {
+					time.Sleep(3*time.Second - elapsed)
+				}
 				continue
 			}
 			if strings.HasPrefix(trimmed, "Usage: curl") || strings.HasPrefix(trimmed, "<!DOCTYPE") ||
@@ -413,10 +420,15 @@ func axleExecWithRetryCurl(command string, workDir string) string {
 
 	for _, r := range rounds {
 		for attempt := 1; attempt <= r.tries; attempt++ {
+			t0 := time.Now()
 			result := axleExecOnce(command, workDir, r.envUnset, r.guard)
+			elapsed := time.Since(t0)
 			trimmed := strings.TrimSpace(result)
 			if trimmed == "" {
-				log.Printf("[shadow] axle-curl %s %d/%d: timeout (%s)", r.name, attempt, r.tries, r.guard)
+				log.Printf("[shadow] axle-curl %s %d/%d: timeout (%s, took %s)", r.name, attempt, r.tries, r.guard, elapsed.Round(time.Second))
+				if elapsed < 3*time.Second {
+					time.Sleep(3*time.Second - elapsed)
+				}
 				continue
 			}
 			if strings.HasPrefix(trimmed, "Usage: curl") || strings.HasPrefix(trimmed, "<!DOCTYPE") ||
