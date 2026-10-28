@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"strings"
@@ -97,15 +99,27 @@ func (s *ShadowExecutor) Execute(toolName string, inputJSON string) string {
 
 	// Axle proof verification runs on the REAL MACHINE, not remote sandbox.
 	// remote sandbox has no network access to axle.axiommath.ai.
-	// real machine can reach it but TLS is flaky — same start-guard + retry as git.
+	// extract JSON payload from the curl command and call Axle via Go http.Post
+	// to avoid shell escaping issues ("Request body must be valid JSON").
 	if strings.Contains(command, "axle.axiommath.ai") || strings.Contains(command, "verify_proof") {
-		result := axleExecWithRetry(command, s.WorkDir)
+		payload, session, csrf := extractAxlePayload(command)
+		if payload != "" {
+			result := axleExecWithRetry(payload, session, csrf)
+			if result != "" {
+				log.Printf("[shadow] axle verify_proof: got %d bytes", len(result))
+				return result
+			}
+			log.Printf("[shadow] axle verify_proof: all retries failed, letting remote result stand")
+			return ""
+		}
+		// couldn't extract payload — try raw curl as fallback
+		result := axleExecWithRetryCurl(command, s.WorkDir)
 		if result != "" {
-			log.Printf("[shadow] axle verify_proof: got %d bytes", len(result))
+			log.Printf("[shadow] axle verify_proof (curl fallback): got %d bytes", len(result))
 			return result
 		}
 		log.Printf("[shadow] axle verify_proof: all retries failed, letting remote result stand")
-		return "" // empty → writeback skip (model.go) → remote's result stands
+		return ""
 	}
 
 	// don't shadow-exec git commands locally.
@@ -246,31 +260,129 @@ func isGitCommand(command string) bool {
 	return false
 }
 
-// axleExecWithRetry runs an Axle curl command on the real machine with retry.
-// Same strategy as gitStartGuard: background the command, check for output after
-// a timeout, kill if TLS hung. Axle proof verification can take 30-120s for complex
-// proofs, so the start guard is generous (15s for first bytes) but we kill fast if
-// nothing comes back (TLS hang produces zero bytes).
-//
-// returns the curl output on success, "" if all retries exhausted.
-// axleExecWithRetry runs an Axle curl on the real machine.
-//
-// proxy (socks5://127.0.0.1:1080) is the primary path. direct is a single fallback
-// probe when proxy has a bad streak. strategy: proxy 3x → direct 1x → proxy 3x.
-//
-// uses Go-native exec.CommandContext with context.WithTimeout instead of shell sleep,
-// because ForkExec's bash sleep was being skipped (20 attempts logged in 1 second).
-func axleExecWithRetry(command string, workDir string) string {
-	type round struct {
-		name    string
-		envUnset bool   // true = unset proxy env vars (direct path)
-		tries   int
-		guard   time.Duration
+// extractAxlePayload parses the child's curl command to extract the JSON body,
+// session cookie, and CSRF token. returns ("","","") if it can't parse.
+func extractAxlePayload(command string) (payload, session, csrf string) {
+	// extract --data-raw or -d payload
+	for _, prefix := range []string{"--data-raw '", "--data-raw \"", "-d '", "-d \""} {
+		idx := strings.Index(command, prefix)
+		if idx < 0 {
+			continue
+		}
+		start := idx + len(prefix)
+		quote := prefix[len(prefix)-1] // matching quote character
+		end := strings.Index(command[start:], string(quote))
+		if end < 0 {
+			continue
+		}
+		payload = command[start : start+end]
+		break
 	}
-	// two-phase like the original 20x design: fast scan then patient wait.
-	// proxy(5×15s) → direct(1×15s) → proxy(5×20s). total ~190s worst case.
-	// proxy success often comes on attempt 2-3 (TLS session cache), so 5
-	// gives good odds. direct probe breaks a proxy-down streak.
+	// extract session cookie
+	if idx := strings.Index(command, "provertools_session="); idx >= 0 {
+		rest := command[idx+len("provertools_session="):]
+		end := strings.IndexAny(rest, "'; \"")
+		if end > 0 {
+			session = rest[:end]
+		}
+	}
+	// extract CSRF
+	if idx := strings.Index(command, "x-browser-api-csrf: "); idx >= 0 {
+		rest := command[idx+len("x-browser-api-csrf: "):]
+		end := strings.IndexAny(rest, "' \"")
+		if end > 0 {
+			csrf = rest[:end]
+		}
+	}
+	return
+}
+
+// axleExecWithRetry calls Axle via Go http.Post — no shell, no escaping issues.
+func axleExecWithRetry(payload, session, csrf string) string {
+	type round struct {
+		name  string
+		proxy string // "" = use env proxy, "direct" = no proxy
+		tries int
+		guard time.Duration
+	}
+	rounds := []round{
+		{"proxy", "", 5, 15 * time.Second},
+		{"direct", "direct", 1, 15 * time.Second},
+		{"proxy", "", 5, 20 * time.Second},
+	}
+
+	for _, r := range rounds {
+		for attempt := 1; attempt <= r.tries; attempt++ {
+			result := axleHTTPOnce(payload, session, csrf, r.proxy == "direct", r.guard)
+			trimmed := strings.TrimSpace(result)
+			if trimmed == "" {
+				log.Printf("[shadow] axle %s %d/%d: timeout (%s)", r.name, attempt, r.tries, r.guard)
+				continue
+			}
+			if strings.HasPrefix(trimmed, "Usage: curl") || strings.HasPrefix(trimmed, "<!DOCTYPE") ||
+				strings.HasPrefix(trimmed, "<html") {
+				log.Printf("[shadow] axle %s %d/%d: garbage (%d bytes)", r.name, attempt, r.tries, len(result))
+				continue
+			}
+			log.Printf("[shadow] axle %s %d/%d: got response (%d bytes)", r.name, attempt, r.tries, len(result))
+			return fmt.Sprintf("[pid 0 exit=0] %s", result)
+		}
+	}
+	log.Printf("[shadow] axle: all rounds exhausted (proxy 5 + direct 1 + proxy 5)")
+	return ""
+}
+
+// axleHTTPOnce sends a single Axle verification request via Go net/http.
+func axleHTTPOnce(payload, session, csrf string, directNoProxy bool, timeout time.Duration) string {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	var transport *http.Transport
+	if directNoProxy {
+		transport = &http.Transport{
+			Proxy: nil, // no proxy
+			TLSHandshakeTimeout: timeout,
+		}
+	} else {
+		// use default transport which inherits env proxy (socks5://127.0.0.1:1080)
+		transport = &http.Transport{
+			TLSHandshakeTimeout: timeout,
+		}
+	}
+	client := &http.Client{Transport: transport, Timeout: timeout}
+
+	req, err := http.NewRequestWithContext(ctx, "POST",
+		"https://axle.axiommath.ai/api/v1/verify_proof",
+		strings.NewReader(payload))
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Request-Source", "web")
+	req.Header.Set("Origin", "https://axle.axiommath.ai")
+	req.Header.Set("X-Browser-Api-Csrf", csrf)
+	req.Header.Set("Cookie", "provertools_session="+session)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "" // timeout or connection error
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	return string(body)
+}
+
+// axleExecWithRetryCurl is the fallback: runs the raw curl command via shell.
+// used when extractAxlePayload can't parse the child's curl command.
+// axleExecWithRetryCurl is the fallback when extractAxlePayload can't parse the curl.
+// runs the raw curl command via exec.CommandContext with retry.
+func axleExecWithRetryCurl(command string, workDir string) string {
+	type round struct {
+		name     string
+		envUnset bool
+		tries    int
+		guard    time.Duration
+	}
 	rounds := []round{
 		{"proxy", false, 5, 15 * time.Second},
 		{"direct", true, 1, 15 * time.Second},
@@ -282,24 +394,19 @@ func axleExecWithRetry(command string, workDir string) string {
 			result := axleExecOnce(command, workDir, r.envUnset, r.guard)
 			trimmed := strings.TrimSpace(result)
 			if trimmed == "" {
-				log.Printf("[shadow] axle %s %d/%d: timeout (%s)", r.name, attempt, r.tries, r.guard)
+				log.Printf("[shadow] axle-curl %s %d/%d: timeout (%s)", r.name, attempt, r.tries, r.guard)
 				continue
 			}
-			// reject known garbage — curl help, HTML error pages.
-			// everything else is an Axle response in some format: single theorem
-			// {"okay":true}, batch result "fii_v1: okay=False", content with
-			// {"content":"import Mathlib..."}, user_error, etc. return it all.
 			if strings.HasPrefix(trimmed, "Usage: curl") || strings.HasPrefix(trimmed, "<!DOCTYPE") ||
 				strings.HasPrefix(trimmed, "<html") {
-				log.Printf("[shadow] axle %s %d/%d: garbage (%d bytes): %s",
-					r.name, attempt, r.tries, len(result), truncateCmd(result, 100))
-				continue // garbage = retry, not return
+				log.Printf("[shadow] axle-curl %s %d/%d: garbage (%d bytes)", r.name, attempt, r.tries, len(result))
+				continue
 			}
-			log.Printf("[shadow] axle %s %d/%d: got response (%d bytes)", r.name, attempt, r.tries, len(result))
+			log.Printf("[shadow] axle-curl %s %d/%d: got response (%d bytes)", r.name, attempt, r.tries, len(result))
 			return fmt.Sprintf("[pid 0 exit=0] %s", result)
 		}
 	}
-	log.Printf("[shadow] axle: all rounds exhausted (proxy 5 + direct 1 + proxy 5)")
+	log.Printf("[shadow] axle-curl: all rounds exhausted")
 	return ""
 }
 
