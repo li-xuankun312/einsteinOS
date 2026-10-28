@@ -104,6 +104,17 @@ func (s *ShadowExecutor) Execute(toolName string, inputJSON string) string {
 	if strings.Contains(command, "axle.axiommath.ai") || strings.Contains(command, "verify_proof") {
 		payload, session, csrf := extractAxlePayload(command)
 		if payload != "" {
+			// validate: payload should be parseable JSON
+			if !json.Valid([]byte(payload)) {
+				log.Printf("[shadow] axle: extracted payload is not valid JSON (%d bytes): %s",
+					len(payload), truncateCmd(payload, 150))
+				// fall through to curl fallback
+				payload = ""
+			}
+		}
+		if payload != "" {
+			log.Printf("[shadow] axle: using Go HTTP path (payload=%d bytes, session=%d, csrf=%d)",
+				len(payload), len(session), len(csrf))
 			result := axleExecWithRetry(payload, session, csrf)
 			if result != "" {
 				log.Printf("[shadow] axle verify_proof: got %d bytes", len(result))
@@ -113,6 +124,7 @@ func (s *ShadowExecutor) Execute(toolName string, inputJSON string) string {
 			return ""
 		}
 		// couldn't extract payload — try raw curl as fallback
+		log.Printf("[shadow] axle: using curl fallback (extraction failed)")
 		result := axleExecWithRetryCurl(command, s.WorkDir)
 		if result != "" {
 			log.Printf("[shadow] axle verify_proof (curl fallback): got %d bytes", len(result))
@@ -263,17 +275,27 @@ func isGitCommand(command string) bool {
 // extractAxlePayload parses the child's curl command to extract the JSON body,
 // session cookie, and CSRF token. returns ("","","") if it can't parse.
 func extractAxlePayload(command string) (payload, session, csrf string) {
-	// extract --data-raw or -d payload
+	// extract --data-raw or -d payload.
+	// JSON may contain single quotes (Lean syntax: 'a), so find the closing
+	// quote from the END: the last }' or }" in the command is the end of the payload.
 	for _, prefix := range []string{"--data-raw '", "--data-raw \"", "-d '", "-d \""} {
 		idx := strings.Index(command, prefix)
 		if idx < 0 {
 			continue
 		}
 		start := idx + len(prefix)
-		quote := prefix[len(prefix)-1] // matching quote character
-		end := strings.Index(command[start:], string(quote))
+		quote := string(prefix[len(prefix)-1])
+		// find last occurrence of }<quote> (JSON object end + shell close)
+		closer := "}" + quote
+		end := strings.LastIndex(command[start:], closer)
 		if end < 0 {
-			continue
+			// maybe no trailing }, try just the last quote
+			end = strings.LastIndex(command[start:], quote)
+			if end < 0 {
+				continue
+			}
+		} else {
+			end += 1 // include the }
 		}
 		payload = command[start : start+end]
 		break
