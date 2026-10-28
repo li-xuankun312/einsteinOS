@@ -700,18 +700,19 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 					time.Sleep(3 * time.Second)
 					continue
 				}
-				// server finished — not pending, not error. download may need a few
-				// retries: is_pending=false can arrive before the conversation is persisted.
+				// server finished — not pending, not error. download may need retries:
+				// is_pending=false can arrive before the conversation is fully persisted,
+				// or the server may still be flushing tool results to storage.
 				{
 					var tools []RecoveredTool
-					for dl := 0; dl < 3; dl++ {
+					for dl := 0; dl < 6; dl++ {
 						var dlErr error
 						tools, dlErr = m.client.DownloadLastTools(convID)
 						if dlErr == nil && len(tools) > 0 {
 							break
 						}
-						log.Printf("claudeweb: SSE recovery download attempt %d/3: %v (tools=%d)", dl+1, dlErr, len(tools))
-						time.Sleep(3 * time.Second)
+						log.Printf("claudeweb: SSE recovery download attempt %d/6: %v (tools=%d)", dl+1, dlErr, len(tools))
+						time.Sleep(5 * time.Second)
 					}
 					if len(tools) == 0 {
 						log.Printf("claudeweb: SSE recovery download exhausted, no tools found")
