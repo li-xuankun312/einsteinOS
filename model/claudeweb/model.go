@@ -680,54 +680,66 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 			log.Printf("claudeweb: stop_reason empty with %d tools — SSE broke, recovering via probe+download",
 				len(collectedTools))
 
-			// 1. poll: try download every 5s for up to 3 minutes.
-			//    completion_status is_pending=false may just mean "SSE stream dropped",
-			//    not "generation finished". so we don't rely on it — just try downloading
-			//    repeatedly until we get the assistant message with tool_use blocks.
+			// 1. probe completion_status (cheap GET, 3s interval) until server finishes.
+			// 2. wait 10s for persistence after idle.
+			// 3. download conversation (max 3 tries, 10s apart).
 			recovered := false
-			for probe := 0; probe < 36; probe++ { // 36 × 5s = 3 min
-				time.Sleep(5 * time.Second)
-				tools, dlErr := m.client.DownloadLastTools(convID)
-				if dlErr != nil || len(tools) == 0 {
-					// check if server is still generating
-					pending, _, _ := m.client.CompletionStatus(convID)
-					if pending {
-						log.Printf("claudeweb: SSE recovery probe %d: server still pending", probe)
-					} else {
-						log.Printf("claudeweb: SSE recovery probe %d: download empty (server idle, may be persisting)", probe)
-					}
+
+			// phase 1: wait for server to finish generating (max 3 min)
+			for probe := 0; probe < 60; probe++ {
+				time.Sleep(3 * time.Second)
+				pending, isErr, err := m.client.CompletionStatus(convID)
+				if err != nil {
+					log.Printf("claudeweb: SSE recovery probe %d: status error %v", probe, err)
 					continue
 				}
-				{
-					log.Printf("claudeweb: SSE recovery downloaded %d tools from conversation", len(tools))
-
-					// shadow-exec each tool and build writeback
-					var recoveredResults []ToolResult
-					for _, t := range tools {
-						result := m.Shadow.Execute(t.Name, t.Input)
-						if result == "" {
-							continue // shadow skipped (axle, git, etc) — let remote result stand
-						}
-						recoveredResults = append(recoveredResults, ToolResult{
-							ToolUseID: t.ID,
-							Content:   result,
-						})
-					}
-
-					// build writeback with recovered results
-					var localDiff strings.Builder
-					localDiff.WriteString("Continue. Note: the following tools were executed on the LOCAL machine (source of truth). If any results differ from your sandbox, use these:\n\n")
-					for _, tr := range recoveredResults {
-						localDiff.WriteString(fmt.Sprintf("[%s] %s\n\n", tr.ToolUseID, truncate(tr.Content, 500)))
-					}
-					log.Printf("claudeweb: SSE recovery writeback %d results", len(recoveredResults))
-
-					st.totalTools += len(tools)
-					webReq.Prompt = localDiff.String()
-					webReq.CreateConversationParams = nil
-					recovered = true
+				if isErr {
+					log.Printf("claudeweb: SSE recovery: server error, skipping")
 					break
 				}
+				if !pending {
+					log.Printf("claudeweb: SSE recovery probe %d: server idle", probe)
+					break
+				}
+				if probe%10 == 0 {
+					log.Printf("claudeweb: SSE recovery probe %d: still pending", probe)
+				}
+			}
+
+			// phase 2: wait for persistence, then download
+			time.Sleep(10 * time.Second)
+			for dl := 0; dl < 3; dl++ {
+				tools, dlErr := m.client.DownloadLastTools(convID)
+				if dlErr != nil || len(tools) == 0 {
+					log.Printf("claudeweb: SSE recovery download %d/3: %v (tools=%d)", dl+1, dlErr, len(tools))
+					time.Sleep(10 * time.Second)
+					continue
+				}
+				log.Printf("claudeweb: SSE recovery downloaded %d tools from conversation", len(tools))
+
+				var recoveredResults []ToolResult
+				for _, t := range tools {
+					result := m.Shadow.Execute(t.Name, t.Input)
+					if result == "" {
+						continue
+					}
+					recoveredResults = append(recoveredResults, ToolResult{
+						ToolUseID: t.ID,
+						Content:   result,
+					})
+				}
+				var localDiff strings.Builder
+				localDiff.WriteString("Continue. Note: the following tools were executed on the LOCAL machine (source of truth). If any results differ from your sandbox, use these:\n\n")
+				for _, tr := range recoveredResults {
+					localDiff.WriteString(fmt.Sprintf("[%s] %s\n\n", tr.ToolUseID, truncate(tr.Content, 500)))
+				}
+				log.Printf("claudeweb: SSE recovery writeback %d results", len(recoveredResults))
+
+				st.totalTools += len(tools)
+				webReq.Prompt = localDiff.String()
+				webReq.CreateConversationParams = nil
+				recovered = true
+				break
 			}
 
 			if !recovered {
