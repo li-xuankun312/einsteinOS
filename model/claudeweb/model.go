@@ -680,44 +680,25 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 			log.Printf("claudeweb: stop_reason empty with %d tools — SSE broke, recovering via probe+download",
 				len(collectedTools))
 
-			// 1. poll completion_status until server finishes (max 90s, 3s intervals)
-			//    this is a lightweight GET — no completion request, no quota consumed.
-			//    the real browser client uses the same endpoint for SSE recovery.
+			// 1. poll: try download every 5s for up to 3 minutes.
+			//    completion_status is_pending=false may just mean "SSE stream dropped",
+			//    not "generation finished". so we don't rely on it — just try downloading
+			//    repeatedly until we get the assistant message with tool_use blocks.
 			recovered := false
-			for probe := 0; probe < 30; probe++ {
-				pending, isErr, err := m.client.CompletionStatus(convID)
-				if err != nil {
-					log.Printf("claudeweb: SSE recovery status %d: error %v", probe, err)
-					time.Sleep(3 * time.Second)
+			for probe := 0; probe < 36; probe++ { // 36 × 5s = 3 min
+				time.Sleep(5 * time.Second)
+				tools, dlErr := m.client.DownloadLastTools(convID)
+				if dlErr != nil || len(tools) == 0 {
+					// check if server is still generating
+					pending, _, _ := m.client.CompletionStatus(convID)
+					if pending {
+						log.Printf("claudeweb: SSE recovery probe %d: server still pending", probe)
+					} else {
+						log.Printf("claudeweb: SSE recovery probe %d: download empty (server idle, may be persisting)", probe)
+					}
 					continue
 				}
-				if isErr {
-					log.Printf("claudeweb: SSE recovery: server reported error, skipping download")
-					break
-				}
-				if pending {
-					log.Printf("claudeweb: SSE recovery status %d: still pending", probe)
-					time.Sleep(3 * time.Second)
-					continue
-				}
-				// server finished — not pending, not error. download may need retries:
-				// is_pending=false can arrive before the conversation is fully persisted,
-				// or the server may still be flushing tool results to storage.
 				{
-					var tools []RecoveredTool
-					for dl := 0; dl < 6; dl++ {
-						var dlErr error
-						tools, dlErr = m.client.DownloadLastTools(convID)
-						if dlErr == nil && len(tools) > 0 {
-							break
-						}
-						log.Printf("claudeweb: SSE recovery download attempt %d/6: %v (tools=%d)", dl+1, dlErr, len(tools))
-						time.Sleep(5 * time.Second)
-					}
-					if len(tools) == 0 {
-						log.Printf("claudeweb: SSE recovery download exhausted, no tools found")
-						break
-					}
 					log.Printf("claudeweb: SSE recovery downloaded %d tools from conversation", len(tools))
 
 					// shadow-exec each tool and build writeback
