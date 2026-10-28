@@ -263,21 +263,26 @@ func isGitCommand(command string) bool {
 func axleExecWithRetry(command string, workDir string) string {
 	type round struct {
 		name    string
-		envUnset bool // true = unset proxy env vars (direct path)
+		envUnset bool   // true = unset proxy env vars (direct path)
 		tries   int
+		guard   time.Duration
 	}
+	// two-phase like the original 20x design: fast scan then patient wait.
+	// proxy(5×15s) → direct(1×15s) → proxy(5×20s). total ~190s worst case.
+	// proxy success often comes on attempt 2-3 (TLS session cache), so 5
+	// gives good odds. direct probe breaks a proxy-down streak.
 	rounds := []round{
-		{"proxy", false, 3},
-		{"direct", true, 1},
-		{"proxy", false, 3},
+		{"proxy", false, 5, 15 * time.Second},
+		{"direct", true, 1, 15 * time.Second},
+		{"proxy", false, 5, 20 * time.Second},
 	}
 
 	for _, r := range rounds {
 		for attempt := 1; attempt <= r.tries; attempt++ {
-			result := axleExecOnce(command, workDir, r.envUnset, 15*time.Second)
+			result := axleExecOnce(command, workDir, r.envUnset, r.guard)
 			trimmed := strings.TrimSpace(result)
 			if trimmed == "" {
-				log.Printf("[shadow] axle %s %d/%d: timeout (15s)", r.name, attempt, r.tries)
+				log.Printf("[shadow] axle %s %d/%d: timeout (%s)", r.name, attempt, r.tries, r.guard)
 				continue
 			}
 			// reject known garbage — curl help, HTML error pages.
@@ -294,7 +299,7 @@ func axleExecWithRetry(command string, workDir string) string {
 			return fmt.Sprintf("[pid 0 exit=0] %s", result)
 		}
 	}
-	log.Printf("[shadow] axle: all rounds exhausted (proxy 3 + direct 1 + proxy 3)")
+	log.Printf("[shadow] axle: all rounds exhausted (proxy 5 + direct 1 + proxy 5)")
 	return ""
 }
 
