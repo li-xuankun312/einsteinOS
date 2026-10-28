@@ -490,15 +490,18 @@ func TerminationForRole(role string) TerminationCondition {
 			&ConsecutiveTextRounds{Threshold: 2},
 		)
 	case strings.HasPrefix(role, "theorize_chunk") || role == "theorize_leaf" || role == "theorize_full":
-		// Theory children: done when last file's last theorem passes Axle,
-		// then the child writes a summary (1 text-only round after verify).
-		// MaxRounds{40} is generous — a chunk of 8 files may need 30+ rounds
-		// if proofs fail and need fixing. But without any Axle success,
-		// ConsecutiveTextRounds{3} catches a child that gave up.
+		// Theory children: ConsecutiveTextRounds{4} detects when the child stops
+		// calling tools (done or stuck). MaxRounds{40} is the safety net.
+		//
+		// AxleVerifyDone removed — it fired too early (2 verified + 3 idle on a
+		// chunk with 40+ theorems). SSE recovery, api_throttle sleep, and mid-work
+		// explanations all produce text-only rounds that look like idle but aren't.
+		// ConsecutiveTextRounds{4} is sufficient: a child that truly finishes will
+		// stop using tools for 4+ rounds, and one that's still working will always
+		// call a tool within 3 rounds (read file, write theorem, verify).
 		return OrConditions(
-			&AxleVerifyDone{},
 			&MaxRounds{Limit: 40},
-			&ConsecutiveTextRounds{Threshold: 3},
+			&ConsecutiveTextRounds{Threshold: 4},
 		)
 	default:
 		// dev_unit and other roles
