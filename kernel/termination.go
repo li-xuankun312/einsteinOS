@@ -442,7 +442,7 @@ func (c *AxleVerifyDone) Check(e ToolEvent) *StopSignal {
 			c.postIdle++
 		}
 	}
-	if c.verified > 0 && c.postIdle >= 1 {
+	if c.verified > 0 && c.postIdle >= 3 {
 		return &StopSignal{
 			Reason: fmt.Sprintf("axle_done: %d verified, %d idle rounds after", c.verified, c.postIdle),
 			Data:   map[string]string{"axle_verified": fmt.Sprintf("%d", c.verified)},
