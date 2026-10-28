@@ -185,7 +185,8 @@ func CreateGitHubPR(owner, repo, head, base, title, body string) (string, error)
 		return "", fmt.Errorf("no GitHub token")
 	}
 
-	for attempt := 1; attempt <= 3; attempt++ {
+	const maxAttempts = 10
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		jsonBody := fmt.Sprintf(`{"title":%q,"body":%q,"head":%q,"base":%q}`, title, body, head, base)
 		cmd := fmt.Sprintf(`curl -s -w "\n%%{http_code}" -X POST `+
 			`-H "Authorization: token %s" `+
@@ -193,34 +194,44 @@ func CreateGitHubPR(owner, repo, head, base, title, body string) (string, error)
 			`"https://api.github.com/repos/%s/%s/pulls" `+
 			`-d '%s' 2>&1`, token, owner, repo, jsonBody)
 
-		pid, err := ForkExec(cmd, "/tmp")
-		if err != nil {
-			log.Printf("create_pr: attempt %d/3 fork error: %v", attempt, err)
-			time.Sleep(10 * time.Second)
+		result, started := gitStartGuard(cmd, "/tmp")
+		if !started {
+			log.Printf("create_pr: attempt %d/%d start timeout (TLS), retrying", attempt, maxAttempts)
 			continue
 		}
-		Wait(pid)
-		result := GetResult(pid)
 
 		lines := strings.Split(strings.TrimSpace(result), "\n")
 		httpCode := ""
 		if len(lines) > 0 {
 			httpCode = lines[len(lines)-1]
 		}
+		prBody := strings.Join(lines[:len(lines)-1], "\n")
 
-		if httpCode == "201" || httpCode == "422" {
-			// 201 = created, 422 = already exists
-			prBody := strings.Join(lines[:len(lines)-1], "\n")
+		if httpCode == "201" {
 			log.Printf("create_pr: %s/%s %s→%s: HTTP %s", owner, repo, head, base, httpCode)
 			return prBody, nil
 		}
+		// 422 "already exists" is success; 422 "head invalid" means conv branch
+		// didn't push — retry (the branch might land on a later attempt).
+		if httpCode == "422" {
+			if strings.Contains(prBody, "already exists") {
+				log.Printf("create_pr: %s/%s %s→%s: HTTP 422 (already exists)", owner, repo, head, base)
+				return prBody, nil
+			}
+			log.Printf("create_pr: attempt %d/%d HTTP 422 head invalid — conv branch may not have pushed, retrying",
+				attempt, maxAttempts)
+			if attempt < maxAttempts {
+				time.Sleep(10 * time.Second)
+			}
+			continue
+		}
 
-		log.Printf("create_pr: attempt %d/3 got HTTP %s, retrying", attempt, httpCode)
-		if attempt < 3 {
+		log.Printf("create_pr: attempt %d/%d got HTTP %s, retrying", attempt, maxAttempts, httpCode)
+		if attempt < maxAttempts {
 			time.Sleep(10 * time.Second)
 		}
 	}
-	return "", fmt.Errorf("PR creation failed after 3 attempts")
+	return "", fmt.Errorf("PR creation failed after %d attempts", maxAttempts)
 }
 
 // PriorChunksContext builds the [PRIOR WORK] section for a theory chunk prompt.

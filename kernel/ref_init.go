@@ -77,8 +77,8 @@ theorem <name> ... := by ...
 
 ## AXLE VERIFICATION
 
-after writing each .lean file, verify EVERY theorem through Axle.
-for each theorem, run:
+after writing each .lean file, verify each theorem through Axle using EXACTLY
+this curl template — one bash_tool call per theorem, no batching:
 
   curl -s https://axle.axiommath.ai/api/v1/verify_proof \
     -H 'content-type: application/json' \
@@ -88,11 +88,22 @@ for each theorem, run:
     -H 'origin: https://axle.axiommath.ai' \
     --data-raw '{"formal_statement":"<theorem with sorry>","content":"<theorem with proof>","ignore_imports":true,"environment":"lean-4.35.0","timeout_seconds":120}'
 
-if Axle returns {"okay": false}, FIX the proof and re-verify.
-the verify → fix → re-verify loop is the core of your job.
-do NOT move to the next file until the current file's last theorem passes.
-after the LAST assigned file's LAST theorem passes Axle, write a brief
-summary and stop. the kernel detects Axle success as your completion signal.
+if Axle returns {"okay": false}, FIX the proof and re-verify with the same curl.
+if Axle times out or returns a network error, SKIP that theorem and move on —
+the kernel retries on its side.
+
+CRITICAL RULES FOR VERIFICATION:
+- use ONLY the curl template above. do NOT write your own verification scripts
+  (no verify_all.sh, no axle_verify.py, no batch runners). the kernel controls
+  verification; self-written scripts can produce false positives.
+- one curl call = one theorem. the formal_statement has sorry, the content has the proof.
+- do NOT echo/print the curl command — run it directly in bash_tool.
+- the kernel reads Axle responses from the tool results. it counts {"okay": true}
+  as a verified theorem. your self-reported counts (e.g. "85 theorems, 0 sorry")
+  are not trusted — only Axle responses count.
+
+after the LAST assigned file's LAST theorem passes Axle (or you've attempted
+all theorems and some timed out), write a brief summary and stop.
 
 ## EXAMPLE
 
