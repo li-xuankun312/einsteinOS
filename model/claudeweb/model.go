@@ -680,16 +680,28 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 			log.Printf("claudeweb: stop_reason empty with %d tools — SSE broke, recovering via probe+download",
 				len(collectedTools))
 
-			// 1. probe until the server finishes generating (max 60s, 5s intervals)
+			// 1. poll completion_status until server finishes (max 90s, 3s intervals)
+			//    this is a lightweight GET — no completion request, no quota consumed.
+			//    the real browser client uses the same endpoint for SSE recovery.
 			recovered := false
-			for probe := 0; probe < 12; probe++ {
-				busy, err := m.client.ProbeConvBusy(convID)
+			for probe := 0; probe < 30; probe++ {
+				pending, isErr, err := m.client.CompletionStatus(convID)
 				if err != nil {
-					log.Printf("claudeweb: SSE recovery probe %d: error %v", probe, err)
-					time.Sleep(5 * time.Second)
+					log.Printf("claudeweb: SSE recovery status %d: error %v", probe, err)
+					time.Sleep(3 * time.Second)
 					continue
 				}
-				if !busy {
+				if isErr {
+					log.Printf("claudeweb: SSE recovery: server reported error, skipping download")
+					break
+				}
+				if pending {
+					log.Printf("claudeweb: SSE recovery status %d: still pending", probe)
+					time.Sleep(3 * time.Second)
+					continue
+				}
+				// server finished — not pending, not error
+				{
 					// server finished — download the complete response
 					tools, dlErr := m.client.DownloadLastTools(convID)
 					if dlErr != nil || len(tools) == 0 {
@@ -725,7 +737,6 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 					recovered = true
 					break
 				}
-				time.Sleep(5 * time.Second)
 			}
 
 			if !recovered {

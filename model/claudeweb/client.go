@@ -452,7 +452,7 @@ type RecoveredTool struct {
 // but the SSE stream broke, so we download the complete response and extract the
 // tools we missed.
 func (c *Client) DownloadLastTools(convID string) ([]RecoveredTool, error) {
-	raw, err := c.DownloadConversationRaw(convID)
+	raw, err := c.DownloadConversationEventual(convID)
 	if err != nil {
 		return nil, err
 	}
@@ -497,6 +497,75 @@ func (c *Client) DownloadLastTools(convID string) ([]RecoveredTool, error) {
 		})
 	}
 	return tools, nil
+}
+
+// CompletionStatus checks if a conversation's generation is still in progress.
+// lightweight GET — no completion request, no quota consumed, no side effects.
+// this is the endpoint the real browser client uses for SSE recovery.
+// returns: pending (still generating), error state, or idle (done).
+func (c *Client) CompletionStatus(convID string) (pending bool, isError bool, err error) {
+	url := fmt.Sprintf("%s/api/organizations/%s/chat_conversations/%s/completion_status?poll=false",
+		c.baseURL, c.orgID, convID)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return false, false, fmt.Errorf("create status request: %w", err)
+	}
+	req.Header.Set("Accept", "*/*")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Cookie", c.cookie)
+	req.Header.Set("anthropic-client-platform", "web_claude_ai")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return false, false, fmt.Errorf("status http: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		return false, false, fmt.Errorf("status %d: %s", resp.StatusCode, truncBody(body))
+	}
+
+	var status struct {
+		IsPending bool   `json:"is_pending"`
+		IsError   bool   `json:"is_error"`
+		ErrorCode string `json:"error_code"`
+	}
+	if json.Unmarshal(body, &status) != nil {
+		return false, false, fmt.Errorf("parse status: %s", truncBody(body))
+	}
+
+	return status.IsPending, status.IsError, nil
+}
+
+// DownloadConversationEventual downloads a conversation with eventual consistency
+// and return_dangling_human_message=true — the parameters the real browser client
+// uses after SSE recovery, which ensures the latest assistant message is included.
+func (c *Client) DownloadConversationEventual(convID string) ([]byte, error) {
+	url := fmt.Sprintf("%s/api/organizations/%s/chat_conversations/%s?tree=True&rendering_mode=messages&render_all_tools=true&consistency=eventual&return_dangling_human_message=true",
+		c.baseURL, c.orgID, convID)
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Cookie", c.cookie)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("download-eventual %s: status %d", convID[:8], resp.StatusCode)
+	}
+	return body, nil
 }
 
 // ProbeConvBusy checks if a remote conversation's code execution environment is busy.
