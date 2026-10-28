@@ -496,6 +496,10 @@ func ref_store_chunk(convID string, chunkIdx int, owner, repo string) {
 	}
 
 	// 4. push to conv/<convID> branch (one branch per chunk)
+	if len(downloadedFiles) == 0 {
+		log.Printf("ref_store_chunk: %s 0 files downloaded, skipping push+PR", chunkName)
+		return
+	}
 	convBranch := fmt.Sprintf("conv/%s", convID[:12])
 	baseBranch := "einsteinOS/theory"
 	repoDir := fmt.Sprintf("/tmp/ref_store_%s", repoName)
