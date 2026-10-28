@@ -19,114 +19,62 @@ type theorem_entry struct {
 	read_by int64
 }
 
-// theorize_instruction is a format string. callers must fill:
-//   %[1]s = Axle session cookie
-//   %[2]s = Axle CSRF token
-const theorize_instruction = `OUTPUT FORMAT: one .lean FILE per module, created via create_file.
+// theorize_instruction pieces — assembled by formatTheorizeInstruction.
+// kept as separate consts so each is readable and grep-able.
 
-## FILE NAMING
+const thi_output = `output one .lean file per module via create_file.
+file: /mnt/user-data/outputs/<CamelCaseName>.lean — name by what the code DOES, not the source path.
+`
 
-create_file: /mnt/user-data/outputs/<ModuleName>.lean
-
-<ModuleName> is an ABSTRACT CamelCase name based on what the code DOES:
-  ExpertResidencyCache.lean   (not expert_cache.hpp)
-  QuantizedScaledAttention.lean (not kernels/qsa.hpp)
-do NOT use the source repo's file paths or namespaces.
-
-## FILE STRUCTURE
-
-every .lean file must follow this structure exactly:
+const thi_structure = `each .lean file:
 
 /-!
 # MODULE: <snake_case_name>
-<1-3 sentences: what this module does>
+<what this module does — 1-3 sentences>
 
 ## Source semantics
-<the core contract / invariants in natural language — replaces LaTeX>
+<core contracts and invariants, in natural language>
 
 ## Form template identifiers
-<role mapping table for downstream code generation:>
-- project namespace → prjname
-- adjective prefix → adj
-- object class → Obj
-- type alias → typenameType
-- member handle → objtype
-- local result var → argname
-- callback/closure → cbname
-- index/counter → idx
+<role mapping for downstream code generation — see source names → abstract names>
 -/
 
--- ============================================================
--- § <semantic_unit_name>
--- <1-2 line description of this function/struct>
--- ============================================================
+then sections (-- § name) with theorems. every theorem gets a /-- docstring -/.
+`
 
-/-- <formal specification as Lean docstring> -/
-theorem <name> ... := by ...
+const thi_proofs = `PROOF STYLE — study the reference repo before writing.
 
-## RULES
+git clone https://github.com/openai/math.git /tmp/openai_math
+browse lean/OAI/ for real Lean 4 proofs of research-level theorems.
+notice: proofs are STRUCTURED — main theorems cite helper lemmas,
+complex goals are decomposed with 'have' and 'obtain', tactics only
+close small leaf goals. do NOT write flat 'by omega' proofs for
+nontrivial goals. decompose first, then close each piece.
 
-1. every theorem MUST type-check. tactic priority (try in this order):
-   simp, ring, linarith, nlinarith, omega, norm_num, exact?, aesop.
-   omega ONLY handles linear integer arithmetic — if the goal has
-   multiplication of variables (a * b), use nlinarith or ring instead.
-   do NOT use native_decide (banned by Axle).
-   if a proof fails and you cannot fix it, write sorry — do NOT change
-   the theorem statement (name, parameters, conclusion) to make it easier.
-   if unsure of proof, write sorry with: -- TODO: proof_needed
-2. do NOT write LaTeX. math specs go in Lean type signatures + docstrings.
-3. do NOT write implementation code (.cu, .cpp, .go, .py). the form template
-   identifier mapping goes in the /-! -/ header block as comments, not code.
-4. do NOT write .md files. the ONLY output format is .lean via create_file.
-5. do NOT push to git. the kernel stores your output automatically.
+if a goal has variable multiplication (a * b < c * d), omega will fail.
+use nlinarith, or factor with have-steps so each step is linear.
+do NOT use native_decide (Axle bans it).
+if you cannot prove something, write sorry. do NOT change the theorem statement.
+`
 
-## AXLE VERIFICATION
+const thi_axle = `VERIFICATION — after each .lean file, verify theorems through Axle:
 
-after writing each .lean file, verify EVERY theorem through Axle.
-for each theorem, run:
+curl -s https://axle.axiommath.ai/api/v1/verify_proof \
+  -H 'content-type: application/json' \
+  -b 'provertools_session=%s' \
+  -H 'x-browser-api-csrf: %s' \
+  -H 'x-request-source: web' \
+  -H 'origin: https://axle.axiommath.ai' \
+  --data-raw '{"formal_statement":"<with sorry>","content":"<with proof>","ignore_imports":true,"environment":"lean-4.35.0","timeout_seconds":120}'
 
-  curl -s https://axle.axiommath.ai/api/v1/verify_proof \
-    -H 'content-type: application/json' \
-    -b 'provertools_session=%[1]s' \
-    -H 'x-browser-api-csrf: %[2]s' \
-    -H 'x-request-source: web' \
-    -H 'origin: https://axle.axiommath.ai' \
-    --data-raw '{"formal_statement":"<theorem with sorry>","content":"<theorem with proof>","ignore_imports":true,"environment":"lean-4.35.0","timeout_seconds":120}'
+if okay:false, fix the proof and re-verify. if timeout/network error, move on.
+`
 
-if Axle returns {"okay": false}, FIX the proof and re-verify.
-if Axle times out or the network is down, move on — the kernel handles retries.
-after the LAST assigned file's LAST theorem passes Axle, write a brief
-summary and stop.
-
-## EXAMPLE
-
--- file: /mnt/user-data/outputs/ExpertResidencyCache.lean
-/-!
-# MODULE: expert_residency_cache
-VRAM slot storage and residency table for expert weight blobs.
-
-## Source semantics
-A fixed-capacity cache in device memory. No eviction.
-Two admission policies: global counter and per-layer (R4.2g).
-
-## Form template identifiers
-- strata::core → prjname::core
-- ExpertCache → AdjCache
-- kNotResident → kNotResident
-- base_ → base_
-- residency_ → residency_
--/
-
-/-- Flat index injectivity: prevents blob(0,512) aliasing blob(1,0). -/
-theorem flat_index_injective (l1 e1 l2 e2 ne : Nat)
-    (hne : 0 < ne) (he1 : e1 < ne) (he2 : e2 < ne)
-    (h : l1 * ne + e1 = l2 * ne + e2) :
-    l1 = l2 ∧ e1 = e2 := by
-  constructor <;> omega
+const thi_scope = `produce theory ONLY for your assigned files. do not write .md, .cpp, .py.
+do not push to git. when your files are done, write a brief summary and stop.
 `
 
 // axleCredentials returns the session cookie and CSRF token for Axle API calls.
-// reads from env vars AXLE_SESSION and AXLE_CSRF; falls back to built-in defaults.
 func axleCredentials() (session, csrf string) {
 	session = os.Getenv("AXLE_SESSION")
 	csrf = os.Getenv("AXLE_CSRF")
@@ -139,11 +87,13 @@ func axleCredentials() (session, csrf string) {
 	return
 }
 
-// formatTheorizeInstruction fills the prompt template with Axle credentials.
+// formatTheorizeInstruction assembles the theory prompt from pieces.
 func formatTheorizeInstruction() string {
 	session, csrf := axleCredentials()
-	return fmt.Sprintf(theorize_instruction, session, csrf)
+	return thi_output + thi_structure + thi_proofs +
+		fmt.Sprintf(thi_axle, session, csrf) + thi_scope
 }
+
 
 var (
 	theorem_table [NR_THEOREMS]theorem_entry
