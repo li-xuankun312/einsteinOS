@@ -249,54 +249,67 @@ func isGitCommand(command string) bool {
 // nothing comes back (TLS hang produces zero bytes).
 //
 // returns the curl output on success, "" if all retries exhausted.
+// axleExecWithRetry runs an Axle curl on the real machine.
+//
+// the real machine may have https_proxy=socks5://127.0.0.1:1080 set, which routes
+// curl through a SOCKS proxy. when the proxy is down, every attempt through it hangs
+// on TLS — retrying 20 times wastes 300s on a dead path.
+//
+// strategy: try TWO paths (direct, then proxy), 3 attempts each. if both paths time
+// out, the network is genuinely down and retrying won't help. total worst case: 6
+// attempts × 15s = 90s, not 300s.
 func axleExecWithRetry(command string, workDir string) string {
-	const maxRetry = 20
+	// try direct first (bypass proxy), then with proxy
+	paths := []struct {
+		name   string
+		prefix string // prepended to the curl command
+	}{
+		{"direct", "env -u https_proxy -u http_proxy -u all_proxy "},
+		{"proxy", ""}, // inherits the environment's proxy
+	}
 
-	for attempt := 1; attempt <= maxRetry; attempt++ {
-		// two-phase guard: first 10 attempts × 10s (fast scan for quick recovery),
-		// next 10 × 20s (patient wait for longer outages). total window ~300s.
-		guardSeconds := 10
-		if attempt > 10 {
-			guardSeconds = 20
-		}
-		script := fmt.Sprintf("tmpout=$(mktemp)\n"+
-			"%s >\"$tmpout\" 2>&1 &\n"+
-			"cpid=$!\n"+
-			"sleep %d\n"+
-			"if [ ! -s \"$tmpout\" ]; then\n"+
-			"  kill $cpid 2>/dev/null; wait $cpid 2>/dev/null\n"+
-			"  rm -f \"$tmpout\"\n"+
-			"  exit 124\n"+
-			"fi\n"+
-			"wait $cpid\n"+
-			"code=$?\n"+
-			"cat \"$tmpout\"\n"+
-			"rm -f \"$tmpout\"\n"+
-			"exit $code", command, guardSeconds)
+	for _, path := range paths {
+		for attempt := 1; attempt <= 3; attempt++ {
+			script := fmt.Sprintf("tmpout=$(mktemp)\n"+
+				"%s%s >\"$tmpout\" 2>&1 &\n"+
+				"cpid=$!\n"+
+				"sleep 15\n"+
+				"if [ ! -s \"$tmpout\" ]; then\n"+
+				"  kill $cpid 2>/dev/null; wait $cpid 2>/dev/null\n"+
+				"  rm -f \"$tmpout\"\n"+
+				"  exit 124\n"+
+				"fi\n"+
+				"wait $cpid\n"+
+				"code=$?\n"+
+				"cat \"$tmpout\"\n"+
+				"rm -f \"$tmpout\"\n"+
+				"exit $code", path.prefix, command)
 
-		pid, err := kernel.ForkExec(script, workDir)
-		if err != nil {
-			log.Printf("[shadow] axle attempt %d/%d: fork error: %v", attempt, maxRetry, err)
-			continue
-		}
-		kernel.Wait(pid)
-		result := kernel.GetResult(pid)
-		if strings.TrimSpace(result) == "" {
-			log.Printf("[shadow] axle attempt %d/%d: start timeout (%ds, TLS hung?)", attempt, maxRetry, guardSeconds)
-			continue
-		}
-		// got output — check if it looks like a valid Axle response
-		if strings.Contains(result, "\"okay\"") || strings.Contains(result, "\"error\"") ||
-			strings.Contains(result, "\"timings\"") {
-			log.Printf("[shadow] axle attempt %d/%d: success (%d bytes)", attempt, maxRetry, len(result))
+			pid, err := kernel.ForkExec(script, workDir)
+			if err != nil {
+				log.Printf("[shadow] axle %s attempt %d/3: fork error: %v", path.name, attempt, err)
+				continue
+			}
+			kernel.Wait(pid)
+			result := kernel.GetResult(pid)
+			if strings.TrimSpace(result) == "" {
+				log.Printf("[shadow] axle %s attempt %d/3: timeout (15s)", path.name, attempt)
+				continue
+			}
+			// got output — check if it's a valid Axle response
+			if strings.Contains(result, "\"okay\"") || strings.Contains(result, "\"error\"") ||
+				strings.Contains(result, "\"timings\"") || strings.Contains(result, "\"user_error\"") {
+				log.Printf("[shadow] axle %s attempt %d/3: success (%d bytes)", path.name, attempt, len(result))
+				return fmt.Sprintf("[pid %d exit=0] %s", pid, result)
+			}
+			// got output but not a valid response
+			log.Printf("[shadow] axle %s attempt %d/3: unexpected (%d bytes): %s",
+				path.name, attempt, len(result), truncateCmd(result, 200))
 			return fmt.Sprintf("[pid %d exit=0] %s", pid, result)
 		}
-		// got output but not a valid response (partial, HTML error page, etc)
-		log.Printf("[shadow] axle attempt %d/%d: unexpected response (%d bytes): %s",
-			attempt, maxRetry, len(result), truncateCmd(result, 200))
-		// still return it — the child can parse the error
-		return fmt.Sprintf("[pid %d exit=0] %s", pid, result)
+		log.Printf("[shadow] axle %s: 3 attempts exhausted, trying next path", path.name)
 	}
+	log.Printf("[shadow] axle: both direct and proxy paths failed")
 	return ""
 }
 
