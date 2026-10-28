@@ -440,6 +440,65 @@ func (c *Client) StopResponse(convID string) error {
 	return nil
 }
 
+// RecoveredTool is a tool_use block extracted from a downloaded conversation.
+type RecoveredTool struct {
+	ID    string
+	Name  string
+	Input string // raw JSON
+}
+
+// DownloadLastTools downloads a conversation and extracts tool_use blocks from
+// the last assistant message. used for SSE recovery: the server finished generating
+// but the SSE stream broke, so we download the complete response and extract the
+// tools we missed.
+func (c *Client) DownloadLastTools(convID string) ([]RecoveredTool, error) {
+	raw, err := c.DownloadConversationRaw(convID)
+	if err != nil {
+		return nil, err
+	}
+
+	var conv struct {
+		ChatMessages []struct {
+			Sender  string            `json:"sender"`
+			Content []json.RawMessage `json:"content"`
+		} `json:"chat_messages"`
+	}
+	if err := json.Unmarshal(raw, &conv); err != nil {
+		return nil, fmt.Errorf("parse conversation: %w", err)
+	}
+
+	// find the last assistant message
+	var lastAssistant []json.RawMessage
+	for i := len(conv.ChatMessages) - 1; i >= 0; i-- {
+		if conv.ChatMessages[i].Sender == "assistant" {
+			lastAssistant = conv.ChatMessages[i].Content
+			break
+		}
+	}
+	if lastAssistant == nil {
+		return nil, fmt.Errorf("no assistant message found")
+	}
+
+	var tools []RecoveredTool
+	for _, raw := range lastAssistant {
+		var block struct {
+			Type  string          `json:"type"`
+			ID    string          `json:"id"`
+			Name  string          `json:"name"`
+			Input json.RawMessage `json:"input"`
+		}
+		if json.Unmarshal(raw, &block) != nil || block.Type != "tool_use" {
+			continue
+		}
+		tools = append(tools, RecoveredTool{
+			ID:    block.ID,
+			Name:  block.Name,
+			Input: string(block.Input),
+		})
+	}
+	return tools, nil
+}
+
 // ProbeConvBusy checks if a remote conversation's code execution environment is busy.
 // Sends a minimal completion request. If the server returns wiggle_container_in_use,
 // the remote is still running (SSE dropped but execution continues).

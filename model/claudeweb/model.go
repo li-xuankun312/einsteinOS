@@ -677,20 +677,72 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 		// don't exist locally → shadow returns "No such file" → writeback
 		// overrides remote's correct result → child enters fix loop.
 		if stopReason == "" && len(collectedTools) > 0 {
-			log.Printf("claudeweb: stop_reason empty with %d tools — SSE broke mid-stream, sending bare Continue (no writeback)",
+			log.Printf("claudeweb: stop_reason empty with %d tools — SSE broke, recovering via probe+download",
 				len(collectedTools))
-			// shadow-exec state-changing tools to keep local fs consistent
-			for _, tb := range collectedTools {
-				if isCreateFile(tb.name) || isStrReplace(tb.name) {
-					result := m.Shadow.Execute(tb.name, tb.inputJSON.String())
-					if result != "" {
-						log.Printf("[shadow] SSE-break state sync: %s → %s", tb.name, truncate(result, 80))
+
+			// 1. probe until the server finishes generating (max 60s, 5s intervals)
+			recovered := false
+			for probe := 0; probe < 12; probe++ {
+				busy, err := m.client.ProbeConvBusy(convID)
+				if err != nil {
+					log.Printf("claudeweb: SSE recovery probe %d: error %v", probe, err)
+					time.Sleep(5 * time.Second)
+					continue
+				}
+				if !busy {
+					// server finished — download the complete response
+					tools, dlErr := m.client.DownloadLastTools(convID)
+					if dlErr != nil || len(tools) == 0 {
+						log.Printf("claudeweb: SSE recovery download failed: %v (tools=%d)", dlErr, len(tools))
+						break
+					}
+					log.Printf("claudeweb: SSE recovery downloaded %d tools from conversation", len(tools))
+
+					// shadow-exec each tool and build writeback
+					var recoveredResults []ToolResult
+					for _, t := range tools {
+						result := m.Shadow.Execute(t.Name, t.Input)
+						if result == "" {
+							continue // shadow skipped (axle, git, etc) — let remote result stand
+						}
+						recoveredResults = append(recoveredResults, ToolResult{
+							ToolUseID: t.ID,
+							Content:   result,
+						})
+					}
+
+					// build writeback with recovered results
+					var localDiff strings.Builder
+					localDiff.WriteString("Continue. Note: the following tools were executed on the LOCAL machine (source of truth). If any results differ from your sandbox, use these:\n\n")
+					for _, tr := range recoveredResults {
+						localDiff.WriteString(fmt.Sprintf("[%s] %s\n\n", tr.ToolUseID, truncate(tr.Content, 500)))
+					}
+					log.Printf("claudeweb: SSE recovery writeback %d results", len(recoveredResults))
+
+					st.totalTools += len(tools)
+					webReq.Prompt = localDiff.String()
+					webReq.CreateConversationParams = nil
+					recovered = true
+					break
+				}
+				time.Sleep(5 * time.Second)
+			}
+
+			if !recovered {
+				// probe/download failed — fall back to bare Continue with local state sync
+				log.Printf("claudeweb: SSE recovery failed, falling back to bare Continue (no writeback)")
+				for _, tb := range collectedTools {
+					if isCreateFile(tb.name) || isStrReplace(tb.name) {
+						result := m.Shadow.Execute(tb.name, tb.inputJSON.String())
+						if result != "" {
+							log.Printf("[shadow] SSE-break state sync: %s → %s", tb.name, truncate(result, 80))
+						}
 					}
 				}
+				st.sseRecovery = true
+				webReq.Prompt = "Continue"
+				webReq.CreateConversationParams = nil
 			}
-			st.sseRecovery = true
-			webReq.Prompt = "Continue"
-			webReq.CreateConversationParams = nil
 			continue
 		}
 
