@@ -44,7 +44,7 @@ then sections (-- § name) with theorems. every theorem gets a /-- docstring -/.
 
 const thi_proofs = `PROOF STYLE — BEFORE writing any .lean file, run this:
 
-  git clone --depth=1 https://github.com/openai/math.git /tmp/openai_math
+  git clone https://github.com/openai/math.git /tmp/openai_math
 
 then read 3-5 files under /tmp/openai_math/lean/OAI/ to see how real
 Lean 4 proofs are structured. notice: they decompose goals with 'have'
