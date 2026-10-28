@@ -275,17 +275,22 @@ func axleExecWithRetry(command string, workDir string) string {
 	for _, r := range rounds {
 		for attempt := 1; attempt <= r.tries; attempt++ {
 			result := axleExecOnce(command, workDir, r.envUnset, 15*time.Second)
-			if strings.TrimSpace(result) == "" {
+			trimmed := strings.TrimSpace(result)
+			if trimmed == "" {
 				log.Printf("[shadow] axle %s %d/%d: timeout (15s)", r.name, attempt, r.tries)
 				continue
 			}
-			if strings.Contains(result, "\"okay\"") || strings.Contains(result, "\"error\"") ||
-				strings.Contains(result, "\"timings\"") || strings.Contains(result, "\"user_error\"") {
-				log.Printf("[shadow] axle %s %d/%d: success (%d bytes)", r.name, attempt, r.tries, len(result))
-				return fmt.Sprintf("[pid 0 exit=0] %s", result)
+			// reject known garbage — curl help, HTML error pages.
+			// everything else is an Axle response in some format: single theorem
+			// {"okay":true}, batch result "fii_v1: okay=False", content with
+			// {"content":"import Mathlib..."}, user_error, etc. return it all.
+			if strings.HasPrefix(trimmed, "Usage: curl") || strings.HasPrefix(trimmed, "<!DOCTYPE") ||
+				strings.HasPrefix(trimmed, "<html") {
+				log.Printf("[shadow] axle %s %d/%d: garbage (%d bytes): %s",
+					r.name, attempt, r.tries, len(result), truncateCmd(result, 100))
+				continue // garbage = retry, not return
 			}
-			log.Printf("[shadow] axle %s %d/%d: unexpected (%d bytes): %s",
-				r.name, attempt, r.tries, len(result), truncateCmd(result, 200))
+			log.Printf("[shadow] axle %s %d/%d: got response (%d bytes)", r.name, attempt, r.tries, len(result))
 			return fmt.Sprintf("[pid 0 exit=0] %s", result)
 		}
 	}
