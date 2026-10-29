@@ -72,15 +72,6 @@ func TestExtract_RefusesWhatItCannotEvaluate(t *testing.T) {
 	}
 }
 
-func TestToolIDSet(t *testing.T) {
-	s := toolIDSet{}
-	s.mark("toolu_1")
-	s.mark("")
-	if !s.seen("toolu_1") || s.seen("toolu_2") || s.seen("") {
-		t.Fatalf("toolIDSet semantics wrong")
-	}
-}
-
 // The 15s guard used to take minutes because killing bash left curl holding the
 // stdout pipe. A background child must now die with the group.
 func TestHardKill_GuardActuallyEndsTheCommand(t *testing.T) {

@@ -228,23 +228,7 @@ type loopState struct {
 	isChild              bool
 	convID               string
 	sseRecovery          bool // set when we sent bare "Continue" after SSE break; cleared after one round
-	executed             toolIDSet // tool_use IDs already run, so SSE recovery never replays them
-}
-
-// toolIDSet remembers which tool_use IDs have been executed. DownloadLastTools
-// returns the last assistant turn's tools — after an SSE break that is the
-// PREVIOUS round, already executed; re-running them replayed 39 commands in the
-// Strata run (pid345–383 duplicated pid273–311).
-type toolIDSet map[string]struct{}
-
-func (t toolIDSet) mark(id string) {
-	if id != "" {
-		t[id] = struct{}{}
-	}
-}
-func (t toolIDSet) seen(id string) bool {
-	_, ok := t[id]
-	return id != "" && ok
+	ledger               *toolLedger // executed/delivered tool_use ids; see sse_recover.go
 }
 
 func (m *Model) completionLoop(ctx context.Context, convID string, webReq *CompletionRequest, stream bool, yield func(*model.LLMResponse, error) bool, opts ...bool) {
@@ -252,7 +236,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 	const maxRounds = 20
 
 	isChild := len(opts) > 0 && opts[0]
-	st := &loopState{convID: convID, isChild: isChild, executed: toolIDSet{}}
+	st := &loopState{convID: convID, isChild: isChild, ledger: newToolLedger()}
 
 	// d2aaf709 → termination conditions: role determines lifecycle via
 	// composable TerminationCondition, not hardcoded round counts.
@@ -611,8 +595,8 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 
 		var toolResults []ToolResult
 		for _, tb := range collectedTools {
-			st.executed.mark(tb.id)
 			result := m.Shadow.Execute(tb.name, tb.inputJSON.String())
+			st.ledger.record(tb.id, result) // cached even when "" (shadow skipped it)
 			// shadow returns "" when it intentionally skips execution:
 			// axle verification, git, curl/wget, lean/elan, ssh, unknown tools.
 			// in every case the remote sandbox has the real result.
@@ -704,77 +688,48 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 			log.Printf("claudeweb: stop_reason empty with %d tools — SSE broke, recovering via probe+download",
 				len(collectedTools))
 
-			// 1. probe completion_status (cheap GET, 3s interval) until server finishes.
-			// 2. wait 10s for persistence after idle.
-			// 3. download conversation (max 3 tries, 10s apart).
+			// Wait — GET only — until THIS round's assistant message, identified by
+			// the tool_use ids already seen in the broken stream, has been persisted.
+			// Never send anything while the previous response may still be generating
+			// (wiggle_container_in_use), never trust is_pending=false, never accept an
+			// earlier round's message, and never substitute local shadow results: shadow
+			// skips git/ssh/curl/lean, so the local view is incomplete by design.
 			recovered := false
-
-			// phase 1: wait for server to finish generating (max 3 min)
-			for probe := 0; probe < 60; probe++ {
-				time.Sleep(3 * time.Second)
-				pending, isErr, err := m.client.CompletionStatus(convID)
-				if err != nil {
-					log.Printf("claudeweb: SSE recovery probe %d: status error %v", probe, err)
-					continue
-				}
-				if isErr {
-					log.Printf("claudeweb: SSE recovery: server error, skipping")
-					break
-				}
-				if !pending {
-					log.Printf("claudeweb: SSE recovery probe %d: server idle", probe)
-					break
-				}
-				if probe%10 == 0 {
-					log.Printf("claudeweb: SSE recovery probe %d: still pending", probe)
-				}
+			want := make([]string, 0, len(collectedTools))
+			for _, tb := range collectedTools {
+				want = append(want, tb.id)
 			}
-
-			// phase 2: wait for persistence, then download
-			time.Sleep(10 * time.Second)
-			for dl := 0; dl < 3; dl++ {
-				tools, dlErr := m.client.DownloadLastTools(convID)
-				if dlErr != nil || len(tools) == 0 {
-					log.Printf("claudeweb: SSE recovery download %d/3: %v (tools=%d)", dl+1, dlErr, len(tools))
-					time.Sleep(10 * time.Second)
-					continue
-				}
+			tools, rerr := waitForRoundTools(m.client, convID, want, defaultRecoverCfg())
+			if rerr != nil {
+				log.Printf("claudeweb: SSE recovery: %v", rerr)
+			} else {
 				log.Printf("claudeweb: SSE recovery downloaded %d tools from conversation", len(tools))
-
-				var recoveredResults []ToolResult
-				for _, t := range tools {
-					if st.executed.seen(t.ID) {
-						log.Printf("claudeweb: SSE recovery: skip already-executed tool %s", truncate(t.ID, 12))
-						continue
-					}
-					st.executed.mark(t.ID)
-					result := m.Shadow.Execute(t.Name, t.Input)
-					if result == "" {
-						continue
-					}
-					recoveredResults = append(recoveredResults, ToolResult{
-						ToolUseID: t.ID,
-						Content:   result,
-					})
-				}
+				rr := recoveredResults(st.ledger, tools, func(name, input string) string {
+					return m.Shadow.Execute(name, input)
+				})
 				var localDiff strings.Builder
 				localDiff.WriteString("Continue. Note: the following tools were executed on the LOCAL machine (source of truth). If any results differ from your sandbox, use these:\n\n")
-				for _, tr := range recoveredResults {
+				for _, tr := range rr {
 					localDiff.WriteString(fmt.Sprintf("[%s] %s\n\n", tr.ToolUseID, truncate(tr.Content, 500)))
 				}
-				log.Printf("claudeweb: SSE recovery writeback %d results", len(recoveredResults))
+				log.Printf("claudeweb: SSE recovery writeback %d results", len(rr))
+				for _, t := range tools {
+					st.ledger.markDelivered(t.ID)
+				}
 
 				st.totalTools += len(tools)
 				webReq.Prompt = localDiff.String()
 				webReq.CreateConversationParams = nil
 				recovered = true
-				break
 			}
 
 			if !recovered {
 				// probe/download failed — fall back to bare Continue with local state sync
 				log.Printf("claudeweb: SSE recovery failed, falling back to bare Continue (no writeback)")
 				for _, tb := range collectedTools {
+					if _, ran := st.ledger.cached(tb.id); ran {
+						continue // the main loop already ran it; re-running only replays
+					}
 					if isCreateFile(tb.name) || isStrReplace(tb.name) {
 						result := m.Shadow.Execute(tb.name, tb.inputJSON.String())
 						if result != "" {
@@ -814,6 +769,9 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 		}
 		log.Printf("claudeweb: writeback %d results + Continue (silent=%d/%d)", len(toolResults), st.consecutiveContinues, maxContinues)
 		kernel.TouchByConv(convID)
+		for _, tb := range collectedTools {
+			st.ledger.markDelivered(tb.id) // sent (or deliberately left to the remote's own result)
+		}
 		webReq = &CompletionRequest{
 			Prompt:        localDiff.String(),
 			Model:         m.modelName,
