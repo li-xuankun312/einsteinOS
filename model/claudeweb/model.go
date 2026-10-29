@@ -256,6 +256,16 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 		// fallback: role-based default if no explicit condition was set
 		termCond = kernel.TerminationForRole(childRole)
 	}
+	// a NEW Lean-writing child starts with a clean local outputs dir (see
+	// outputs_archive.go). Only at conversation start: a continuation or SSE
+	// recovery must never move the child's own files.
+	if isChild && webReq.CreateConversationParams != nil && shouldArchiveOutputs(childRole) {
+		if n, dest, aerr := archiveLocalOutputs(localOutputsDir, time.Now()); aerr != nil {
+			log.Printf("claudeweb: archive %s failed after moving %d: %v", localOutputsDir, n, aerr)
+		} else if n > 0 {
+			log.Printf("claudeweb: archived %d stale entr(ies) from %s to %s (role=%s)", n, localOutputsDir, dest, childRole)
+		}
+	}
 	roleMaxRounds := maxRounds // still used as absolute ceiling
 	if termCond != nil {
 		log.Printf("claudeweb: child role=%s termination=%s", childRole, termCond.String())
