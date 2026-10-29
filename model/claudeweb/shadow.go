@@ -1,14 +1,17 @@
 package claudeweb
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -125,7 +128,8 @@ func (s *ShadowExecutor) Execute(toolName string, inputJSON string) string {
 			return runAxleRequests(set)
 		}
 		// couldn't safely parse the command — run the raw curl, bounded and killable
-		log.Printf("[shadow] axle: using curl fallback (extraction failed)")
+		log.Printf("[shadow] axle: using curl fallback (extraction failed): %s",
+			truncateCmd(redactAxle(strings.Join(strings.Fields(command), " ")), 300))
 		result := axleExecWithRetryCurl(command, s.WorkDir)
 		if result != "" {
 			log.Printf("[shadow] axle verify_proof (curl fallback): got %d bytes", len(result))
@@ -385,11 +389,92 @@ var axleURL = "https://axle.axiommath.ai/api/v1/verify_proof"
 // no-proxy path, so the next call tries that first.
 var axleDirectPreferred atomic.Bool
 
-// axleExecWithRetryCurl is the fallback: runs the raw curl command via shell.
-// used when extractAxlePayload can't parse the child's curl command.
-// axleExecWithRetryCurl is the fallback when extractAxlePayload can't parse the curl.
-// runs the raw curl command via exec.CommandContext with retry.
+// axleRun is what one execution of a fallback command produced. The old code kept
+// only stdout (cmd.Output) and collapsed every empty result into "timeout", so a
+// command that failed in 0s (missing script, syntax error, errors written only to
+// stderr) was logged as "timeout (15s, took 0s)" and retried seven times.
+type axleRun struct {
+	Stdout   string
+	Stderr   string
+	ExitCode int // -1: could not start
+	TimedOut bool
+	Elapsed  time.Duration
+}
+
+var (
+	curlWordRe    = regexp.MustCompile(`\bcurl\b`)
+	sessionRedact = regexp.MustCompile(`provertools_session=[^;'"\s]+`)
+	csrfRedact    = regexp.MustCompile(`(?i)(x-browser-api-csrf:\s*)[^'"\s]+`)
+)
+
+// axleScriptGuard: a command with no curl in it is a script (for example a python
+// loop verifying every file). It may legitimately run for minutes, and retrying it
+// cannot change a deterministic failure.
+const axleScriptGuard = 5 * time.Minute
+
+// redactAxle removes the session cookie and csrf token before a command is logged.
+func redactAxle(cmd string) string {
+	cmd = sessionRedact.ReplaceAllString(cmd, "provertools_session=<redacted>")
+	return csrfRedact.ReplaceAllString(cmd, "${1}<redacted>")
+}
+
+// retryableFailure: only failures that look like the network are worth repeating.
+// curl exits 6 (resolve), 7 (connect), 28 (timeout), 35/52/56 (TLS / empty reply /
+// recv). A pipeline hides curl's own exit code, so stderr is checked as well.
+func retryableFailure(r axleRun) bool {
+	if r.TimedOut {
+		return true
+	}
+	switch r.ExitCode {
+	case 6, 7, 28, 35, 52, 56:
+		return true
+	}
+	e := strings.ToLower(r.Stderr)
+	for _, m := range []string{"could not resolve", "connection refused", "connection reset",
+		"timed out", "tls", "ssl", "network is unreachable", "proxy"} {
+		if strings.Contains(e, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// formatAxleRun renders a run the way a shell tool result would look, including
+// stderr, so the child sees the real error instead of a silent nothing.
+func formatAxleRun(r axleRun) string {
+	out := r.Stdout
+	if strings.TrimSpace(r.Stderr) != "" {
+		if out != "" && !strings.HasSuffix(out, "\n") {
+			out += "\n"
+		}
+		out += r.Stderr
+	}
+	const max = 20000
+	if len(out) > max {
+		out = out[:max] + "\n…(truncated)"
+	}
+	code := r.ExitCode
+	if code < 0 {
+		code = 127
+	}
+	return fmt.Sprintf("[pid 0 exit=%d] %s", code, out)
+}
+
+// axleExecWithRetryCurl runs the child's raw command locally when its Axle
+// requests could not be parsed (see extractAxleRequests).
 func axleExecWithRetryCurl(command string, workDir string) string {
+	// a script, not a curl: one run, long guard, report everything it printed
+	if !curlWordRe.MatchString(command) {
+		run := axleRunOnce(command, workDir, false, axleScriptGuard)
+		log.Printf("[shadow] axle-script: exit=%d timed_out=%v took=%s stdout=%d stderr=%d",
+			run.ExitCode, run.TimedOut, run.Elapsed.Round(time.Second), len(run.Stdout), len(run.Stderr))
+		if run.TimedOut {
+			return fmt.Sprintf("[pid 0 exit=124] axle script: no result within %s (killed). Output so far:\n%s%s",
+				axleScriptGuard, run.Stdout, run.Stderr)
+		}
+		return formatAxleRun(run)
+	}
+
 	type round struct {
 		name     string
 		envUnset bool
@@ -413,35 +498,47 @@ func axleExecWithRetryCurl(command string, workDir string) string {
 		}
 	}
 
+	attempts, timeouts := 0, 0
 	for _, r := range rounds {
 		for attempt := 1; attempt <= r.tries; attempt++ {
-			t0 := time.Now()
-			result := axleExecOnce(command, workDir, r.envUnset, r.guard)
-			elapsed := time.Since(t0)
-			trimmed := strings.TrimSpace(result)
-			if trimmed == "" {
-				log.Printf("[shadow] axle-curl %s %d/%d: timeout (%s, took %s)", r.name, attempt, r.tries, r.guard, elapsed.Round(time.Second))
-				if elapsed < 3*time.Second {
-					time.Sleep(3*time.Second - elapsed)
-				}
-				continue
+			attempts++
+			run := axleRunOnce(command, workDir, r.envUnset, r.guard)
+			trimmed := strings.TrimSpace(run.Stdout)
+			switch {
+			case run.TimedOut:
+				timeouts++
+				log.Printf("[shadow] axle-curl %s %d/%d: timeout (%s, took %s)", r.name, attempt, r.tries, r.guard, run.Elapsed.Round(time.Second))
+			case trimmed == "" && !retryableFailure(run):
+				// deterministic: retrying a missing script seven times helps nobody
+				log.Printf("[shadow] axle-curl %s %d/%d: command failed in %s (exit %d) — not retrying: %s",
+					r.name, attempt, r.tries, run.Elapsed.Round(time.Millisecond), run.ExitCode,
+					truncateCmd(redactAxle(run.Stderr), 200))
+				return formatAxleRun(run)
+			case trimmed == "":
+				log.Printf("[shadow] axle-curl %s %d/%d: network-looking failure (exit %d, took %s)",
+					r.name, attempt, r.tries, run.ExitCode, run.Elapsed.Round(time.Second))
+			case strings.HasPrefix(trimmed, "Usage: curl") || strings.HasPrefix(trimmed, "<!DOCTYPE") || strings.HasPrefix(trimmed, "<html"):
+				log.Printf("[shadow] axle-curl %s %d/%d: garbage (%d bytes)", r.name, attempt, r.tries, len(run.Stdout))
+			default:
+				log.Printf("[shadow] axle-curl %s %d/%d: got response (%d bytes)", r.name, attempt, r.tries, len(run.Stdout))
+				axleDirectPreferred.Store(r.envUnset) // remember which path works
+				return fmt.Sprintf("[pid 0 exit=0] %s", run.Stdout)
 			}
-			if strings.HasPrefix(trimmed, "Usage: curl") || strings.HasPrefix(trimmed, "<!DOCTYPE") ||
-				strings.HasPrefix(trimmed, "<html") {
-				log.Printf("[shadow] axle-curl %s %d/%d: garbage (%d bytes)", r.name, attempt, r.tries, len(result))
-				continue
+			if run.Elapsed < 3*time.Second {
+				time.Sleep(3*time.Second - run.Elapsed)
 			}
-			log.Printf("[shadow] axle-curl %s %d/%d: got response (%d bytes)", r.name, attempt, r.tries, len(result))
-			axleDirectPreferred.Store(r.envUnset) // remember which path works
-			return fmt.Sprintf("[pid 0 exit=0] %s", result)
 		}
 	}
-	log.Printf("[shadow] axle-curl: all rounds exhausted")
-	return ""
+	log.Printf("[shadow] axle-curl: all %d attempts exhausted (%d timed out)", attempts, timeouts)
+	// say so explicitly: returning "" made the remote sandbox's own failure ("could
+	// not resolve host") stand, which reads as "Axle is down", not "no answer yet"
+	return fmt.Sprintf("[pid 0 exit=28] axle: no response from the local machine after %d attempts (%d timed out). "+
+		"This is a network problem, not a proof failure — retry later.", attempts, timeouts)
 }
 
-// axleExecOnce runs a curl command with a Go-native timeout. no shell sleep, no ForkExec.
-func axleExecOnce(command string, workDir string, unsetProxy bool, timeout time.Duration) string {
+// axleRunOnce runs command under bash with a hard timeout and captures stdout,
+// stderr, the exit code and whether the timeout fired.
+func axleRunOnce(command string, workDir string, unsetProxy bool, timeout time.Duration) axleRun {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
@@ -450,7 +547,6 @@ func axleExecOnce(command string, workDir string, unsetProxy bool, timeout time.
 	if workDir != "" {
 		cmd.Dir = workDir
 	}
-	// inherit env, optionally strip proxy
 	env := os.Environ()
 	if unsetProxy {
 		filtered := make([]string, 0, len(env))
@@ -465,15 +561,23 @@ func axleExecOnce(command string, workDir string, unsetProxy bool, timeout time.
 		env = filtered
 	}
 	cmd.Env = env
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 
-	out, err := cmd.Output()
-	if ctx.Err() == context.DeadlineExceeded {
-		return "" // timeout — caller logs it
+	t0 := time.Now()
+	err := cmd.Run()
+	run := axleRun{Stdout: stdout.String(), Stderr: stderr.String(), Elapsed: time.Since(t0)}
+	run.TimedOut = ctx.Err() == context.DeadlineExceeded
+	if err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			run.ExitCode = ee.ExitCode()
+		} else {
+			run.ExitCode = -1
+			run.Stderr += err.Error()
+		}
 	}
-	if err != nil && len(out) == 0 {
-		return "" // failed with no output
-	}
-	return string(out)
+	return run
 }
 
 func truncateCmd(s string, n int) string {
