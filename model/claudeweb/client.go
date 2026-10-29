@@ -144,6 +144,12 @@ func (c *Client) Completion(convID string, req *CompletionRequest) (io.ReadClose
 			errStr := string(errBody)
 			log.Printf("claudeweb: attempt %d status %d: %s", attempt, resp.StatusCode, truncBody(errBody))
 
+			// Fatal account-level errors: no retry will help.
+			if reason, fatal := isFatalError(resp.StatusCode, errStr); fatal {
+				log.Printf("claudeweb: FATAL — %s (HTTP %d), aborting immediately (no retry)", reason, resp.StatusCode)
+				return nil, &FatalAPIError{StatusCode: resp.StatusCode, Body: errStr, Reason: reason}
+			}
+
 			if isRateLimit(errStr) {
 				if isProxyThrottle(errStr) {
 					if waitDur := parseRetryAfter(errStr); waitDur > 0 {
@@ -201,8 +207,13 @@ func (c *Client) Completion(convID string, req *CompletionRequest) (io.ReadClose
 		if resp.StatusCode >= 400 {
 			errBody, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
-			lastErr = fmt.Errorf("API %d: %s", resp.StatusCode, truncBody(errBody))
+			errStr := string(errBody)
 			log.Printf("claudeweb: slow retry %d/3 status %d", slowAttempt+1, resp.StatusCode)
+			if reason, fatal := isFatalError(resp.StatusCode, errStr); fatal {
+				log.Printf("claudeweb: FATAL — %s (HTTP %d), aborting slow retry", reason, resp.StatusCode)
+				return nil, &FatalAPIError{StatusCode: resp.StatusCode, Body: errStr, Reason: reason}
+			}
+			lastErr = fmt.Errorf("API %d: %s", resp.StatusCode, truncBody(errBody))
 			continue
 		}
 		return resp.Body, nil
@@ -509,6 +520,12 @@ func (c *Client) ProbeConvBusy(convID string) (bool, error) {
 		return true, nil
 	}
 
+	// Fatal account-level errors: return error so callers can abort.
+	if reason, fatal := isFatalError(resp.StatusCode, errStr); fatal {
+		log.Printf("claudeweb: probe %s → FATAL %s (HTTP %d)", convID[:8], reason, resp.StatusCode)
+		return false, &FatalAPIError{StatusCode: resp.StatusCode, Body: errStr, Reason: reason}
+	}
+
 	// rate limit or other error — inconclusive about busy-ness
 	log.Printf("claudeweb: probe %s → %d: %s", convID[:8], resp.StatusCode, truncBody(errBody))
 	return false, nil
@@ -525,6 +542,39 @@ func truncBody(b []byte) string {
 type RateLimitError struct {
 	Body       string
 	RetryAfter time.Duration
+}
+
+// FatalAPIError represents an account-level error that no amount of retrying
+// will fix: subscription expired, payment past due, account banned, etc.
+// Callers must abort the pipeline immediately and report to the user.
+type FatalAPIError struct {
+	StatusCode int
+	Body       string
+	Reason     string // short tag: "subscription_past_due", "account_disabled", etc.
+}
+
+func (e *FatalAPIError) Error() string {
+	return fmt.Sprintf("fatal API error (%s): HTTP %d — %s", e.Reason, e.StatusCode, truncBody([]byte(e.Body)))
+}
+
+// isFatalError detects account-level errors that are not retryable.
+// These include: subscription past due, payment required, account disabled/banned.
+func isFatalError(statusCode int, body string) (reason string, fatal bool) {
+	if statusCode == 402 {
+		return "payment_required", true
+	}
+	lc := strings.ToLower(body)
+	switch {
+	case strings.Contains(lc, "subscription") && strings.Contains(lc, "past due"):
+		return "subscription_past_due", true
+	case strings.Contains(lc, "overdue invoice"):
+		return "subscription_past_due", true
+	case strings.Contains(lc, "account") && (strings.Contains(lc, "disabled") || strings.Contains(lc, "banned") || strings.Contains(lc, "suspended")):
+		return "account_disabled", true
+	case statusCode == 400 && strings.Contains(body, "permission_error"):
+		return "permission_error", true
+	}
+	return "", false
 }
 
 func (e *RateLimitError) Error() string {

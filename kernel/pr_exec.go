@@ -1037,6 +1037,13 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 			} else if compile != "" {
 				// any real status from dev_collect = child worked
 				needsRetry = false
+			} else if strings.Contains(lastStdout, "[FATAL]") {
+				// Account-level error (subscription past due, account disabled, etc.)
+				// No amount of retrying will fix this — abort immediately.
+				log.Printf("dev_from_theorems: %s unit %d/%d FATAL account error detected, aborting pipeline (not retrying)",
+					repo, i+1, len(units))
+				needsRetry = false
+				lastStatus["compile"] = "fatal_account_error"
 			} else if strings.Contains(lastStdout, "[API Error]") ||
 				strings.Contains(lastStdout, "TLS handshake timeout") ||
 				strings.Contains(lastStdout, "net/http:") {

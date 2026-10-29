@@ -302,6 +302,15 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 			}
 		}
 
+		// Fatal account-level errors: child stdout contains [FATAL] tag.
+		// No retry will help — subscription expired, account disabled, etc.
+		if strings.Contains(result, "[FATAL]") {
+			log.Printf("ref_split: chunk %d/%d FATAL account error — aborting (no retry). output: %s",
+				i+1, len(chunks), result[:min(len(result), 200)])
+			needsRetry = false
+			// store empty result so the pipeline sees this chunk failed terminally
+		}
+
 		// retry up to 5 times — SSE breaks are transient network issues.
 		// 5 is enough for proxy/TLS flaps. beyond that, stop and report.
 		lastRetryConvID := ""

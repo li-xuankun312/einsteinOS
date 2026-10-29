@@ -285,6 +285,11 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 
 		body, err := m.client.Completion(convID, webReq)
 		if err != nil {
+			if fe, ok := err.(*FatalAPIError); ok {
+				log.Printf("claudeweb: FATAL account error — %s. Pipeline must stop. No retry.", fe.Reason)
+				doExit(exitError, fmt.Sprintf("[FATAL] %s — %s", fe.Reason, fe.Error()))
+				return
+			}
 			if rle, ok := err.(*RateLimitError); ok {
 				// record cooldown for current effort tier
 				m.mu.Lock()
