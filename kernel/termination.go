@@ -503,6 +503,22 @@ func TerminationForRole(role string) TerminationCondition {
 			&MaxRounds{Limit: 40},
 			&ConsecutiveTextRounds{Threshold: 4},
 		)
+	case strings.HasPrefix(role, "proof_fix"):
+		// kernel-driven proof repair: the child verifies via Axle (shadow) and
+		// stops. Text-only rounds mean it is done or stuck.
+		return OrConditions(
+			&ConsecutiveTextRounds{Threshold: 3},
+			&MaxRounds{Limit: 15},
+		)
+	case strings.HasPrefix(role, "dev_fix"):
+		// BashExitZero("git push") cannot fire when the child has no push
+		// credentials, so the old default sat in text-only rounds until
+		// MaxRounds(20) — 15 idle rounds / ~17 min in the Strata dev_fix_1.
+		return OrConditions(
+			&BashExitZero{Pattern: "git push"},
+			&ConsecutiveTextRounds{Threshold: 3},
+			&MaxRounds{Limit: 20},
+		)
 	default:
 		// dev_unit and other roles
 		return OrConditions(

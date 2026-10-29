@@ -439,6 +439,109 @@ type devUnit struct {
 	Theory  string   // the theory text for just these files
 }
 
+// dev_proof_preflight makes proof status KERNEL FACT before any dev child runs.
+//
+// The kernel itself sends every spec theorem to Axle. A theorem Axle rejects is
+// handed to a proof_fix child (proof text only; the statement is immutable) and
+// the kernel re-verifies whatever it produces against the ORIGINAL statement
+// before patching it into the theory. If proofs still fail after maxRepair
+// rounds the pipeline stops with the theorem names — blocking, not degrading.
+//
+// No verifier configured / no response from Axle is "unverified", which does
+// not block: an outage is not evidence that a proof is wrong.
+func dev_proof_preflight(pid int64, repo, branch, theory string) (string, error) {
+	const maxRepair = 2
+	if len(ParseSpecProofs(theory)) == 0 {
+		log.Printf("dev_proof_preflight: %s no axle_verify pairs in theory, nothing to check", repo)
+		return theory, nil
+	}
+	if !AxleAvailable() {
+		log.Printf("dev_proof_preflight: %s kernel has no Axle verifier — proofs stay UNVERIFIED", repo)
+		return theory, nil
+	}
+	names := func() []string { return SpecTheorems(theory) }
+	for attempt := 0; ; attempt++ {
+		Proofs.EnsureSpecVerified(theory)
+		gate := Proofs.Check(names())
+		log.Printf("dev_proof_preflight: %s verified=%d failed=%d unverified=%d (repair round %d/%d)",
+			repo, len(gate.Verified), len(gate.Failed), len(gate.Unverified), attempt, maxRepair)
+		if !gate.Blocked() {
+			return theory, nil
+		}
+		if attempt >= maxRepair {
+			return theory, fmt.Errorf("dev_from_theorems: proof gate BLOCKED for %s after %d repair rounds — %s",
+				repo, maxRepair, Proofs.FailVerdict(gate))
+		}
+		patched := dev_repair_proofs(pid, repo, theory, gate.Failed, attempt+1)
+		if patched != theory {
+			theory = patched
+			theorem_replace_last(repo, theory)
+			dev_store_theory(theory, repo, branch)
+		}
+	}
+}
+
+// proofFixRunner runs one proof_fix child to completion. A var so tests can
+// stand in for the conversation (ForkWithRole needs a booted kernel).
+var proofFixRunner = func(pid int64, repo, role string, attempt int, prompt string) error {
+	child, err := ForkWithRole(prompt, ".", role)
+	if err != nil {
+		return err
+	}
+	if m := getMeta(child); m != nil && m.ConvID != "" {
+		RegisterConv(pid, m.ConvID, repo, role, attempt)
+	}
+	Wait(child)
+	return nil
+}
+
+// dev_repair_proofs forks one proof_fix child for the failing theorems and
+// returns the theory with every proof the kernel could re-verify patched in.
+func dev_repair_proofs(pid int64, repo, theory string, failed []string, attempt int) string {
+	var p strings.Builder
+	p.WriteString("[TASK] repair failing Lean 4 proofs. Axle rejected the proofs below.\n\n")
+	p.WriteString("[RULES]\n")
+	p.WriteString("- change ONLY the proof (after `:= by`). The theorem statement is fixed; the kernel re-checks your proof\n")
+	p.WriteString("  against the ORIGINAL statement, so a weakened or altered statement is simply rejected.\n")
+	p.WriteString("- verify each theorem with the Axle curl from your instructions, one curl per theorem.\n")
+	p.WriteString("- use omega / decide / simp / norm_num / Nat lemmas. no native_decide, no sorry, no new axioms.\n")
+	p.WriteString("- the kernel records Axle's responses itself. what you write about results is not read.\n")
+	p.WriteString("- do NOT write code files, do NOT git push, do NOT touch anything except these proofs.\n")
+	p.WriteString("- stop when every theorem returns okay=true; if one resists 4 distinct approaches, stop and name it.\n\n")
+	p.WriteString("[FAILING THEOREMS]\n")
+	for _, n := range failed {
+		r, ok := Proofs.Get(n)
+		if !ok {
+			continue
+		}
+		p.WriteString(fmt.Sprintf("### %s\nstatement:\n```lean\n%s\n```\ncurrent proof:\n```lean\n%s\n```\naxle error: %s\n\n",
+			n, r.Statement, r.Content, r.Error))
+	}
+	role := fmt.Sprintf("proof_fix_%d", attempt)
+	log.Printf("dev_repair_proofs: %s round %d, %d theorem(s): %v (%d bytes prompt)",
+		repo, attempt, len(failed), failed, p.Len())
+	if err := proofFixRunner(pid, repo, role, attempt, p.String()); err != nil {
+		log.Printf("dev_repair_proofs: proof_fix child failed: %v", err)
+		return theory
+	}
+
+	for _, n := range failed {
+		r, ok := Proofs.Get(n)
+		if !ok || r.Status != ProofVerified || r.VerifiedContent == "" {
+			log.Printf("dev_repair_proofs: %s still not verified after round %d", n, attempt)
+			continue
+		}
+		// PatchSpecProof re-verifies (original statement, new proof) itself.
+		if patched, ok := Proofs.PatchSpecProof(theory, n, r.VerifiedContent); ok {
+			log.Printf("dev_repair_proofs: %s patched into theory (kernel re-verified)", n)
+			theory = patched
+		} else {
+			log.Printf("dev_repair_proofs: %s child proof rejected by kernel re-check", n)
+		}
+	}
+	return theory
+}
+
 // dev_store_theory: write theory to .einsteinOS/theory.md on the branch.
 // planner and dev convs read it from there with view/grep.
 func dev_store_theory(theory, repo, branch string) {
@@ -883,6 +986,16 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 	// shared branch for all incremental children
 	branch := fmt.Sprintf("einsteinOS/dev-%d", pid)
 
+	// proofs are verified by the KERNEL before any dev child runs; a failing
+	// proof is repaired (or blocks the pipeline) here, not discovered by a
+	// reviewer an hour later.
+	patchedTheory, perr := dev_proof_preflight(pid, repo, branch, theory)
+	if perr != nil {
+		PRFeedbackAdd(pid, "- "+perr.Error())
+		return "", perr
+	}
+	theory = patchedTheory
+
 	// store theory to branch — planner and dev convs read it from there
 	dev_store_theory(theory, repo, branch)
 
@@ -955,6 +1068,14 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 		p.WriteString("         view .einsteinOS/theory.md <start> <end>  — read a section\n")
 		p.WriteString("you decide what to read and how much.\n\n")
 
+		// --- proof status: kernel fact, not something the dev child verifies ---
+		if tbl := Proofs.Table(SpecTheorems(unit.Theory)); tbl != "" {
+			p.WriteString("[PROOF STATUS — checked by the kernel against Axle. do NOT re-verify these]\n")
+			p.WriteString(tbl)
+			p.WriteString("a VERIFIED theorem is a fact you may rely on. for anything UNPROVEN/UNVERIFIED, never claim in code or\n")
+			p.WriteString("comments that it is verified; guard the property with a static_assert or runtime check plus a test.\n\n")
+		}
+
 		// --- strict scope: execute only, no self-judging ---
 		p.WriteString("[YOUR ROLE]\n")
 		p.WriteString("you are an EXECUTOR — write code, compile, push. that's it.\n")
@@ -998,6 +1119,9 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 				&CompileResult{BuildCmd: "make"},
 				&ConsecutiveTextRounds{Threshold: 2},
 			),
+			// the And above never fired in dev_unit#2 (compile went green via
+			// build_and_test.sh, not a bare `make`), leaving 7 idle rounds.
+			&ConsecutiveTextRounds{Threshold: 4},
 			&MaxRounds{Limit: 20},
 		)
 		var child int64
@@ -1099,7 +1223,16 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 				lastStatus = map[string]string{}
 			}
 			lastStatus["review"] = reviewVerdict
-			dev_push_fix(pid, step.Owner, step.Repo, lastStatus, i+1)
+			// the reviewer's reason must reach the next child (it did not before)
+			PRFeedbackAdd(pid, fmt.Sprintf("- review[%s] unit %d/%d: %s", repo, i+1, len(units), reviewVerdict))
+			if strings.Contains(reviewVerdict, "proof_failed:") {
+				// a proof problem is not a code problem: re-queueing re-runs the
+				// preflight, which repairs the proof or blocks with its name.
+				log.Printf("dev_from_theorems: %s unit %d/%d proof gate FAIL — no code fix, re-running preflight",
+					repo, i+1, len(units))
+			} else {
+				dev_push_fix(pid, step.Owner, step.Repo, lastStatus, i+1)
+			}
 			pr_push_step(pid, &Step{
 				Kind:  STEP_DEV_FROM_THEOREMS,
 				Owner: step.Owner,
@@ -1307,6 +1440,10 @@ func dev_fix(pid int64, step *Step) (string, error) {
 	if step.Result != "" {
 		prompt.WriteString(fmt.Sprintf("files_written=%s\n", step.Result))
 	}
+	if step.Command == "review_fail" && step.Path != "" {
+		prompt.WriteString("the REVIEWER rejected the last unit for exactly the reason in error= above.\n")
+		prompt.WriteString("fix that reason first; do not spend tools on unrelated probing.\n")
+	}
 	prompt.WriteString("\n")
 
 	// NO ref source files. the dev child must work from theory + existing dev
@@ -1365,6 +1502,36 @@ func dev_fix(pid int64, step *Step) (string, error) {
 	return stdout, nil
 }
 
+// classifyDevFailure maps the kernel's status map to a failure type and the
+// concrete reason the fix child should work from.
+//
+// Order matters: hard machine evidence (compile/gpu/smoke) first, then the
+// reviewer's verdict. Before this existed the review verdict was written to
+// status["review"] and never read, so a review FAIL with compile=pass became
+// type "unknown" with an empty error — the fix child got no reason at all and
+// the Strata dev_fix_1 spent 24 minutes probing P2P instead of the Makefile and
+// proof the reviewer had named.
+func classifyDevFailure(status map[string]string) (ftype, msg string) {
+	switch {
+	case status["compile"] == "unknown":
+		return "compile_unknown", status["compile_error"]
+	case status["compile"] == "fail":
+		return "compile_fail", status["compile_error"]
+	case status["gpu_test"] == "fail":
+		return "gpu_fail", status["gpu_test_detail"]
+	case status["smoke"] == "fail":
+		return "smoke_fail", status["smoke_error"]
+	case strings.HasPrefix(status["review"], "FAIL"):
+		r := strings.TrimSpace(strings.TrimPrefix(status["review"], "FAIL"))
+		r = strings.TrimSpace(strings.TrimPrefix(r, ":"))
+		if strings.HasPrefix(r, "proof_failed:") {
+			return "proof_fail", r
+		}
+		return "review_fail", r
+	}
+	return "unknown", ""
+}
+
 // dev_push_fix: kernel classifies failure and pushes a STEP_DEV_FIX.
 // no text instructions — only structured args in Step fields.
 // dev_store_conv: download a unit's conversation, extract a SUMMARY, and
@@ -1393,7 +1560,28 @@ func dev_fix(pid int64, step *Step) (string, error) {
 // dev_unit convs tend to self-assess optimistically ("compile=pass" even when
 // not all modules are implemented). the review_conv catches that.
 // ---------------------------------------------------------------------------
+// dev_review_unit wraps the reviewer with the proof gate: a PASS is only
+// accepted if the kernel ledger has no failed proof for this unit's theorems.
+// Whatever the reviewer wrote about Lean is not an input.
 func dev_review_unit(pid int64, repo, branch string, unitNum, totalUnits int, unit devUnit, status map[string]string) string {
+	v := dev_review_unit_inner(pid, repo, branch, unitNum, totalUnits, unit, status)
+	if !strings.HasPrefix(v, "PASS") {
+		return v
+	}
+	g := Proofs.Check(SpecTheorems(unit.Theory))
+	if g.Blocked() {
+		log.Printf("dev_review_unit: %s unit %d reviewer said PASS but proof gate blocks: %v — overriding to FAIL",
+			repo, unitNum, g.Failed)
+		return Proofs.FailVerdict(g)
+	}
+	if len(g.Unverified) > 0 {
+		log.Printf("dev_review_unit: %s unit %d PASS with %d UNVERIFIED theorem(s): %v",
+			repo, unitNum, len(g.Unverified), g.Unverified)
+	}
+	return v
+}
+
+func dev_review_unit_inner(pid int64, repo, branch string, unitNum, totalUnits int, unit devUnit, status map[string]string) string {
 	devRepos := GetDevRepos()
 	if len(devRepos) == 0 {
 		// no dev repo — can't review, trust the compile status
@@ -1428,6 +1616,13 @@ func dev_review_unit(pid int64, repo, branch string, unitNum, totalUnits int, un
 		prompt.WriteString(fmt.Sprintf("  %s = %s\n", k, v))
 	}
 	prompt.WriteString("\n")
+
+	if tbl := Proofs.Table(SpecTheorems(unit.Theory)); tbl != "" {
+		prompt.WriteString("[PROOF STATUS — checked by the kernel against Axle; this is fact]\n")
+		prompt.WriteString(tbl)
+		prompt.WriteString("do NOT run Axle and do NOT give a Lean verdict. judge the code against the LAYER 1a spec only.\n")
+		prompt.WriteString("the kernel enforces the proof gate separately and will override a PASS if a proof failed.\n\n")
+	}
 
 	prompt.WriteString("[WHAT TO CHECK]\n")
 	prompt.WriteString("1. git clone the dev repo, checkout the branch\n")
@@ -1758,12 +1953,9 @@ func dev_push_fix(pid int64, owner, repo string, status map[string]string, attem
 		return
 	}
 
-	failureType := "unknown"
-	errorMsg := ""
 	filesWritten := status["files_written"]
 
-	switch {
-	case status["compile"] == "no_response":
+	if status["compile"] == "no_response" {
 		log.Printf("dev_push_fix: %s/%s no_response, retrying same step (not counting attempt)",
 			owner, repo)
 		pr_push_step(pid, &Step{
@@ -1772,25 +1964,8 @@ func dev_push_fix(pid int64, owner, repo string, status map[string]string, attem
 			Repo:  repo,
 		})
 		return
-
-	case status["compile"] == "unknown":
-		failureType = "compile_unknown"
-		errorMsg = status["compile_error"]
-		filesWritten = status["files_written"]
-
-	case status["compile"] == "fail":
-		failureType = "compile_fail"
-		errorMsg = status["compile_error"]
-		// NO source hints. fix child works from theory + compile error + existing dev code.
-
-	case status["gpu_test"] == "fail":
-		failureType = "gpu_fail"
-		errorMsg = status["gpu_test_detail"]
-
-	case status["smoke"] == "fail":
-		failureType = "smoke_fail"
-		errorMsg = status["smoke_error"]
 	}
+	failureType, errorMsg := classifyDevFailure(status)
 
 	log.Printf("dev_push_fix: %s/%s type=%s attempt=%d",
 		owner, repo, failureType, attempt)

@@ -21,6 +21,12 @@ var localExecPrefix string
 func BuildSystemPrompt(axleCookie, axleCSRF string) {
 	var axleBlock string
 	if axleCookie != "" {
+		// the kernel verifies spec proofs itself (proof_ledger.go); it cannot
+		// import this package, so hand it the Axle client here.
+		sess := strings.TrimPrefix(axleCookie, "provertools_session=")
+		kernel.SetAxleVerifier(func(payload string) string {
+			return axleExecWithRetry(payload, sess, axleCSRF)
+		})
 		axleBlock = fmt.Sprintf(`
 [LEAN 4 PROOF VERIFICATION]
 the local machine has Axle API access for Lean 4 proof verification.
@@ -222,6 +228,23 @@ type loopState struct {
 	isChild              bool
 	convID               string
 	sseRecovery          bool // set when we sent bare "Continue" after SSE break; cleared after one round
+	executed             toolIDSet // tool_use IDs already run, so SSE recovery never replays them
+}
+
+// toolIDSet remembers which tool_use IDs have been executed. DownloadLastTools
+// returns the last assistant turn's tools — after an SSE break that is the
+// PREVIOUS round, already executed; re-running them replayed 39 commands in the
+// Strata run (pid345–383 duplicated pid273–311).
+type toolIDSet map[string]struct{}
+
+func (t toolIDSet) mark(id string) {
+	if id != "" {
+		t[id] = struct{}{}
+	}
+}
+func (t toolIDSet) seen(id string) bool {
+	_, ok := t[id]
+	return id != "" && ok
 }
 
 func (m *Model) completionLoop(ctx context.Context, convID string, webReq *CompletionRequest, stream bool, yield func(*model.LLMResponse, error) bool, opts ...bool) {
@@ -229,7 +252,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 	const maxRounds = 20
 
 	isChild := len(opts) > 0 && opts[0]
-	st := &loopState{convID: convID, isChild: isChild}
+	st := &loopState{convID: convID, isChild: isChild, executed: toolIDSet{}}
 
 	// d2aaf709 → termination conditions: role determines lifecycle via
 	// composable TerminationCondition, not hardcoded round counts.
@@ -588,6 +611,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 
 		var toolResults []ToolResult
 		for _, tb := range collectedTools {
+			st.executed.mark(tb.id)
 			result := m.Shadow.Execute(tb.name, tb.inputJSON.String())
 			// shadow returns "" when it intentionally skips execution:
 			// axle verification, git, curl/wget, lean/elan, ssh, unknown tools.
@@ -719,6 +743,11 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 
 				var recoveredResults []ToolResult
 				for _, t := range tools {
+					if st.executed.seen(t.ID) {
+						log.Printf("claudeweb: SSE recovery: skip already-executed tool %s", truncate(t.ID, 12))
+						continue
+					}
+					st.executed.mark(t.ID)
 					result := m.Shadow.Execute(t.Name, t.Input)
 					if result == "" {
 						continue

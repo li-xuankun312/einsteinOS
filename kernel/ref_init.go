@@ -849,6 +849,26 @@ func theorem_get(repo, sha string) string {
 	return best
 }
 
+// theorem_replace_last swaps the text of the entry theorem_get(repo,"") would
+// return, in place. Used when the kernel patches a spec proof after Axle has
+// verified the replacement; appending a new entry instead would skew
+// theorem_count() and the ref_bind bookkeeping that reads it.
+func theorem_replace_last(repo, theory string) bool {
+	theorem_mu.Lock()
+	defer theorem_mu.Unlock()
+	last := -1
+	for i := 0; i < nr_theorems; i++ {
+		if theorem_table[i].repo == repo {
+			last = i
+		}
+	}
+	if last < 0 {
+		return false
+	}
+	theorem_table[last].theory = theory
+	return true
+}
+
 func theorem_get_all(repo string) string {
 	theorem_mu.Lock()
 	defer theorem_mu.Unlock()

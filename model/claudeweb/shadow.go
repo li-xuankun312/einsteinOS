@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"google.golang.org/adk/v2/kernel"
@@ -114,31 +115,16 @@ func (s *ShadowExecutor) Execute(toolName string, inputJSON string) string {
 
 	// Axle proof verification runs on the REAL MACHINE, not remote sandbox.
 	// remote sandbox has no network access to axle.axiommath.ai.
-	// extract JSON payload from the curl command and call Axle via Go http.Post
-	// to avoid shell escaping issues ("Request body must be valid JSON").
+	// every Axle request in the command is parsed like a shell would (see
+	// axle_extract.go) and sent via Go http.Post — no shell, no escaping issues,
+	// and a command with several curls no longer falls into the slow curl path.
 	if strings.Contains(command, "axle.axiommath.ai") || strings.Contains(command, "verify_proof") {
-		payload, session, csrf := extractAxlePayload(command)
-		if payload != "" {
-			// validate: payload should be parseable JSON
-			if !json.Valid([]byte(payload)) {
-				log.Printf("[shadow] axle: extracted payload is not valid JSON (%d bytes): %s",
-					len(payload), truncateCmd(payload, 150))
-				// fall through to curl fallback
-				payload = ""
-			}
+		if set, ok := extractAxleRequests(command); ok {
+			log.Printf("[shadow] axle: using Go HTTP path (%d request(s), payload=%d bytes, session=%d, csrf=%d)",
+				len(set.Payloads), len(set.Payloads[0]), len(set.Session), len(set.CSRF))
+			return runAxleRequests(set)
 		}
-		if payload != "" {
-			log.Printf("[shadow] axle: using Go HTTP path (payload=%d bytes, session=%d, csrf=%d)",
-				len(payload), len(session), len(csrf))
-			result := axleExecWithRetry(payload, session, csrf)
-			if result != "" {
-				log.Printf("[shadow] axle verify_proof: got %d bytes", len(result))
-				return result
-			}
-			log.Printf("[shadow] axle verify_proof: all retries failed, letting remote result stand")
-			return ""
-		}
-		// couldn't extract payload — try raw curl as fallback
+		// couldn't safely parse the command — run the raw curl, bounded and killable
 		log.Printf("[shadow] axle: using curl fallback (extraction failed)")
 		result := axleExecWithRetryCurl(command, s.WorkDir)
 		if result != "" {
@@ -306,53 +292,6 @@ func extractTheoremSig(code string) string {
 	return ""
 }
 
-// extractAxlePayload parses the child's curl command to extract the JSON body,
-// session cookie, and CSRF token. returns ("","","") if it can't parse.
-func extractAxlePayload(command string) (payload, session, csrf string) {
-	// extract --data-raw or -d payload.
-	// JSON may contain single quotes (Lean syntax: 'a), so find the closing
-	// quote from the END: the last }' or }" in the command is the end of the payload.
-	for _, prefix := range []string{"--data-raw '", "--data-raw \"", "-d '", "-d \""} {
-		idx := strings.Index(command, prefix)
-		if idx < 0 {
-			continue
-		}
-		start := idx + len(prefix)
-		quote := string(prefix[len(prefix)-1])
-		// find last occurrence of }<quote> (JSON object end + shell close)
-		closer := "}" + quote
-		end := strings.LastIndex(command[start:], closer)
-		if end < 0 {
-			// maybe no trailing }, try just the last quote
-			end = strings.LastIndex(command[start:], quote)
-			if end < 0 {
-				continue
-			}
-		} else {
-			end += 1 // include the }
-		}
-		payload = command[start : start+end]
-		break
-	}
-	// extract session cookie
-	if idx := strings.Index(command, "provertools_session="); idx >= 0 {
-		rest := command[idx+len("provertools_session="):]
-		end := strings.IndexAny(rest, "'; \"")
-		if end > 0 {
-			session = rest[:end]
-		}
-	}
-	// extract CSRF
-	if idx := strings.Index(command, "x-browser-api-csrf: "); idx >= 0 {
-		rest := command[idx+len("x-browser-api-csrf: "):]
-		end := strings.IndexAny(rest, "' \"")
-		if end > 0 {
-			csrf = rest[:end]
-		}
-	}
-	return
-}
-
 // axleExecWithRetry calls Axle via Go http.Post — no shell, no escaping issues.
 func axleExecWithRetry(payload, session, csrf string) string {
 	type round struct {
@@ -407,7 +346,11 @@ func axleHTTPOnce(payload, session, csrf string, directNoProxy bool, timeout tim
 			TLSHandshakeTimeout: timeout,
 		}
 	} else {
-		// use default transport which inherits env proxy (socks5://127.0.0.1:1080)
+		// NOTE: a zero-value http.Transport has Proxy == nil, so this does NOT
+		// consult the env proxy (that needs Proxy: http.ProxyFromEnvironment).
+		// In practice both "proxy" and "direct" rounds here are direct — which
+		// is why the Go path always answered in ~1s while the curl path, which
+		// really did use the proxy, hung. Kept as-is: it works.
 		transport = &http.Transport{
 			TLSHandshakeTimeout: timeout,
 		}
@@ -415,7 +358,7 @@ func axleHTTPOnce(payload, session, csrf string, directNoProxy bool, timeout tim
 	client := &http.Client{Transport: transport, Timeout: timeout}
 
 	req, err := http.NewRequestWithContext(ctx, "POST",
-		"https://axle.axiommath.ai/api/v1/verify_proof",
+		axleURL,
 		strings.NewReader(payload))
 	if err != nil {
 		return ""
@@ -435,6 +378,13 @@ func axleHTTPOnce(payload, session, csrf string, directNoProxy bool, timeout tim
 	return string(body)
 }
 
+// axleURL is a var so tests can point the Go path at an httptest server.
+var axleURL = "https://axle.axiommath.ai/api/v1/verify_proof"
+
+// axleDirectPreferred is set when the last curl-fallback success came from the
+// no-proxy path, so the next call tries that first.
+var axleDirectPreferred atomic.Bool
+
 // axleExecWithRetryCurl is the fallback: runs the raw curl command via shell.
 // used when extractAxlePayload can't parse the child's curl command.
 // axleExecWithRetryCurl is the fallback when extractAxlePayload can't parse the curl.
@@ -446,10 +396,21 @@ func axleExecWithRetryCurl(command string, workDir string) string {
 		tries    int
 		guard    time.Duration
 	}
+	// Evidence from the Strata run: with the env proxy every attempt timed out,
+	// and the first direct attempt answered in ~3s. So the order adapts: start
+	// with whichever path last worked, and fewer blind repeats of the one that
+	// just failed (the old 5/1/5 spent up to 75s+ before ever trying direct).
 	rounds := []round{
-		{"proxy", false, 5, 15 * time.Second},
-		{"direct", true, 1, 15 * time.Second},
-		{"proxy", false, 5, 20 * time.Second},
+		{"proxy", false, 2, 15 * time.Second},
+		{"direct", true, 2, 15 * time.Second},
+		{"proxy", false, 3, 20 * time.Second},
+	}
+	if axleDirectPreferred.Load() {
+		rounds = []round{
+			{"direct", true, 2, 15 * time.Second},
+			{"proxy", false, 2, 15 * time.Second},
+			{"direct", true, 2, 20 * time.Second},
+		}
 	}
 
 	for _, r := range rounds {
@@ -471,6 +432,7 @@ func axleExecWithRetryCurl(command string, workDir string) string {
 				continue
 			}
 			log.Printf("[shadow] axle-curl %s %d/%d: got response (%d bytes)", r.name, attempt, r.tries, len(result))
+			axleDirectPreferred.Store(r.envUnset) // remember which path works
 			return fmt.Sprintf("[pid 0 exit=0] %s", result)
 		}
 	}
@@ -484,6 +446,7 @@ func axleExecOnce(command string, workDir string, unsetProxy bool, timeout time.
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "bash", "-c", command)
+	hardKillOnCancel(cmd) // kill the whole group, not just bash — see shadow_proc_unix.go
 	if workDir != "" {
 		cmd.Dir = workDir
 	}
