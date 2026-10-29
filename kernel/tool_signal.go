@@ -23,6 +23,7 @@ type ToolSignalCollector struct {
 	compileRuns  []CompileRun
 	gitPushes    []GitPush
 	bashCommands []BashRecord
+	toolCalls    int // every tool call observed, of any kind
 }
 
 type CompileRun struct {
@@ -52,6 +53,7 @@ func NewToolSignalCollector() *ToolSignalCollector {
 func (c *ToolSignalCollector) Observe(toolName, inputJSON, output string, round int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.toolCalls++
 
 	switch toolName {
 	case "bash", "terminal":
@@ -128,6 +130,14 @@ func (c *ToolSignalCollector) classifyBash(cmd, output string) {
 
 // CompileStatus returns the result of the last compile command.
 // Replaces: parse_last_status(text)["compile"]
+// ToolCalls is how many tool calls this child made. Zero with a stub result means
+// it never ran (e.g. rejected at fork time), so there is nothing to wait for.
+func (c *ToolSignalCollector) ToolCalls() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.toolCalls
+}
+
 func (c *ToolSignalCollector) CompileStatus() (passed bool, found bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

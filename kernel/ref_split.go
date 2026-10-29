@@ -49,6 +49,8 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 
 	var child_pids []int64
 	var results []string
+	var chunkCovs []Coverage // final coverage per chunk (zeroed for junk)
+	var junkChunks []int
 	for i, chunk := range chunks {
 		child_pid := ref_split_fork(parent_pid, owner, repo, sha, chunk, task, depth+1, i, len(chunks), chunks, results)
 		if child_pid <= 0 {
@@ -95,76 +97,20 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 			// don't push until we have final data.
 		}
 
-		// theory completeness: count ## MODULE: or ## FILE: headers vs assigned files.
-		// ## MODULE: uses abstract names so we count modules vs expected file count.
-		// ## FILE: (legacy) matches exact paths.
-		// if missing, ContinueConv on the same theorize conversation.
-		if convID != "" && len(result) >= 500 {
-			covered := map[string]bool{}
-			moduleCount := 0
-			for _, line := range strings.Split(result, "\n") {
-				trimmed := strings.TrimSpace(line)
-				if strings.HasPrefix(trimmed, "## MODULE:") || strings.Contains(trimmed, "## MODULE:") {
-					moduleCount++
-				} else if strings.HasPrefix(trimmed, "## FILE:") {
-					path := strings.TrimSpace(trimmed[len("## FILE:"):])
-					covered[path] = true
-				} else if strings.Contains(trimmed, "## FILE:") {
-					idx := strings.Index(trimmed, "## FILE:")
-					path := strings.TrimSpace(trimmed[idx+len("## FILE:"):])
-					covered[path] = true
-				}
-			}
-			var missing []string
-			if moduleCount > 0 {
-				// new format: ## MODULE headers. check count vs file count.
-				// modules may not be 1:1 with files (e.g. small files grouped),
-				// so only flag missing if we have <50% coverage.
-				if moduleCount < len(chunk)/2 {
-					// estimate missing: files not yet covered
-					for idx := moduleCount; idx < len(chunk); idx++ {
-						missing = append(missing, chunk[idx])
-					}
-				}
-				log.Printf("ref_split: chunk %d/%d has %d ## MODULE headers for %d files",
-					i+1, len(chunks), moduleCount, len(chunk))
-			} else {
-				// legacy format: ## FILE headers with exact paths
-				for _, f := range chunk {
-					if !covered[f] {
-						missing = append(missing, f)
-					}
-				}
-			}
-			if len(missing) > 0 && len(missing) < len(chunk) {
-				log.Printf("ref_split: chunk %d/%d has %d/%d files covered, %d missing — ContinueConv to recover",
-					i+1, len(chunks), len(covered), len(chunk), len(missing))
-				var prompt strings.Builder
-				prompt.WriteString(fmt.Sprintf("Continue. %d files remaining:\n", len(missing)))
-				for _, f := range missing {
-					prompt.WriteString(f + "\n")
-				}
-				contResult, _ := ContinueConv(convID, prompt.String())
-				if len(contResult) > 100 {
-					// re-download full conversation to get everything including create_file
-					fullDownload, err := DownloadConv(convID)
-					if err == nil && len(fullDownload) > len(result) {
-						log.Printf("ref_split: chunk %d/%d ContinueConv + re-download: %d bytes (was %d)",
-							i+1, len(chunks), len(fullDownload), len(result))
-						result = fullDownload
-					} else {
-						log.Printf("ref_split: chunk %d/%d ContinueConv appended %d bytes",
-							i+1, len(chunks), len(contResult))
-						result = result + "\n\n" + contResult
-					}
-				}
-			}
+		// theory completeness against the files THIS chunk was assigned (see
+		// theory_coverage.go). The old check counted "## MODULE:" headers, a format the
+		// pure-.lean prompt no longer produces, and mixed two metrics in one log line.
+		cov := ChunkCoverage(chunk, result)
+		if convID != "" && cov.CoveredCount() > 0 && len(cov.Missing) > 0 {
+			result, cov = chunk_fill_missing(convID, chunk, result,
+				fmt.Sprintf("chunk %d/%d", i+1, len(chunks)))
 		}
 
 		// detect bad results: too thin OR child refused (social engineering detection).
 		needsRetry := false
-		if len(result) < 500 {
-			log.Printf("ref_split: chunk %d/%d result too thin (%d bytes)", i+1, len(chunks), len(result))
+		if chunkIsJunk(result, cov) {
+			log.Printf("ref_split: chunk %d/%d result is junk (%d bytes, %d/%d assigned files covered)",
+				i+1, len(chunks), len(result), cov.CoveredCount(), cov.Total)
 			needsRetry = true
 		}
 		if strings.Contains(rawResult, "don't have any prior context") ||
@@ -185,6 +131,18 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 			// if size stable and <= 500 after 30min → give up, retry fresh.
 			log.Printf("ref_split: chunk %d/%d too thin, polling remote conv %s (3min intervals, exit after 5 stale)",
 				i+1, len(chunks), convID[:8])
+			// bound the wait. A child that ran tools may legitimately take a long
+			// time to persist (chunk 4's content appeared ~16 min after the break);
+			// one that never ran a tool (account error at fork) has nothing to wait for.
+			neverRan := false
+			if col := GetCollector(child_pid); col != nil && col.ToolCalls() == 0 && len(rawResult) < 500 {
+				neverRan = true
+			}
+			pollWait := 45 * time.Minute
+			if neverRan {
+				pollWait = 7 * time.Minute
+			}
+			pollDeadline := time.Now().Add(pollWait)
 			prevSize := len(result)
 			maxSeen := len(result)
 			stableCount := 0
@@ -192,6 +150,11 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 			continueWaste := 0  // consecutive ContinueConv with tiny pure-text response (child says "done")
 			for poll := 0; staleCount < 5; poll++ {
 				time.Sleep(3 * time.Minute)
+				if time.Now().After(pollDeadline) {
+					log.Printf("ref_split: chunk %d/%d poll %d: gave up after %s (child ran tools: %v)",
+						i+1, len(chunks), poll+1, pollWait, !neverRan)
+					break
+				}
 				redownloaded, dlErr := DownloadConv(convID)
 				curSize := 0
 				if dlErr == nil {
@@ -200,7 +163,7 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 				if dlErr != nil {
 					// download failed — but remote might still be running.
 					// probe before counting as stale.
-					if busy, probeErr := ProbeConvBusy(convID); probeErr == nil && busy {
+					if busy, probeErr := remoteBusy(convID); probeErr == nil && busy {
 						log.Printf("ref_split: chunk %d/%d poll %d: download error but remote still busy, waiting",
 							i+1, len(chunks), poll+1)
 						// don't increment staleCount — remote is alive
@@ -218,7 +181,7 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 				if curSize == 0 {
 					if maxSeen <= 500 {
 						// probe: maybe remote is generating but hasn't flushed to conversation yet
-						if busy, probeErr := ProbeConvBusy(convID); probeErr == nil && busy {
+						if busy, probeErr := remoteBusy(convID); probeErr == nil && busy {
 							log.Printf("ref_split: chunk %d/%d poll %d: 0 bytes but remote still busy, waiting",
 								i+1, len(chunks), poll+1)
 							continue
@@ -236,7 +199,7 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 					staleCount = 0 // content grew — reset stale counter
 				} else {
 					// content didn't grow — probe to check if remote is still running
-					if busy, probeErr := ProbeConvBusy(convID); probeErr == nil && busy {
+					if busy, probeErr := remoteBusy(convID); probeErr == nil && busy {
 						log.Printf("ref_split: chunk %d/%d poll %d: %d bytes unchanged but remote still busy, waiting",
 							i+1, len(chunks), poll+1, curSize)
 						// don't increment staleCount
@@ -247,8 +210,10 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 							log.Printf("ref_split: chunk %d/%d poll %d: ContinueConv returned waste %d times, child is done",
 								i+1, len(chunks), poll+1, continueWaste)
 							staleCount = 5 // force exit
-						} else if staleCount == 0 && curSize > 500 {
-							log.Printf("ref_split: chunk %d/%d poll %d: remote idle, sending ContinueConv to resume",
+						} else if staleCount == 0 && curSize > 500 && continueAllowed(convID) {
+							// only a settled conversation may be sent a message; sending into
+							// an unpersisted turn is what created chunk 1's junk branch
+							log.Printf("ref_split: chunk %d/%d poll %d: conversation settled, sending ContinueConv to resume",
 								i+1, len(chunks), poll+1)
 							contOut, contErr := ContinueConv(convID, "you were interrupted. continue writing ## MODULE sections for YOUR assigned files only. do NOT write theory for files outside your assignment.")
 							if len(contOut) < 4000 && len(contErr) == 0 {
@@ -330,52 +295,27 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 				result = retryResult
 				lastRetryConvID = retryConvID
 			}
-			if len(result) >= 500 {
+			if !chunkIsJunk(result, ChunkCoverage(chunk, result)) {
 				needsRetry = false
 			}
 		}
+		cov = ChunkCoverage(chunk, result)
 
-		// theory completeness check on retry result too.
-		// retry might also be partial (SSE broke again mid-way).
-		if lastRetryConvID != "" && len(result) >= 500 {
-			covered := map[string]bool{}
-			for _, line := range strings.Split(result, "\n") {
-				trimmed := strings.TrimSpace(line)
-				if strings.HasPrefix(trimmed, "## FILE:") {
-					path := strings.TrimSpace(trimmed[len("## FILE:"):])
-					covered[path] = true
-				} else if strings.Contains(trimmed, "## FILE:") {
-					idx := strings.Index(trimmed, "## FILE:")
-					path := strings.TrimSpace(trimmed[idx+len("## FILE:"):])
-					covered[path] = true
-				}
-			}
-			var missing []string
-			for _, f := range chunk {
-				if !covered[f] {
-					missing = append(missing, f)
-				}
-			}
-			if len(missing) > 0 && len(missing) < len(chunk) {
-				log.Printf("ref_split: chunk %d/%d retry result has %d/%d files, %d missing — ContinueConv",
-					i+1, len(chunks), len(covered), len(chunk), len(missing))
-				var prompt strings.Builder
-				prompt.WriteString(fmt.Sprintf("Continue. %d files remaining:\n", len(missing)))
-				for _, f := range missing {
-					prompt.WriteString(f + "\n")
-				}
-				contResult, _ := ContinueConv(lastRetryConvID, prompt.String())
-				if len(contResult) > 100 {
-					fullDownload, err := DownloadConv(lastRetryConvID)
-					if err == nil && len(fullDownload) > len(result) {
-						result = fullDownload
-					} else {
-						result = result + "\n\n" + contResult
-					}
-				}
-			}
+		// completeness on the retry result too: it may also be partial.
+		if lastRetryConvID != "" && cov.CoveredCount() > 0 && len(cov.Missing) > 0 {
+			result, cov = chunk_fill_missing(lastRetryConvID, chunk, result,
+				fmt.Sprintf("chunk %d/%d (retry conv)", i+1, len(chunks)))
 		}
 
+		// a junk result (apologies, error stubs) is NOT theory: do not merge it and
+		// do not count it as coverage. 8 error stubs were merged in the Strata run.
+		if chunkIsJunk(result, cov) {
+			log.Printf("ref_split: chunk %d/%d discarded as junk after all retries (%d bytes)", i+1, len(chunks), len(result))
+			junkChunks = append(junkChunks, i+1)
+			chunkCovs = append(chunkCovs, Coverage{Total: cov.Total, Missing: append([]string{}, chunk...)})
+			continue
+		}
+		chunkCovs = append(chunkCovs, cov)
 		results = append(results, result)
 		// push final data to GitHub (after all polling, retries, ContinueConv).
 		// use the best convID: retry conv if it produced more, else original.
@@ -395,6 +335,22 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 		split_mu.Lock()
 		split_table[node].Children = child_pids
 		split_mu.Unlock()
+	}
+
+	if depth == 0 {
+		sc := SplitCoverage{Chunks: len(chunks), Junk: junkChunks}
+		for _, c := range chunkCovs {
+			sc.Total += c.Total
+			sc.Covered += c.CoveredCount()
+			sc.Missing = append(sc.Missing, c.Missing...)
+		}
+		// chunks whose fork never started are absent from chunkCovs entirely
+		if sc.Total < len(files) {
+			sc.Total = len(files)
+		}
+		setSplitCoverage(owner+"/"+repo, sha, sc)
+		log.Printf("ref_split: %s/%s@%s coverage %d/%d files (%d chunks, junk chunks %v)",
+			owner, repo, short_sha(sha), sc.Covered, sc.Total, len(chunks), junkChunks)
 	}
 
 	merged := strings.Join(results, "\n\n")
@@ -926,4 +882,42 @@ func SplitStatus() string {
 			s.Owner+"/"+s.Repo, len(s.Files), s.Children)
 	}
 	return out
+}
+
+
+// chunk_fill_missing asks the SAME conversation to cover the files still missing,
+// at most twice, and only when the conversation has settled. Sending into a
+// conversation whose last turn is not yet persisted is what produced chunk 1's
+// five junk "Continue"s; if it is not settled we do not send.
+func chunk_fill_missing(convID string, chunk []string, result, tag string) (string, Coverage) {
+	cov := ChunkCoverage(chunk, result)
+	for round := 1; round <= 2 && len(cov.Missing) > 0 && cov.CoveredCount() > 0; round++ {
+		settled, tail, err := ConvSettled(convID)
+		if err != nil || !settled {
+			log.Printf("ref_split: %s has %d/%d files covered, %d missing — NOT sending Continue (settled=%v err=%v last=%s)",
+				tag, cov.CoveredCount(), cov.Total, len(cov.Missing), settled, err, tail.LastSender)
+			break
+		}
+		log.Printf("ref_split: %s has %d/%d files covered, %d missing — ContinueConv round %d",
+			tag, cov.CoveredCount(), cov.Total, len(cov.Missing), round)
+		var prompt strings.Builder
+		prompt.WriteString(fmt.Sprintf("Continue. %d files remaining:\n", len(cov.Missing)))
+		for _, f := range cov.Missing {
+			prompt.WriteString(f + "\n")
+		}
+		contResult, _ := ContinueConv(convID, prompt.String())
+		if full, err := DownloadConv(convID); err == nil && len(full) > len(result) {
+			log.Printf("ref_split: %s ContinueConv + re-download: %d bytes (was %d)", tag, len(full), len(result))
+			result = full
+		} else if len(contResult) > 100 {
+			result = result + "\n\n" + contResult
+		}
+		next := ChunkCoverage(chunk, result)
+		progressed := next.CoveredCount() > cov.CoveredCount()
+		cov = next
+		if !progressed {
+			break
+		}
+	}
+	return result, cov
 }

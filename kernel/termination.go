@@ -461,10 +461,10 @@ func TerminationForRole(role string) TerminationCondition {
 	//   - MaxRounds: absolute safety ceiling (prevents infinite loops)
 	//   - BashExitZero: task-specific success signal (e.g. git push succeeded)
 	//
-	// for liveness detection (is the remote conv still working?), einsteinOS uses
-	// ProbeConvBusy which sends a probe request and checks for "container_in_use" /
-	// "Another response is already running". this is the correct mechanism —
-	// it checks actual state, not guesses based on elapsed time.
+	// for liveness detection (is the remote conv still working?), einsteinOS reads the
+	// conversation tail (remoteBusy / ConvSettled in conv_tail.go): a GET that shows
+	// whether the last turn has been persisted and finished. It used to POST a probe
+	// completion (ProbeConvBusy), which wrote to the conversation it was inspecting.
 	//
 	// hard timeouts were killing active dev_units (theory_chunk_5 took 85min,
 	// dev_unit_2 took 194min, both legitimately working). removing them.

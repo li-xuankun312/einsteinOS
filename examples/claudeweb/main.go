@@ -595,6 +595,11 @@ func newConversation(name string) (*claudeweb.Model, *runner.Runner, string) {
 	kernel.SetProbeConvFn(func(convID string) (bool, error) {
 		return client.ProbeConvBusy(convID)
 	})
+	// the browser's own download form (eventual + dangling human message): the only
+	// one that shows a turn that has been sent but not yet answered/persisted
+	kernel.SetConvTailFn(func(convID string) ([]byte, error) {
+		return client.DownloadConversationEventual(convID)
+	})
 	kernel.SetDownloadConvRawFn(func(convID string) ([]byte, error) {
 		return client.DownloadConversationRaw(convID)
 	})

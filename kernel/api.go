@@ -664,6 +664,10 @@ func ContinueConv(convID, prompt string) (string, string) {
 	return continueConvFn(convID, prompt)
 }
 
+// DEPRECATED for waiting/polling: ProbeConvBusy WRITES to the conversation — it
+// POSTs a "continue" completion, then stops it when the server accepts. Use
+// remoteBusy / ConvSettled (conv_tail.go), which only read. Kept for reference.
+//
 // ProbeConvBusy checks if a remote conversation is still executing.
 // Sends a lightweight completion request ("continue"). Three outcomes:
 //   - returns true, nil  → remote is busy (wiggle_container_in_use)

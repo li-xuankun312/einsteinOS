@@ -372,6 +372,13 @@ func ref_bind_at(pid int64, owner, repo string, startIdx int) (string, error) {
 
 	ref_theorize(pid, owner, repo, theoryCommit.SHA, "", len(theoryFiles), theoryCommit.Message)
 
+	// completeness gate: a theory that covers a fraction of its source is not
+	// "theorized". Blocking here is deliberate — see theory_coverage.go.
+	if gerr := theoryCoverageGate(owner+"/"+repo, theoryCommit.SHA); gerr != nil {
+		log.Printf("ref_bind: %v", gerr)
+		return "", gerr
+	}
+
 	count := theorem_count(owner + "/" + repo)
 	remaining := len(commits) - theoryIdx - 1
 
@@ -2159,15 +2166,26 @@ func dev_collect_child(childPid int64, repo string) (string, map[string]string) 
 			maxSeen := len(stdout)
 			prevSize := len(stdout)
 			staleCount := 0
+			// bounded wait, same reasoning as ref_split: a child that ran tools may
+			// take long to persist; one that never ran any has nothing to wait for.
+			pollWait := 45 * time.Minute
+			if col := GetCollector(childPid); col != nil && col.ToolCalls() == 0 {
+				pollWait = 7 * time.Minute
+			}
+			pollDeadline := time.Now().Add(pollWait)
 			for poll := 0; staleCount < 5; poll++ {
 				time.Sleep(3 * time.Minute)
+				if time.Now().After(pollDeadline) {
+					log.Printf("dev_collect: %s poll %d: gave up after %s", repo, poll+1, pollWait)
+					break
+				}
 				redownloaded, dlErr := DownloadConv(convID)
 				curSize := 0
 				if dlErr == nil {
 					curSize = len(redownloaded)
 				}
 				if dlErr != nil {
-					if busy, probeErr := ProbeConvBusy(convID); probeErr == nil && busy {
+					if busy, probeErr := remoteBusy(convID); probeErr == nil && busy {
 						log.Printf("dev_collect: %s poll %d: download error but remote still busy, waiting", repo, poll+1)
 						continue
 					}
@@ -2180,7 +2198,7 @@ func dev_collect_child(childPid int64, repo string) (string, map[string]string) 
 
 				if curSize == 0 {
 					if maxSeen <= 500 {
-						if busy, probeErr := ProbeConvBusy(convID); probeErr == nil && busy {
+						if busy, probeErr := remoteBusy(convID); probeErr == nil && busy {
 							log.Printf("dev_collect: %s poll %d: 0 bytes but remote still busy, waiting", repo, poll+1)
 							continue
 						}
@@ -2194,13 +2212,13 @@ func dev_collect_child(childPid int64, repo string) (string, map[string]string) 
 					maxSeen = curSize
 					staleCount = 0
 				} else {
-					if busy, probeErr := ProbeConvBusy(convID); probeErr == nil && busy {
+					if busy, probeErr := remoteBusy(convID); probeErr == nil && busy {
 						log.Printf("dev_collect: %s poll %d: %d bytes unchanged but remote still busy, waiting",
 							repo, poll+1, curSize)
 					} else {
 						// remote idle + content stale → ContinueConv to resume
-						if staleCount == 0 && curSize > 500 {
-							log.Printf("dev_collect: %s poll %d: remote idle, sending ContinueConv to resume",
+						if staleCount == 0 && curSize > 500 && continueAllowed(convID) {
+							log.Printf("dev_collect: %s poll %d: conversation settled, sending ContinueConv to resume",
 								repo, poll+1)
 							ContinueConv(convID, "continue — finish compiling, testing, and push to the branch")
 						} else {
