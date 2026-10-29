@@ -121,7 +121,7 @@ func (s *ShadowExecutor) Execute(toolName string, inputJSON string) string {
 	// every Axle request in the command is parsed like a shell would (see
 	// axle_extract.go) and sent via Go http.Post — no shell, no escaping issues,
 	// and a command with several curls no longer falls into the slow curl path.
-	if strings.Contains(command, "axle.axiommath.ai") || strings.Contains(command, "verify_proof") {
+	if isAxleCommand(command) {
 		if set, ok := extractAxleRequests(command); ok {
 			log.Printf("[shadow] axle: using Go HTTP path (%d request(s), payload=%d bytes, session=%d, csrf=%d)",
 				len(set.Payloads), len(set.Payloads[0]), len(set.Session), len(set.CSRF))
@@ -179,7 +179,11 @@ func (s *ShadowExecutor) Execute(toolName string, inputJSON string) string {
 
 	log.Printf("[pid %d] exec: %s", pid, truncateCmd(command, 120))
 
-	childPid, exitCode, err := kernel.Wait(pid)
+	childPid, exitCode, err := waitWithHeartbeat(func() (int64, int, error) { return kernel.Wait(pid) },
+		2*time.Minute, func(elapsed time.Duration) {
+			log.Printf("[pid %d] still running after %s: %s", pid, elapsed.Round(time.Second),
+				truncateCmd(redactAxle(strings.Join(strings.Fields(command), " ")), 160))
+		})
 	if err != nil {
 		return fmt.Sprintf("[pid %d] wait: %v", pid, err)
 	}
@@ -213,6 +217,48 @@ func (s *ShadowExecutor) Execute(toolName string, inputJSON string) string {
 		return fmt.Sprintf("[pid %d exit=%d] %s\nstderr: %s", childPid, exitCode, result, truncateCmd(errStr, 500))
 	}
 	return fmt.Sprintf("[pid %d exit=0] %s", childPid, result)
+}
+
+// waitWithHeartbeat runs wait and calls beat every interval until it returns.
+//
+// kernel.Wait has a 150-minute idle timeout, so a local command that never
+// returns used to freeze the child's loop for up to 2.5 hours with nothing in the
+// log. Ordinary commands (make, CoreX builds, tests) may legitimately run long, so
+// this does not kill anything — it makes a stuck command visible.
+func waitWithHeartbeat(wait func() (int64, int, error), every time.Duration, beat func(elapsed time.Duration)) (int64, int, error) {
+	type res struct {
+		pid  int64
+		code int
+		err  error
+	}
+	ch := make(chan res, 1)
+	go func() {
+		p, c, e := wait()
+		ch <- res{p, c, e}
+	}()
+	start := time.Now()
+	tick := time.NewTicker(every)
+	defer tick.Stop()
+	for {
+		select {
+		case r := <-ch:
+			return r.pid, r.code, r.err
+		case <-tick.C:
+			beat(time.Since(start))
+		}
+	}
+}
+
+var axleScriptRe = regexp.MustCompile(`(?i)(^|[^a-z0-9])axle[._-]?[a-z0-9_]*\.(sh|py)\b`)
+
+// isAxleCommand: any command that talks to Axle. The URL and verify_proof were the
+// only markers, so a child that wraps the call in /tmp/axle.sh and loops over files
+// ("for f in *.lean; do /tmp/axle.sh $f") escaped into the ordinary path, where the
+// only bound is Wait's 150 minutes.
+func isAxleCommand(command string) bool {
+	return strings.Contains(command, "axle.axiommath.ai") ||
+		strings.Contains(command, "verify_proof") ||
+		axleScriptRe.MatchString(command)
 }
 
 func isBashTool(name string) bool {
@@ -407,10 +453,11 @@ var (
 	csrfRedact    = regexp.MustCompile(`(?i)(x-browser-api-csrf:\s*)[^'"\s]+`)
 )
 
-// axleScriptGuard: a command with no curl in it is a script (for example a python
-// loop verifying every file). It may legitimately run for minutes, and retrying it
-// cannot change a deterministic failure.
-const axleScriptGuard = 5 * time.Minute
+// axleScriptGuard: a command with no curl in it is a script (for example a loop
+// calling /tmp/axle.sh on every file). It may legitimately run for minutes, and
+// retrying it cannot change a deterministic failure. Sized for ~a dozen files at
+// Axle's own per-proof limit.
+const axleScriptGuard = 10 * time.Minute
 
 // redactAxle removes the session cookie and csrf token before a command is logged.
 func redactAxle(cmd string) string {
@@ -465,7 +512,10 @@ func formatAxleRun(r axleRun) string {
 func axleExecWithRetryCurl(command string, workDir string) string {
 	// a script, not a curl: one run, long guard, report everything it printed
 	if !curlWordRe.MatchString(command) {
-		run := axleRunOnce(command, workDir, false, axleScriptGuard)
+		// proxy stripped: every successful Axle call in the logs went direct (the Go
+		// path's "proxy" transport has no proxy either), while curl through the env
+		// proxy is what kept timing out
+		run := axleRunOnce(command, workDir, true, axleScriptGuard)
 		log.Printf("[shadow] axle-script: exit=%d timed_out=%v took=%s stdout=%d stderr=%d",
 			run.ExitCode, run.TimedOut, run.Elapsed.Round(time.Second), len(run.Stdout), len(run.Stderr))
 		if run.TimedOut {
