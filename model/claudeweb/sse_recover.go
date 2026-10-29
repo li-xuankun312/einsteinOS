@@ -28,9 +28,11 @@ package claudeweb
 // round is incomplete by design.
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 )
 
@@ -69,12 +71,61 @@ var (
 	errRecoverNoIDs  = errors.New("no tool_use ids to look for")
 )
 
-func idSet(tools []RecoveredTool) map[string]struct{} {
-	s := make(map[string]struct{}, len(tools))
-	for _, t := range tools {
-		s[t.ID] = struct{}{}
+// canonInput normalises a tool input so key order / whitespace differences
+// between the streamed JSON and the persisted JSON do not matter.
+func canonInput(raw string) string {
+	var v any
+	if json.Unmarshal([]byte(raw), &v) != nil {
+		return strings.TrimSpace(raw)
 	}
-	return s
+	b, _ := json.Marshal(v) // encoding/json sorts map keys
+	return string(b)
+}
+
+func toolKey(name, input string) string { return name + "\x00" + canonInput(input) }
+
+// matchRound maps the persisted last message onto the tools we saw streaming.
+//
+// Primary: tool_use id. The ids in the stream and in the persisted message are
+// presumed identical, but nothing in the logs or the web exports we have proves
+// it — and if they differed, an id-only wait would stall for the whole window on
+// every SSE break. So, when NO persisted id matches, fall back to
+// (tool name + canonical input). Content-matched tools get the STREAM id written
+// back so the executed/delivered ledger keeps working unchanged.
+//
+// Residual risk of the content fallback: two consecutive rounds issuing an
+// identical single command. Id matching, when it works, is not affected.
+func matchRound(have, want []RecoveredTool) (out []RecoveredTool, n int, via string) {
+	ids := make(map[string]struct{}, len(have))
+	for _, t := range have {
+		ids[t.ID] = struct{}{}
+	}
+	for _, w := range want {
+		if _, ok := ids[w.ID]; ok {
+			n++
+		}
+	}
+	if n > 0 {
+		return have, n, "id"
+	}
+	used := make([]bool, len(have))
+	out = make([]RecoveredTool, len(have))
+	copy(out, have)
+	for _, w := range want {
+		k := toolKey(w.Name, w.Input)
+		for i, h := range have {
+			if !used[i] && toolKey(h.Name, h.Input) == k {
+				used[i] = true
+				out[i].ID = w.ID
+				n++
+				break
+			}
+		}
+	}
+	if n == 0 {
+		return nil, 0, ""
+	}
+	return out, n, "content"
 }
 
 // waitForRoundTools polls (GET only — never a completion request) until the
@@ -86,7 +137,7 @@ func idSet(tools []RecoveredTool) map[string]struct{} {
 //     earlier round) → keep waiting; that is exactly the not-yet-persisted state
 //   - completion_status error    → stop; the round will never appear
 //   - is_pending=false           → logged only, never ends the wait
-func waitForRoundTools(c recoverClient, convID string, want []string, cfg recoverCfg) ([]RecoveredTool, error) {
+func waitForRoundTools(c recoverClient, convID string, want []RecoveredTool, cfg recoverCfg) ([]RecoveredTool, error) {
 	if len(want) == 0 {
 		return nil, errRecoverNoIDs
 	}
@@ -95,24 +146,18 @@ func waitForRoundTools(c recoverClient, convID string, want []string, cfg recove
 	for poll := 1; ; poll++ {
 		tools, derr := c.DownloadLastTools(convID)
 		if derr == nil {
-			have := idSet(tools)
-			n := 0
-			for _, id := range want {
-				if _, ok := have[id]; ok {
-					n++
-				}
-			}
+			matched, n, via := matchRound(tools, want)
 			switch {
 			case n == len(want):
-				cfg.Logf("claudeweb: SSE recovery: round's message found after %d poll(s) (%d/%d wanted tool ids, %d tools)",
-					poll, n, len(want), len(tools))
-				return tools, nil
+				cfg.Logf("claudeweb: SSE recovery: round's message found after %d poll(s) (%d/%d tools matched by %s, %d tools in message)",
+					poll, n, len(want), via, len(matched))
+				return matched, nil
 			case n > 0:
 				if partialSince.IsZero() {
 					partialSince = cfg.Now()
 				} else if cfg.Now().Sub(partialSince) >= cfg.Grace {
-					cfg.Logf("claudeweb: SSE recovery: accepting message with %d/%d wanted ids after %s grace", n, len(want), cfg.Grace)
-					return tools, nil
+					cfg.Logf("claudeweb: SSE recovery: accepting message with %d/%d tools matched by %s after %s grace", n, len(want), via, cfg.Grace)
+					return matched, nil
 				}
 			}
 		}

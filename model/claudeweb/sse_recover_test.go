@@ -45,6 +45,10 @@ func tools(ids ...string) []RecoveredTool {
 	return out
 }
 
+// w builds the "wanted" list the way the stream would: same id, name and input
+// format as tools().
+func w(ids ...string) []RecoveredTool { return tools(ids...) }
+
 var t0 = time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
 
 // The dev_unit#1 bug: after an SSE break the last assistant message in the
@@ -58,7 +62,7 @@ func TestWait_IgnoresPreviousRoundsMessage(t *testing.T) {
 		}
 		return tools("new1", "new2"), nil
 	}
-	got, err := waitForRoundTools(f, "c", []string{"new1", "new2"}, f.cfg(30*time.Minute))
+	got, err := waitForRoundTools(f, "c", w("new1", "new2"), f.cfg(30*time.Minute))
 	if err != nil || len(got) != 2 || got[0].ID != "new1" {
 		t.Fatalf("must return this round's message, got %v err=%v", got, err)
 	}
@@ -79,7 +83,7 @@ func TestWait_SurvivesSixteenMinutesOfNothing(t *testing.T) {
 		}
 		return tools("a", "b", "c"), nil
 	}
-	got, err := waitForRoundTools(f, "c", []string{"a", "b", "c"}, f.cfg(30*time.Minute))
+	got, err := waitForRoundTools(f, "c", w("a", "b", "c"), f.cfg(30*time.Minute))
 	if err != nil || len(got) != 3 {
 		t.Fatalf("should recover after 16 min: %v %v", got, err)
 	}
@@ -99,7 +103,7 @@ func TestWait_IdleStatusDoesNotEndTheWait(t *testing.T) {
 		}
 		return tools("x"), nil
 	}
-	got, err := waitForRoundTools(f, "c", []string{"x"}, f.cfg(30*time.Minute))
+	got, err := waitForRoundTools(f, "c", w("x"), f.cfg(30*time.Minute))
 	if err != nil || len(got) != 1 {
 		t.Fatalf("idle status must not stop polling: %v %v", got, err)
 	}
@@ -111,7 +115,7 @@ func TestWait_IdleStatusDoesNotEndTheWait(t *testing.T) {
 func TestWait_GivesUpAtTheWindowAndSaysSo(t *testing.T) {
 	f := &fakeConv{now: t0}
 	f.download = func(int) ([]RecoveredTool, error) { return nil, errors.New("no assistant message found") }
-	_, err := waitForRoundTools(f, "c", []string{"x"}, f.cfg(5*time.Minute))
+	_, err := waitForRoundTools(f, "c", w("x"), f.cfg(5*time.Minute))
 	if !errors.Is(err, errRecoverWindow) {
 		t.Fatalf("want window error, got %v", err)
 	}
@@ -124,7 +128,7 @@ func TestWait_ServerErrorEndsTheWaitEarly(t *testing.T) {
 	f := &fakeConv{now: t0}
 	f.status = func(n int) (bool, bool, error) { return false, n >= 3, nil }
 	f.download = func(int) ([]RecoveredTool, error) { return nil, errors.New("no assistant message found") }
-	_, err := waitForRoundTools(f, "c", []string{"x"}, f.cfg(30*time.Minute))
+	_, err := waitForRoundTools(f, "c", w("x"), f.cfg(30*time.Minute))
 	if !errors.Is(err, errRecoverServer) || f.polls != 3 {
 		t.Fatalf("want early server error after 3 polls, got %v after %d", err, f.polls)
 	}
@@ -133,7 +137,7 @@ func TestWait_ServerErrorEndsTheWaitEarly(t *testing.T) {
 func TestWait_PartialMatchGetsGraceThenIsAccepted(t *testing.T) {
 	f := &fakeConv{now: t0}
 	f.download = func(int) ([]RecoveredTool, error) { return tools("a", "b"), nil } // "c" never appears
-	got, err := waitForRoundTools(f, "c", []string{"a", "b", "c"}, f.cfg(30*time.Minute))
+	got, err := waitForRoundTools(f, "c", w("a", "b", "c"), f.cfg(30*time.Minute))
 	if err != nil || len(got) != 2 {
 		t.Fatalf("partial message should be accepted after grace: %v %v", got, err)
 	}
@@ -150,7 +154,7 @@ func TestWait_PartialMatchCompletesInsideGrace(t *testing.T) {
 		}
 		return tools("a", "b"), nil
 	}
-	got, _ := waitForRoundTools(f, "c", []string{"a", "b"}, f.cfg(30*time.Minute))
+	got, _ := waitForRoundTools(f, "c", w("a", "b"), f.cfg(30*time.Minute))
 	if len(got) != 2 || f.polls != 3 {
 		t.Fatalf("should return as soon as all ids are present: polls=%d got=%v", f.polls, got)
 	}
@@ -215,5 +219,77 @@ func TestLedger_EmptyIDsAreIgnored(t *testing.T) {
 	l.markDelivered("")
 	if _, ok := l.cached(""); ok || l.wasDelivered("") {
 		t.Fatalf("empty id must never be tracked")
+	}
+}
+
+
+// ---- ids that do NOT match between stream and persisted message ----
+
+func rawTool(id, name, input string) RecoveredTool { return RecoveredTool{ID: id, Name: name, Input: input} }
+
+// If the persisted message carries different ids than the stream did, an id-only
+// wait would stall for the whole window on every SSE break. Content matching
+// (name + canonical input) must find the round, and must hand back the STREAM
+// ids so the executed/delivered ledger still works.
+func TestWait_FallsBackToContentWhenIdsDiffer(t *testing.T) {
+	want := []RecoveredTool{
+		rawTool("stream_1", "bash_tool", `{"command":"ls /tmp","description":"list"}`),
+		rawTool("stream_2", "create_file", `{"path":"/mnt/user-data/outputs/A.lean","file_text":"theorem a : True := trivial"}`),
+	}
+	f := &fakeConv{now: t0}
+	f.download = func(p int) ([]RecoveredTool, error) {
+		if p < 4 {
+			return nil, errors.New("no assistant message found")
+		}
+		return []RecoveredTool{ // different ids, key order and whitespace differ too
+			rawTool("persisted_X", "bash_tool", `{ "description": "list", "command": "ls /tmp" }`),
+			rawTool("persisted_Y", "create_file", `{"file_text":"theorem a : True := trivial","path":"/mnt/user-data/outputs/A.lean"}`),
+			rawTool("persisted_Z", "bash_tool", `{"command":"extra tool we never saw"}`),
+		}, nil
+	}
+	got, err := waitForRoundTools(f, "c", want, f.cfg(30*time.Minute))
+	if err != nil || len(got) != 3 {
+		t.Fatalf("content fallback failed: %v %v", got, err)
+	}
+	if got[0].ID != "stream_1" || got[1].ID != "stream_2" || got[2].ID != "persisted_Z" {
+		t.Fatalf("matched tools must carry the stream ids, unmatched keep theirs: %v", got)
+	}
+	if f.polls != 4 {
+		t.Fatalf("should recover on first complete poll, polls=%d", f.polls)
+	}
+}
+
+// and the point of rewriting ids: recovery must reuse the result already cached
+// under the stream id instead of running the command again.
+func TestContentMatchedRecoveryDoesNotReplay(t *testing.T) {
+	l := newToolLedger()
+	l.record("stream_1", "local ls output")
+	have := []RecoveredTool{rawTool("persisted_X", "bash_tool", `{"command":"ls /tmp"}`)}
+	want := []RecoveredTool{rawTool("stream_1", "bash_tool", `{"command":"ls /tmp"}`)}
+	matched, n, via := matchRound(have, want)
+	if n != 1 || via != "content" {
+		t.Fatalf("n=%d via=%q", n, via)
+	}
+	ran := 0
+	rr := recoveredResults(l, matched, func(string, string) string { ran++; return "x" })
+	if ran != 0 || len(rr) != 1 || rr[0].Content != "local ls output" {
+		t.Fatalf("replayed or lost: ran=%d rr=%v", ran, rr)
+	}
+}
+
+func TestMatchRound_IdMatchWinsAndIsUntouched(t *testing.T) {
+	have := []RecoveredTool{rawTool("a", "bash_tool", `{"command":"x"}`)}
+	want := []RecoveredTool{rawTool("a", "bash_tool", `{"command":"DIFFERENT"}`)}
+	out, n, via := matchRound(have, want)
+	if via != "id" || n != 1 || out[0].ID != "a" {
+		t.Fatalf("id match must not be second-guessed by content: %v %d %s", out, n, via)
+	}
+}
+
+func TestMatchRound_NoOverlapMatchesNothing(t *testing.T) {
+	have := []RecoveredTool{rawTool("o1", "bash_tool", `{"command":"old round"}`)}
+	want := []RecoveredTool{rawTool("n1", "bash_tool", `{"command":"new round"}`)}
+	if out, n, _ := matchRound(have, want); n != 0 || out != nil {
+		t.Fatalf("an earlier round's message must not match: %v %d", out, n)
 	}
 }

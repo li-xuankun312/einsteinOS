@@ -695,9 +695,9 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 			// earlier round's message, and never substitute local shadow results: shadow
 			// skips git/ssh/curl/lean, so the local view is incomplete by design.
 			recovered := false
-			want := make([]string, 0, len(collectedTools))
+			want := make([]RecoveredTool, 0, len(collectedTools))
 			for _, tb := range collectedTools {
-				want = append(want, tb.id)
+				want = append(want, RecoveredTool{ID: tb.id, Name: tb.name, Input: tb.inputJSON.String()})
 			}
 			tools, rerr := waitForRoundTools(m.client, convID, want, defaultRecoverCfg())
 			if rerr != nil {
