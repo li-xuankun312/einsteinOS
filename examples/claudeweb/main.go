@@ -42,7 +42,7 @@ func main() {
 		baseURL:    envOr("CLAUDE_WEB_BASE_URL", "https://c.aimonkey.plus"),
 		orgID:      envRequired("CLAUDE_WEB_ORG_ID"),
 		cookie:     envRequired("CLAUDE_WEB_COOKIE"),
-		modelName:  envOr("CLAUDE_WEB_MODEL", "claude-opus-4-6"),
+		modelName:  envOr("CLAUDE_WEB_MODEL", "claude-sonnet-5-5"),
 		effort:     envOr("CLAUDE_WEB_EFFORT", "medium"),
 		workDir:    envOr("CLAUDE_WEB_WORKDIR", mustGetwd()),
 		axleCookie: envOr("AXLE_COOKIE", "provertools_session=eyJicm93c2VyX2FwaV9jc3JmIjogIllGYm5BZ2FQS3ZQdTgwR21KUFVaTkhWVzVHY0hfWF9ZYnhFZnhKcElDdU0ifQ==.atBFEQ.XT1vAvHEhv3QOhNsvZlJwDItLcQ"),
