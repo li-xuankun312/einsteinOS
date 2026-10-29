@@ -231,6 +231,13 @@ type loopState struct {
 	ledger               *toolLedger // executed/delivered tool_use ids; see sse_recover.go
 }
 
+// mainConvToolBudget: once the MAIN conversation (not a child) has made this many
+// tool calls without using a registered service (pr_setup / pr_step / sync_repo),
+// the kernel stops it and takes over with the PR pipeline. The task prompt must ask
+// for at least this many tool calls, otherwise the main conversation finishes
+// before the threshold and the pipeline is never entered.
+const mainConvToolBudget = 10
+
 func (m *Model) completionLoop(ctx context.Context, convID string, webReq *CompletionRequest, stream bool, yield func(*model.LLMResponse, error) bool, opts ...bool) {
 	const maxContinues = 8
 	const maxRounds = 20
@@ -437,7 +444,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 					collectedTools = append(collectedTools, *tb)
 					delete(toolBlocks, ev.Index)
 				}
-				if len(collectedTools)+st.totalTools >= 30 && !st.usedServices && !st.isChild {
+				if len(collectedTools)+st.totalTools >= mainConvToolBudget && !st.usedServices && !st.isChild {
 					log.Printf("claudeweb: tool count %d mid-stream, stopping response",
 						len(collectedTools)+st.totalTools)
 					m.client.StopResponse(st.convID)
@@ -537,13 +544,13 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 
 		st.totalTools += len(collectedTools)
 
-		if st.totalTools >= 30 && !st.usedServices && !st.isChild {
+		if st.totalTools >= mainConvToolBudget && !st.usedServices && !st.isChild {
 			for _, tb := range collectedTools {
 				if tb.name == "pr_setup" || tb.name == "pr_step" || tb.name == "sync_repo" {
 					st.usedServices = true
 				}
 			}
-			if !st.usedServices && st.totalTools >= 30 {
+			if !st.usedServices && st.totalTools >= mainConvToolBudget {
 				log.Printf("claudeweb: %d tools without registered services, switching to pr pipeline", st.totalTools)
 				m.client.StopResponse(st.convID)
 				st.usedServices = true
