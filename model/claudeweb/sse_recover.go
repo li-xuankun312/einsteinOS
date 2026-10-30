@@ -171,7 +171,17 @@ func waitForRoundTools(c recoverClient, convID string, want []RecoveredTool, cfg
 			if derr != nil {
 				state = "download: " + derr.Error()
 			}
-			cfg.Logf("claudeweb: SSE recovery poll %d (%s; is_pending=%v — not trusted)", poll, state, pending)
+			elapsed := cfg.Now().Sub(deadline.Add(-cfg.Window))
+			remaining := deadline.Sub(cfg.Now())
+			// this is deliberately the ONLY evidence a caller gets while waiting:
+			// whether the server is still working is unknowable from here (see
+			// sse_recover.go's package doc). The remaining-time figure at least
+			// tells a person watching the log how much longer this will wait
+			// before giving up and falling back — for a long interactive wait,
+			// checking the conversation directly in the browser is the one
+			// reliable way to see whether it is still generating.
+			cfg.Logf("claudeweb: SSE recovery poll %d (%s; is_pending=%v — not trusted) [%s elapsed, giving up in %s if nothing changes]",
+				poll, state, pending, elapsed.Round(time.Second), remaining.Round(time.Second))
 		}
 
 		if !cfg.Now().Before(deadline) {
