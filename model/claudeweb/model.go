@@ -264,6 +264,9 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 			log.Printf("claudeweb: archive %s failed after moving %d: %v", localOutputsDir, n, aerr)
 		} else if n > 0 {
 			log.Printf("claudeweb: archived %d stale entr(ies) from %s to %s (role=%s)", n, localOutputsDir, dest, childRole)
+		} else {
+			// always say something, so "did the clean-up run?" is answerable from the log
+			log.Printf("claudeweb: local outputs already empty at start of role=%s (%s)", childRole, localOutputsDir)
 		}
 	}
 	roleMaxRounds := maxRounds // still used as absolute ceiling
