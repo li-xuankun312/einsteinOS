@@ -484,6 +484,13 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 				doExit(exitError, fmt.Sprintf("[Error] %s", string(event.Data)))
 				return
 
+			case "model_update":
+				// The server changed this conversation's model mid-stream. We keep asking
+				// for m.modelName on every request, so say it plainly (and with the whole
+				// event, which may carry the reason) instead of burying it under
+				// "unhandled event" cut at 200 characters. Logging only: no control flow.
+				log.Printf("claudeweb: %s", describeModelUpdate(event.Data, m.modelName))
+
 			default:
 				log.Printf("claudeweb: unhandled event: %s data=%s", event.Event, truncate(string(event.Data), 200))
 			}
@@ -1053,4 +1060,27 @@ func sleepWithHeartbeat(d time.Duration) {
 			log.Printf("claudeweb: rate limit wait, %v remaining", remaining.Truncate(time.Second))
 		}
 	}
+}
+
+
+// describeModelUpdate renders a model_update event for the log: what the server
+// switched from and to, what we requested, and the full event.
+func describeModelUpdate(data []byte, requested string) string {
+	var ev struct {
+		From struct {
+			Model string `json:"model"`
+		} `json:"from_model"`
+		To struct {
+			Model string `json:"model"`
+		} `json:"to_model"`
+	}
+	if json.Unmarshal(data, &ev) != nil || ev.To.Model == "" {
+		return fmt.Sprintf("MODEL UPDATE from the server (unparsed, requested %s): %s", requested, truncate(string(data), 1500))
+	}
+	note := ""
+	if ev.To.Model != requested {
+		note = " — NOT the model we requested"
+	}
+	return fmt.Sprintf("MODEL CHANGED by the server: %s -> %s (requested %s)%s; full event: %s",
+		ev.From.Model, ev.To.Model, requested, note, truncate(string(data), 1500))
 }
