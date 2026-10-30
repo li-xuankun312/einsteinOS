@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
 
@@ -38,6 +39,23 @@ var dbEngine = vikingdb.NewEngine(64)
 var projectDB *vikingdb.ProjectDB
 
 func main() {
+	// Any subprocess this program isolated into its own process group (a git
+	// clone/fetch/push, an Axle curl fallback — see kernel/proc_registry.go) is
+	// invisible to the terminal's own Ctrl-C: that isolation is what lets OUR
+	// timeouts kill a hung one reliably, but it also means those children do NOT
+	// die with the terminal's SIGINT on their own. Without this, interrupting the
+	// program mid-push or mid-verification left that subprocess (and whatever it
+	// spawned) running in the background indefinitely. Catch the signal here and
+	// kill them ourselves before exiting.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, terminationSignals()...)
+	go func() {
+		sig := <-sigCh
+		n := kernel.KillAllTrackedProcessGroups()
+		log.Printf("claudeweb: received %v — killed %d isolated subprocess group(s) that would otherwise be orphaned, exiting", sig, n)
+		os.Exit(130)
+	}()
+
 	cfg = &appConfig{
 		baseURL:    envOr("CLAUDE_WEB_BASE_URL", "https://c.aimonkey.plus"),
 		orgID:      envRequired("CLAUDE_WEB_ORG_ID"),

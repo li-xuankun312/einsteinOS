@@ -615,7 +615,16 @@ func axleRunOnce(command string, workDir string, unsetProxy bool, timeout time.D
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 
 	t0 := time.Now()
-	err := cmd.Run()
+	if startErr := cmd.Start(); startErr != nil {
+		return axleRun{ExitCode: -1, Stderr: startErr.Error(), Elapsed: time.Since(t0)}
+	}
+	// this command's own process group is isolated from the terminal's (hardKillOnCancel,
+	// see shadow_proc_unix.go) so our own context timeout can kill it reliably — but that
+	// same isolation means a Ctrl-C to the program would otherwise never reach it. Track it
+	// so the program's own signal handler can still kill it (see kernel/proc_registry.go).
+	kernel.TrackProcessGroup(cmd.Process.Pid)
+	err := cmd.Wait()
+	kernel.UntrackProcessGroup(cmd.Process.Pid)
 	run := axleRun{Stdout: stdout.String(), Stderr: stderr.String(), Elapsed: time.Since(t0)}
 	run.TimedOut = ctx.Err() == context.DeadlineExceeded
 	if err != nil {

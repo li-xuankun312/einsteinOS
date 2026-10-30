@@ -104,6 +104,10 @@ func gitGuard(gitCmd, workDir string, startWindow, maxRun time.Duration) gitGuar
 	if err := cmd.Start(); err != nil {
 		return gitGuardResult{Code: -1} // could not even start: same as "not started", the caller retries
 	}
+	// this command's own process group is isolated from the terminal's (see
+	// proc_registry.go) — track it so a Ctrl-C to THIS program can still kill it.
+	TrackProcessGroup(cmd.Process.Pid)
+	defer UntrackProcessGroup(cmd.Process.Pid)
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 
