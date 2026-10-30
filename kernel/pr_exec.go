@@ -1064,6 +1064,11 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 
 	var lastStdout string
 	var lastStatus map[string]string
+	// tracks every unit that passed review in THIS pass. A unit that fails gets
+	// re-queued and this whole function is called again from unit 0, so these
+	// entries are only ever complete and accurate for the pass that reaches
+	// "all units pass" below — nothing reads this slice before then.
+	var unitVerdicts []string
 
 	for i, unit := range units {
 		var p strings.Builder
@@ -1262,6 +1267,7 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 		if strings.HasPrefix(reviewVerdict, "PASS") {
 			log.Printf("dev_from_theorems: %s unit %d/%d pass (review confirmed), branch %s updated",
 				repo, i+1, len(units), branch)
+			unitVerdicts = append(unitVerdicts, fmt.Sprintf("unit %d/%d: PASS — %s", i+1, len(units), strings.Join(unit.Files, ", ")))
 		} else {
 			// FAIL — push fix, then re-queue remaining units
 			log.Printf("dev_from_theorems: %s unit %d/%d review FAIL: %s, pushing fix",
@@ -1302,10 +1308,120 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 		repo, len(units), branch)
 	PRFeedbackAdd(pid, fmt.Sprintf("- dev_from_theorems: all %d units pass, branch %s ready", len(units), branch))
 
+	// this is the ONE thing in the whole pipeline that should be easy to find on
+	// GitHub: a branch where the theory was (coverage-gated) complete and every
+	// dev unit the planner produced passed review. Before this, baloon only ever
+	// accumulated a PR per THEORY CHUNK (removed — see ref_store_chunk) and the
+	// actual finished dev branch (einsteinOS/dev-{pid}) got no PR at all, so
+	// there was no way to tell which of many dev-N branches, across many runs,
+	// was the complete one without opening each and reading the commit history.
+	dev_open_completion_pr(pid, step.Owner, step.Repo, repo, branch, step.SHA, unitVerdicts)
+
 	// log the conv registry so main conv knows where to find everything
 	log.Printf("dev_from_theorems: conv_registry:\n%s", ConvRegistryStatus())
 
 	return lastStdout, nil
+}
+
+// dev_open_completion_pr opens the ONE PR that marks a dev branch as a complete,
+// reviewed run — the discoverability signal the rest of the pipeline withholds
+// on purpose (ref_store_chunk pushes theory chunk branches with no PR; a FAILED
+// or in-progress dev_from_theorems run never reaches this function at all, so
+// its branch stays PR-less too). Title and body state plainly what was and was
+// not verified, rather than just "done":
+//   - theory coverage from the kernel's own measurement (theory_coverage.go),
+//     not from anything a child reported
+//   - Axle verification status from the kernel's own proof ledger
+//     (proof_ledger.go) for whatever theorems it was able to check — for theory
+//     written as bare .lean files with no axle_verify markers (the format this
+//     pipeline's theory children currently produce), that is correctly 0/0: the
+//     kernel never got a chance to verify those proofs itself, and the PR says
+//     so rather than implying "proven" by omission
+//   - every unit's review verdict
+//
+// Failure to open the PR is logged, not fatal — the branch and its commits are
+// the real deliverable and already exist regardless.
+func dev_open_completion_pr(pid int64, refOwner, refName, refRepo, branch, sha string, unitVerdicts []string) {
+	devRepos := GetDevRepos()
+	if len(devRepos) == 0 {
+		log.Printf("dev_open_completion_pr: no dev repos, skipping")
+		return
+	}
+	devRepo := devRepos[0]
+	parts := strings.Split(devRepo, "/")
+	if len(parts) != 2 {
+		log.Printf("dev_open_completion_pr: can't parse owner/repo from %s, skipping", devRepo)
+		return
+	}
+	baseBranch := DevRepoBranch(parts[0], parts[1])
+	if baseBranch == "" {
+		baseBranch = "main"
+	}
+
+	title, body := buildCompletionPR(refOwner, refName, refRepo, sha, unitVerdicts)
+
+	prResult, prErr := CreateGitHubPR(parts[0], parts[1], branch, baseBranch, title, body)
+	if prErr != nil {
+		log.Printf("dev_open_completion_pr: %s PR creation failed: %v (branch %s still has the work)", devRepo, prErr, branch)
+		return
+	}
+	log.Printf("dev_open_completion_pr: %s PR %s → %s: %s", devRepo, branch, baseBranch, truncStr(strings.TrimSpace(prResult), 200))
+}
+
+// buildCompletionPR renders the title and body for dev_open_completion_pr. Pure
+// (reads only the kernel's own coverage/proof state, no network), so the exact
+// wording — coverage, Axle verification counts, and the explicit "0 verified"
+// caveat for bare-.lean theory with no axle_verify markers — is directly
+// testable without creating a real GitHub PR.
+func buildCompletionPR(refOwner, refName, refRepo, sha string, unitVerdicts []string) (title, body string) {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Reference: %s/%s @ %s\n\n", refOwner, refName, short_sha(sha))
+
+	cov, haveCov := getSplitCoverage(refRepo, sha)
+	switch {
+	case !haveCov:
+		b.WriteString("Theory coverage: not measured (single-unit/unsplit theory)\n")
+	case cov.Total == 0:
+		b.WriteString("Theory coverage: 0 files\n")
+	default:
+		fmt.Fprintf(&b, "Theory coverage: %d/%d files (%.0f%%)", cov.Covered, cov.Total, 100*float64(cov.Covered)/float64(cov.Total))
+		if len(cov.Junk) > 0 {
+			fmt.Fprintf(&b, " — %d chunk(s) discarded as junk: %v", len(cov.Junk), cov.Junk)
+		}
+		b.WriteString("\n")
+	}
+
+	// TheoremNames (plain regex over the raw text) rather than SpecTheorems
+	// (requires ```lean fences + axle_verify markers): this pipeline's theory
+	// children write bare .lean content under "## FILE:" headers with no fences
+	// at all, so SpecTheorems would always find 0 here and understate what
+	// actually exists. TheoremNames finds the real declarations; the
+	// verified/failed/unverified breakdown below is still honest about what the
+	// kernel actually got to check via Axle (0 if none were axle_verify-marked).
+	theorems := TheoremNames(theorem_get(refRepo, sha))
+	if len(theorems) == 0 {
+		theorems = TheoremNames(theorem_get(refRepo, ""))
+	}
+	if len(theorems) == 0 {
+		b.WriteString("Axle verification: no Lean theorem declarations found in the stored theory\n\n")
+	} else {
+		gate := Proofs.Check(theorems)
+		fmt.Fprintf(&b, "Axle verification: %d verified, %d failed, %d unverified (of %d theorem(s) found)\n",
+			len(gate.Verified), len(gate.Failed)+len(gate.Degraded), len(gate.Unverified), len(theorems))
+		if len(gate.Verified) == 0 && len(gate.Failed) == 0 {
+			b.WriteString("  (0 verified: this theory has no axle_verify marker pairs for the kernel to check itself — " +
+				"the Lean proofs above were never independently re-verified by the kernel)\n")
+		}
+		b.WriteString("\n")
+	}
+
+	fmt.Fprintf(&b, "Dev units (%d):\n", len(unitVerdicts))
+	for _, v := range unitVerdicts {
+		fmt.Fprintf(&b, "  %s\n", v)
+	}
+
+	title = fmt.Sprintf("dev: %s — %d/%d units pass", refName, len(unitVerdicts), len(unitVerdicts))
+	return title, b.String()
 }
 
 

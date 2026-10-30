@@ -140,11 +140,19 @@ func gitAuthFailure(out string) bool {
 // branch (dev_from_theorems re-runs after a dev_fix) was based on the local reset
 // main, diverged from the remote branch and was rejected.
 func gitUseBranchFromRemote(repoDir, branch, base string) error {
-	cmd := fmt.Sprintf("cd %q && ("+
+	// fetch first: without this, "origin/<branch>" is whatever this clone last
+	// saw — possibly stale if another process pushed to the shared branch since
+	// (exactly the case GitMerge's caller in ref_store_chunk needs to handle: one
+	// chunk's clone catching up on another chunk's merge). Fetch both refs
+	// explicitly rather than `git fetch origin` (no refspec) so a repo with many
+	// unrelated branches (conv/<id> per chunk, per run) doesn't pay for all of
+	// them on every call.
+	cmd := fmt.Sprintf("cd %q && "+
+		"git fetch origin %q %q 2>/dev/null; ("+
 		"if git rev-parse --verify -q origin/%s >/dev/null; then git checkout -q -B %s origin/%s; "+
 		"elif git rev-parse --verify -q origin/%s >/dev/null; then git checkout -q -B %s origin/%s; "+
 		"else git checkout -q -B %s; fi)",
-		repoDir, branch, branch, branch, base, branch, base, branch)
+		repoDir, branch, base, branch, branch, branch, base, branch, base, branch)
 	return runLocalGit(cmd, repoDir)
 }
 
@@ -173,6 +181,34 @@ func runLocalGit(cmd, dir string) error {
 		return err
 	}
 	return nil
+}
+
+// GitMerge merges branchToMerge into repoDir's CURRENT branch with --no-ff (so
+// the merge always leaves a real commit, never a silent fast-forward that could
+// be mistaken for "nothing to merge"), and commits with message.
+//
+// Unlike runLocalGit (used for the idempotent "try this else that" checkout
+// chains, where a non-zero exit is expected and not an error), a merge that
+// fails is a REAL failure — most likely a conflict — and must not be silently
+// treated as success: the caller is about to push whatever state this leaves,
+// and a half-merged working tree pushed as-is would corrupt the target branch.
+// On failure this runs `git merge --abort` so the clone is left clean for the
+// next chunk/run that reuses it, and returns the conflict output.
+func GitMerge(repoDir, branchToMerge, message string) error {
+	cmd := exec.Command("bash", "-c", fmt.Sprintf(
+		"git config user.email 'einsteinOS@kernel' 2>/dev/null; "+
+			"git config user.name 'einsteinOS' 2>/dev/null; "+
+			"git merge --no-ff %q -m %q 2>&1", branchToMerge, message))
+	cmd.Dir = repoDir
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		return nil
+	}
+	// leave the clone usable for whoever reuses it next
+	abort := exec.Command("bash", "-c", "git merge --abort 2>/dev/null")
+	abort.Dir = repoDir
+	abort.Run()
+	return fmt.Errorf("merge %s: %w: %s", branchToMerge, err, truncStr(strings.TrimSpace(string(out)), 300))
 }
 
 // GitCommit stages all and commits with message. Returns true if commit created.

@@ -511,29 +511,41 @@ func ref_store_chunk(convID string, chunkIdx int, owner, repo string) {
 	log.Printf("ref_store_chunk: %s pushed to %s:%s — %d files, conv.json (%d bytes raw)",
 		chunkName, devRepos[0], convBranch, len(downloadedFiles), len(rawJSON))
 
-	// 5. ensure base branch exists on remote, then open PR
-	_ = GitPushRetry(repoDir, devRepos[0], baseBranch, 3)
-
-	devParts := strings.Split(devRepos[0], "/")
-	if len(devParts) != 2 {
-		log.Printf("ref_store_chunk: %s can't parse owner/repo from %s, skipping PR", chunkName, devRepos[0])
+	// Merge this chunk's work into the SHARED branch — not a PR: nothing in this
+	// codebase ever merges a PR for theory chunks (the only PR-merge code,
+	// mergePRToMain, is for the final dev branch), so opening one here achieved
+	// nothing; PriorChunksContext's "git checkout einsteinOS/theory" instruction
+	// to later chunks pointed at a branch that no chunk's content had ever
+	// actually reached. The kernel merges it itself, the same way it already
+	// does every other git operation for children (7c5b7908: "children would
+	// only push one or two files; kernel pushes all of them").
+	//
+	// gitUseBranchFromRemote (not a plain checkout) because baseBranch is shared
+	// across every chunk of every run over time: this clone's local copy may be
+	// behind what an earlier chunk (possibly from a concurrent run) already
+	// merged, and basing the merge on a stale local tip would silently lose that
+	// work instead of building on it.
+	if err := gitUseBranchFromRemote(repoDir, baseBranch, "main"); err != nil {
+		log.Printf("ref_store_chunk: %s checkout %s failed: %v — chunk work stays on %s only", chunkName, baseBranch, err, convBranch)
 		return
 	}
-	prTitle := fmt.Sprintf("theory: %s — %d files", chunkName, len(downloadedFiles))
-	prBody := fmt.Sprintf("conv: %s\nchunk: %d\nfiles: %d\nraw: %d bytes", convID[:8], chunkIdx, len(downloadedFiles), len(rawJSON))
-
-	prResult, prErr := CreateGitHubPR(devParts[0], devParts[1], convBranch, baseBranch, prTitle, prBody)
-	if prErr != nil {
-		log.Printf("ref_store_chunk: %s PR creation failed: %v", chunkName, prErr)
-	} else {
-		log.Printf("ref_store_chunk: %s PR %s → %s: %s",
-			chunkName, convBranch, baseBranch, truncSplit(prResult, 200))
+	mergeMsg := fmt.Sprintf("theory: merge %s — conv %s, %d files", chunkName, convID[:8], len(downloadedFiles))
+	if err := GitMerge(repoDir, convBranch, mergeMsg); err != nil {
+		// each chunk writes only under its own .einsteinOS/chunks/<chunkName>/, so a
+		// real conflict should not happen in normal operation; if it does, the
+		// chunk's content is still safe on convBranch and nothing has been pushed
+		// broken — this just means later chunks won't see THIS one via the shared
+		// branch until it's investigated.
+		log.Printf("ref_store_chunk: %s merge into %s failed: %v — chunk work stays on %s only", chunkName, baseBranch, err, convBranch)
+		return
 	}
+	if err := GitPushRetry(repoDir, devRepos[0], baseBranch, 20); err != nil {
+		log.Printf("ref_store_chunk: %s push of merged %s failed: %v", chunkName, baseBranch, err)
+		return
+	}
+	log.Printf("ref_store_chunk: %s merged into %s and pushed — later chunks can now read it", chunkName, baseBranch)
 }
 
-func truncSplit(s string, n int) string {
-	return truncStr(strings.TrimSpace(s), n)
-}
 
 func copyFile(src, dst string) error {
 	// ensure parent dir exists
