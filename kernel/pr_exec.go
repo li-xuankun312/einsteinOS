@@ -1197,7 +1197,7 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 			} else if compile != "" {
 				// any real status from dev_collect = child worked
 				needsRetry = false
-			} else if strings.Contains(lastStdout, "[API Error]") ||
+			} else if strings.Contains(lastStdout, "[API Error]") || strings.Contains(lastStdout, ModelDowngradeMarker) ||
 				strings.Contains(lastStdout, "TLS handshake timeout") ||
 				strings.Contains(lastStdout, "net/http:") {
 				log.Printf("dev_from_theorems: %s unit %d/%d child hit API/network error (attempt %d/5), retrying",
@@ -2115,6 +2115,18 @@ func dev_fix_attempt(step *Step) int {
 func dev_collect_child(childPid int64, repo string) (string, map[string]string) {
 	stdout := GetResult(childPid)
 
+	// stopped because the server moved the conversation to another model on its first
+	// message: nothing in it is a real attempt, and its conversation (which the server
+	// may keep generating on the other model) must not be read as one. "no_response"
+	// makes dev_from_theorems retry in a fresh conversation without counting a failure.
+	if strings.Contains(stdout, ModelDowngradeMarker) {
+		log.Printf("dev_collect: %s child stopped on a model downgrade — no_response, retry fresh", repo)
+		return stdout, map[string]string{
+			"compile":       "no_response",
+			"compile_error": "conversation stopped: the server switched its model on the first message",
+		}
+	}
+
 	// PRIMARY: extract status from tool signal collector (structured, no text parsing)
 	toolStatus := CollectChild(childPid)
 	if toolStatus != nil && toolStatus["compile"] != "" {
@@ -2292,7 +2304,7 @@ func dev_collect_child(childPid int64, repo string) (string, map[string]string) 
 		// child produced almost nothing — likely API failure, not a real attempt
 		status["compile"] = "no_response"
 		status["compile_error"] = fmt.Sprintf("child stdout=%d bytes, no files written", len(stdout))
-	} else if strings.Contains(stdout, "[API Error]") ||
+	} else if strings.Contains(stdout, "[API Error]") || strings.Contains(stdout, ModelDowngradeMarker) ||
 		strings.Contains(stdout, "http request:") ||
 		strings.Contains(stdout, "TLS handshake timeout") ||
 		strings.Contains(stdout, "net/http:") {

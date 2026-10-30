@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"iter"
 	"log"
 	"strings"
@@ -309,6 +310,9 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 		}, nil)
 	}
 
+	// the first send of a new conversation: CreateConversationParams is cleared once it went out
+	newConversation := webReq.CreateConversationParams != nil
+
 	for round := 0; round < roleMaxRounds; round++ {
 		st.rounds = round + 1
 
@@ -490,6 +494,11 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 				// event, which may carry the reason) instead of burying it under
 				// "unhandled event" cut at 200 characters. Logging only: no control flow.
 				log.Printf("claudeweb: %s", describeModelUpdate(event.Data, m.modelName))
+				if stop, why := modelDowngradeStops(modelDowngradeMode(), newConversation && round == 0, m.modelName, event.Data); stop {
+					body.Close()
+					doExit(exitError, kernel.ModelDowngradeMarker+" "+why)
+					return
+				}
 
 			default:
 				log.Printf("claudeweb: unhandled event: %s data=%s", event.Event, truncate(string(event.Data), 200))
@@ -1063,9 +1072,8 @@ func sleepWithHeartbeat(d time.Duration) {
 }
 
 
-// describeModelUpdate renders a model_update event for the log: what the server
-// switched from and to, what we requested, and the full event.
-func describeModelUpdate(data []byte, requested string) string {
+// modelUpdateTarget returns the models named in a model_update event ("" if unparseable).
+func modelUpdateTarget(data []byte) (from, to string) {
 	var ev struct {
 		From struct {
 			Model string `json:"model"`
@@ -1074,13 +1082,53 @@ func describeModelUpdate(data []byte, requested string) string {
 			Model string `json:"model"`
 		} `json:"to_model"`
 	}
-	if json.Unmarshal(data, &ev) != nil || ev.To.Model == "" {
+	if json.Unmarshal(data, &ev) != nil {
+		return "", ""
+	}
+	return ev.From.Model, ev.To.Model
+}
+
+// modelDowngradeMode: EINSTEIN_MODEL_DOWNGRADE = first (default) | always | off.
+//
+//	first  stop a conversation whose FIRST message the server moved to another model
+//	always stop whenever the server changes the model, at any point
+//	off     only log it
+func modelDowngradeMode() string {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("EINSTEIN_MODEL_DOWNGRADE"))) {
+	case "always":
+		return "always"
+	case "off":
+		return "off"
+	}
+	return "first"
+}
+
+// modelDowngradeStops decides whether a model_update ends the conversation. A switch
+// TO the model we asked for is never a downgrade.
+func modelDowngradeStops(mode string, firstSend bool, requested string, data []byte) (bool, string) {
+	from, to := modelUpdateTarget(data)
+	if to == "" || to == requested {
+		return false, ""
+	}
+	if mode == "off" || (mode == "first" && !firstSend) {
+		return false, ""
+	}
+	return true, fmt.Sprintf("the server switched this conversation from %s to %s (requested %s) on its %s — "+
+		"typically the requested model's safety check flagged a message. Stopped instead of continuing on a different "+
+		"model (EINSTEIN_MODEL_DOWNGRADE=off to continue anyway)", from, to, requested, map[bool]string{true: "first message", false: "later message"}[firstSend])
+}
+
+// describeModelUpdate renders a model_update event for the log: what the server
+// switched from and to, what we requested, and the full event.
+func describeModelUpdate(data []byte, requested string) string {
+	from, to := modelUpdateTarget(data)
+	if to == "" {
 		return fmt.Sprintf("MODEL UPDATE from the server (unparsed, requested %s): %s", requested, truncate(string(data), 1500))
 	}
 	note := ""
-	if ev.To.Model != requested {
+	if to != requested {
 		note = " — NOT the model we requested"
 	}
 	return fmt.Sprintf("MODEL CHANGED by the server: %s -> %s (requested %s)%s; full event: %s",
-		ev.From.Model, ev.To.Model, requested, note, truncate(string(data), 1500))
+		from, to, requested, note, truncate(string(data), 1500))
 }

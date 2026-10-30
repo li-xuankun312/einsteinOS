@@ -69,6 +69,15 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 		result := GetResult(child_pid)
 		rawResult := result // keep original stdout for refusal detection (before download overwrites)
 
+		// the conversation was stopped because the server moved it to another model on its
+		// first message (see ModelDowngradeMarker). The server may go on generating on that
+		// other model, so downloading or polling the conversation would pick up exactly the
+		// output we stopped it to avoid: skip both and go straight to a fresh conversation.
+		downgraded := strings.Contains(rawResult, ModelDowngradeMarker)
+		if downgraded {
+			log.Printf("ref_split: chunk %d/%d conversation stopped on a model downgrade — retrying in a fresh conversation (not reading this one)", i+1, len(chunks))
+		}
+
 		// always try DownloadConv — child writes theory to create_file
 		// (e.g. strata_chunk2_analysis.md with ## FILE: headers),
 		// which is NOT in GetResult stdout. only the full conversation
@@ -82,7 +91,7 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 				convID = rec.ConvID
 			}
 		}
-		if convID != "" {
+		if convID != "" && !downgraded {
 			downloaded, err := DownloadConv(convID)
 			if err == nil && len(downloaded) > len(result) {
 				log.Printf("ref_split: chunk %d/%d GetResult=%d, downloaded=%d, using download",
@@ -122,7 +131,7 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 			needsRetry = true
 		}
 
-		if needsRetry && convID != "" {
+		if needsRetry && convID != "" && !downgraded {
 			// SSE broke but remote may still be generating. the conversation
 			// on the server keeps running even after our SSE connection drops.
 			// poll every 3min: download conversation, compare size to previous.
@@ -283,8 +292,8 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 				retryConvID = m.ConvID
 				RegisterConv(parent_pid, m.ConvID, owner+"/"+repo, fmt.Sprintf("%s_r%d", role, attempt), 0)
 			}
-			// also download the retry conversation
-			if retryConvID != "" {
+			// also download the retry conversation (not one that was itself stopped on a downgrade)
+			if retryConvID != "" && !strings.Contains(retryResult, ModelDowngradeMarker) {
 				if dl, err := DownloadConv(retryConvID); err == nil && len(dl) > len(retryResult) {
 					retryResult = dl
 				}
