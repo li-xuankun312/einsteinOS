@@ -440,9 +440,10 @@ func (pe *ProcEngine) mergePRToMain(pid int64, branch string, cursor int, sha st
 		return fmt.Errorf("no dev repo")
 	}
 
-	parts := strings.Split(pe.DevRepo, "/")
-	repoName := parts[len(parts)-1]
-	repoDir := fmt.Sprintf("/home/claude/%s", repoName)
+	repoDir, derr := devRepoLocalDir(pe.DevRepo)
+	if derr != nil {
+		return fmt.Errorf("merge: %w", derr)
+	}
 
 	commitMsg := fmt.Sprintf("merge: commit %d (%s) — pipeline pass", cursor, sha[:8])
 

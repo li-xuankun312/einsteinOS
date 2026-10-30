@@ -1,6 +1,7 @@
 package kernel
 
 import (
+	"path"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -483,7 +484,9 @@ func dev_proof_preflight(pid int64, repo, branch, theory string) (string, error)
 		if patched != theory {
 			theory = patched
 			theorem_replace_last(repo, theory)
-			dev_store_theory(theory, repo, branch)
+			if serr := dev_store_theory(theory, repo, branch); serr != nil {
+				log.Printf("dev_proof_preflight: %v", serr)
+			}
 		}
 	}
 }
@@ -551,47 +554,36 @@ func dev_repair_proofs(pid int64, repo, theory string, failed []string, attempt 
 
 // dev_store_theory: write theory to .einsteinOS/theory.md on the branch.
 // planner and dev convs read it from there with view/grep.
-func dev_store_theory(theory, repo, branch string) {
+//
+// It returns an error when the theory could not be put on the remote branch, and
+// dev_from_theorems stops on it: the dev children read the theory from there, so
+// forking them anyway only burns quota on a task they cannot do (Strata run: the
+// store failed, the dev child ran 8 rounds and reported "theory.md absent").
+func dev_store_theory(theory, repo, branch string) error {
 	devRepos := GetDevRepos()
 	if len(devRepos) == 0 {
 		log.Printf("dev_store_theory: no dev repos, skipping")
-		return
+		return nil
 	}
-	parts := strings.Split(devRepos[0], "/")
-	repoName := parts[len(parts)-1]
-	repoDir := fmt.Sprintf("/home/claude/%s", repoName)
-
-	tmpFile := "/tmp/theory_full.md"
-	if err := os.WriteFile(tmpFile, []byte(theory), 0644); err != nil {
-		log.Printf("dev_store_theory: write tmp failed: %v", err)
-		return
-	}
-
-	script := fmt.Sprintf(`cd %s 2>/dev/null || exit 1
-git fetch origin 2>/dev/null
-git checkout %s 2>/dev/null || git checkout -b %s 2>/dev/null
-mkdir -p .einsteinOS
-cp %s .einsteinOS/theory.md
-git add .einsteinOS/theory.md
-git commit -m "theory: %d bytes" --allow-empty 2>/dev/null
-TOKEN=$(cat /tmp/.gh_token 2>/dev/null)
-git push "https://${TOKEN}@github.com/%s.git" %s 2>/dev/null
-echo "stored theory %d bytes"`,
-		repoDir,
-		branch, branch,
-		tmpFile,
-		len(theory),
-		devRepos[0], branch,
-		len(theory))
-
-	child, err := ForkExec(script, repoDir)
+	repoDir, err := devRepoLocalDir(devRepos[0])
 	if err != nil {
-		log.Printf("dev_store_theory: ForkExec failed: %v", err)
-		return
+		return fmt.Errorf("dev_store_theory: %w", err)
 	}
-	Wait(child)
-	log.Printf("dev_store_theory: %s stored %d bytes to %s:.einsteinOS/theory.md",
-		repo, len(theory), branch)
+	if err := gitUseBranchFromRemote(repoDir, branch, "main"); err != nil {
+		return fmt.Errorf("dev_store_theory: checkout %s: %w", branch, err)
+	}
+	if err := os.MkdirAll(repoDir+"/.einsteinOS", 0o755); err != nil {
+		return fmt.Errorf("dev_store_theory: %w", err)
+	}
+	if err := os.WriteFile(repoDir+"/.einsteinOS/theory.md", []byte(theory), 0o644); err != nil {
+		return fmt.Errorf("dev_store_theory: write theory.md: %w", err)
+	}
+	GitCommit(repoDir, fmt.Sprintf("theory: %d bytes", len(theory)))
+	if err := GitPushRetry(repoDir, devRepos[0], branch, 20); err != nil {
+		return fmt.Errorf("dev_store_theory: %s theory (%d bytes) NOT stored on %s: %w", repo, len(theory), branch, err)
+	}
+	log.Printf("dev_store_theory: %s stored %d bytes to %s:.einsteinOS/theory.md", repo, len(theory), branch)
+	return nil
 }
 
 func dev_plan(pid int64, repo string, theory string, branch string) []devUnit {
@@ -879,7 +871,15 @@ func dev_extract_file_sections(theory string) []devFileSection {
 			// skip shadow/local paths
 			cleanPath := strings.Trim(sec.path, "\"'` \t")
 			cleanDir := strings.Trim(sec.dir, "\"'` \t")
-			if strings.HasPrefix(cleanPath, "/home/claude") || strings.HasPrefix(cleanDir, "/home/claude") ||
+			if isTheoryLeanPath(cleanPath) {
+				// The theory children now write one .lean per module with create_file, and
+				// DownloadConversation renders each as "## FILE: /mnt/user-data/outputs/X.lean".
+				// The rule below treats /mnt/ as a local path and dropped ALL of them: 50
+				// theory files became "1 sections, 0 files" (Strata run, 01:23:41).
+				sec.path = path.Base(cleanPath)
+				sec.dir = ""
+				sections = append(sections, sec)
+			} else if strings.HasPrefix(cleanPath, "/home/claude") || strings.HasPrefix(cleanDir, "/home/claude") ||
 				strings.HasPrefix(cleanPath, "/mnt/") || strings.HasPrefix(cleanDir, "/mnt/") ||
 				strings.HasPrefix(cleanPath, "/tmp/") || strings.HasPrefix(cleanDir, "/tmp/") {
 				// skip
@@ -930,7 +930,32 @@ func dev_extract_file_sections(theory string) []devFileSection {
 		cur.WriteString("\n")
 	}
 	flush()
-	return sections
+	return dedupeLeanSections(sections)
+}
+
+// isTheoryLeanPath: a theory module file written by a theory child.
+func isTheoryLeanPath(p string) bool {
+	return strings.HasPrefix(p, "/mnt/user-data/outputs/") && strings.HasSuffix(p, ".lean")
+}
+
+// dedupeLeanSections keeps ONE section per .lean module — the last one. A child
+// that re-creates a file, or the kernel appending the final downloaded version,
+// leaves several; the last is the one to use. Other sections are untouched.
+func dedupeLeanSections(in []devFileSection) []devFileSection {
+	last := map[string]int{}
+	for i, s := range in {
+		if strings.HasSuffix(s.path, ".lean") {
+			last[s.path] = i
+		}
+	}
+	out := make([]devFileSection, 0, len(in))
+	for i, s := range in {
+		if strings.HasSuffix(s.path, ".lean") && last[s.path] != i {
+			continue
+		}
+		out = append(out, s)
+	}
+	return out
 }
 
 func dev_section_paths(sections []devFileSection) []string {
@@ -1003,8 +1028,12 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 	}
 	theory = patchedTheory
 
-	// store theory to branch — planner and dev convs read it from there
-	dev_store_theory(theory, repo, branch)
+	// store theory to branch — planner and dev convs read it from there. If it is not
+	// there they cannot work, so do not fork them.
+	if serr := dev_store_theory(theory, repo, branch); serr != nil {
+		PRFeedbackAdd(pid, "- "+serr.Error())
+		return "", serr
+	}
 
 	// planner decides the split — NOT the dev conv, NOT static grouping
 	units := dev_plan(pid, repo, theory, branch)
@@ -1767,45 +1796,31 @@ func dev_store_conv(convID, repo, branch string, unitNum int, status map[string]
 		log.Printf("dev_store_conv: no dev repos registered, skipping")
 		return
 	}
-	parts := strings.Split(devRepos[0], "/")
-	repoName := parts[len(parts)-1]
-	repoDir := fmt.Sprintf("/home/claude/%s", repoName)
+	repoDir, derr := devRepoLocalDir(devRepos[0])
+	if derr != nil {
+		log.Printf("dev_store_conv: %s unit %d: %v", repo, unitNum, derr)
+		return
+	}
 	filePath := fmt.Sprintf(".einsteinOS/convs/dev_unit_%d.md", unitNum)
-
-	// write to temp file first to avoid heredoc escaping issues
-	tmpFile := fmt.Sprintf("/tmp/conv_unit_%d.md", unitNum)
-	if err := os.WriteFile(tmpFile, []byte(summary), 0644); err != nil {
-		log.Printf("dev_store_conv: %s unit %d write temp failed: %v", repo, unitNum, err)
+	if err := gitUseBranchFromRemote(repoDir, branch, "main"); err != nil {
+		log.Printf("dev_store_conv: %s unit %d checkout %s: %v", repo, unitNum, branch, err)
 		return
 	}
-
-	script := fmt.Sprintf(`cd %s 2>/dev/null || exit 1
-git fetch origin 2>/dev/null
-git checkout %s 2>/dev/null || git checkout -b %s 2>/dev/null
-mkdir -p .einsteinOS/convs
-cp %s %s
-git add %s
-git commit -m "conv: unit %d (%s)" --allow-empty 2>/dev/null
-TOKEN=$(cat /tmp/.gh_token 2>/dev/null)
-git push "https://${TOKEN}@github.com/%s.git" %s 2>/dev/null
-echo "stored %s"`,
-		repoDir,
-		branch, branch,
-		tmpFile, filePath,
-		filePath,
-		unitNum, convID[:8],
-		devRepos[0], branch,
-		filePath)
-
-	child, forkErr := ForkExec(script, repoDir)
-	if forkErr != nil {
-		log.Printf("dev_store_conv: %s unit %d ForkExec failed: %v", repo, unitNum, forkErr)
+	if err := os.MkdirAll(repoDir+"/.einsteinOS/convs", 0o755); err != nil {
+		log.Printf("dev_store_conv: %s unit %d mkdir: %v", repo, unitNum, err)
 		return
 	}
-	Wait(child)
-	result := GetResult(child)
+	if err := os.WriteFile(repoDir+"/"+filePath, []byte(summary), 0o644); err != nil {
+		log.Printf("dev_store_conv: %s unit %d write: %v", repo, unitNum, err)
+		return
+	}
+	GitCommit(repoDir, fmt.Sprintf("conv: unit %d (%s)", unitNum, convID[:8]))
+	if err := GitPushRetry(repoDir, devRepos[0], branch, 20); err != nil {
+		log.Printf("dev_store_conv: %s unit %d NOT stored: %v", repo, unitNum, err)
+		return
+	}
 	log.Printf("dev_store_conv: %s unit %d stored (%d bytes summary from %d bytes raw): %s",
-		repo, unitNum, len(summary), len(rawJSON), strings.TrimSpace(result))
+		repo, unitNum, len(summary), len(rawJSON), filePath)
 }
 
 // dev_conv_summary: parse raw conversation JSON and extract a compact summary.

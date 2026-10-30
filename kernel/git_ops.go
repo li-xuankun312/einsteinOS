@@ -1,6 +1,7 @@
 package kernel
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -91,6 +92,62 @@ func GitCloneOrReuse(ownerRepo, dir string) error {
 	return fmt.Errorf("GitCloneOrReuse %s failed after %d attempts: %v", ownerRepo, attempts, lastErr)
 }
 
+// devRepoLocalDir returns a local clone of the dev repo that the kernel can run
+// git in.
+//
+// dev_store_theory, dev_store_conv and the merge step assumed
+// /home/claude/<repo> — the path of the clone inside Claude's REMOTE sandbox. On
+// the machine that runs einsteinOS it does not exist, so ForkExec failed with
+// "chdir /home/claude/baloon: no such file or directory": the theory was never
+// stored on the branch, the dev child found no .einsteinOS/theory.md and built
+// nothing (Strata run, 01:23:41). Use that path only if a real clone is there;
+// otherwise use the kernel's own clone (the one ref_store_chunk maintains).
+func devRepoLocalDir(ownerRepo string) (string, error) {
+	name := ownerRepo
+	if i := strings.LastIndex(ownerRepo, "/"); i >= 0 {
+		name = ownerRepo[i+1:]
+	}
+	legacy := "/home/claude/" + name
+	if _, err := os.Stat(legacy + "/.git"); err == nil {
+		return legacy, nil
+	}
+	dir := "/tmp/ref_store_" + name
+	if err := GitCloneOrReuse(ownerRepo, dir); err != nil {
+		return "", fmt.Errorf("no local clone of %s: %w", ownerRepo, err)
+	}
+	return dir, nil
+}
+
+// gitAuthFailure reports output that means GitHub rejected the credentials.
+// Retrying cannot change that, so callers stop at once instead of repeating a
+// failure that is deterministic (the Strata run retried 20 pushes).
+func gitAuthFailure(out string) bool {
+	o := strings.ToLower(out)
+	for _, m := range []string{
+		"could not read password", "authentication failed", "invalid username or password",
+		"bad credentials", "http 401", "error: 401", "returned error: 401",
+	} {
+		if strings.Contains(o, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// gitUseBranchFromRemote puts repoDir on `branch` at the REMOTE's tip when the
+// remote has it, otherwise starts it from the remote's `base`. GitCloneOrReuse has
+// just fetched, so origin/* is current. Without this, a second store to the same
+// branch (dev_from_theorems re-runs after a dev_fix) was based on the local reset
+// main, diverged from the remote branch and was rejected.
+func gitUseBranchFromRemote(repoDir, branch, base string) error {
+	cmd := fmt.Sprintf("cd %q && ("+
+		"if git rev-parse --verify -q origin/%s >/dev/null; then git checkout -q -B %s origin/%s; "+
+		"elif git rev-parse --verify -q origin/%s >/dev/null; then git checkout -q -B %s origin/%s; "+
+		"else git checkout -q -B %s; fi)",
+		repoDir, branch, branch, branch, base, branch, base, branch)
+	return runLocalGit(cmd, repoDir)
+}
+
 // GitCheckoutOrCreate checks out a branch, creating it if needed.
 // No fetch — caller (GitCloneOrReuse) already synced to remote HEAD.
 // An extra fetch here hangs on TLS-flaky networks with no timeout.
@@ -98,11 +155,23 @@ func GitCheckoutOrCreate(repoDir, branch, baseBranch string) error {
 	cmd := fmt.Sprintf("cd %q && "+
 		"git checkout %s 2>/dev/null || (git checkout %s 2>/dev/null || git checkout -b %s 2>/dev/null; git checkout -b %s 2>/dev/null)",
 		repoDir, branch, baseBranch, baseBranch, branch)
-	pid, err := ForkExec(cmd, repoDir)
-	if err != nil {
+	return runLocalGit(cmd, repoDir)
+}
+
+// runLocalGit runs a local (no network) git command. Like the ForkExec these
+// helpers used, a non-zero exit is not an error: the commands are written as
+// "try this, else that" chains. Only failing to start is. It needs no booted
+// kernel, so it can run anywhere (and be tested).
+func runLocalGit(cmd, dir string) error {
+	c := exec.Command("bash", "-c", cmd)
+	c.Dir = dir
+	if _, err := c.CombinedOutput(); err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			return nil
+		}
 		return err
 	}
-	Wait(pid)
 	return nil
 }
 
@@ -113,12 +182,7 @@ func GitCommit(repoDir, message string) bool {
 		"git config user.name 'einsteinOS' 2>/dev/null; "+
 		"git add -A && git commit -m %q --allow-empty 2>&1",
 		repoDir, message)
-	pid, err := ForkExec(cmd, repoDir)
-	if err != nil {
-		return false
-	}
-	Wait(pid)
-	return true
+	return runLocalGit(cmd, repoDir) == nil
 }
 
 // GitPushRetry pushes a branch with retry on TLS/network failures.
@@ -136,12 +200,24 @@ func GitPushRetry(repoDir, ownerRepo, branch string, maxRetry int) error {
 			log.Printf("git_push: attempt %d/%d start timeout (10s), retrying", attempt, maxRetry)
 			continue // no sleep — only waited 2s
 		}
+		// a rejected push prints "! [rejected] a -> a (non-fast-forward)": that line
+		// contains "->" too, and used to be read as success. Retrying the same push
+		// cannot change a rejection, so stop with the reason.
+		if strings.Contains(result, "[rejected]") || strings.Contains(result, "failed to push some refs") ||
+			strings.Contains(result, "non-fast-forward") {
+			return fmt.Errorf("push of %s rejected by the remote (%s) — not retrying: %s", branch,
+				"non-fast-forward / rejected", truncStr(strings.TrimSpace(result), 160))
+		}
 		// success indicators
 		if strings.Contains(result, "->") || strings.Contains(result, "Everything up-to-date") || strings.Contains(result, "already exists") {
 			log.Printf("git_push: %s:%s ok (attempt %d)", ownerRepo, branch, attempt)
 			return nil
 		}
 		log.Printf("git_push: attempt %d/%d failed: %s", attempt, maxRetry, truncStr(result, 200))
+		if gitAuthFailure(result) {
+			return fmt.Errorf("push rejected by GitHub (credentials invalid, expired, or without write access to %s) — not retrying: %s",
+				ownerRepo, truncStr(strings.TrimSpace(result), 160))
+		}
 		if attempt < maxRetry {
 			time.Sleep(10 * time.Second)
 		}
@@ -197,6 +273,9 @@ func CreateGitHubPR(owner, repo, head, base, title, body string) (string, error)
 			continue
 		}
 
+		if httpCode == "401" {
+			return "", fmt.Errorf("create PR rejected by GitHub (HTTP 401: token invalid or expired) — not retrying: %s", truncStr(prBody, 160))
+		}
 		log.Printf("create_pr: attempt %d/%d got HTTP %s, retrying", attempt, maxAttempts, httpCode)
 		if attempt < maxAttempts {
 			time.Sleep(10 * time.Second)
@@ -224,6 +303,7 @@ func PriorChunksContext(priorCount int, devRepo string) string {
 }
 
 func truncStr(s string, n int) string {
+	s = redactSecrets(s)
 	if len(s) <= n {
 		return s
 	}
