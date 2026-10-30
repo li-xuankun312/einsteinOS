@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 )
@@ -33,66 +34,37 @@ func CloneURL(ownerRepo string) string {
 	return fmt.Sprintf("https://github.com/%s.git", ownerRepo)
 }
 
-// gitStartGuard runs a git command with a 2-second start guard.
-// Spawns git in background, a monitor sleeps 2s then checks if git
-// produced any output. No output in 2s = TLS handshake hung → kill & return false.
-// Mimics the human ctrl+c strategy on stuck git commands.
-func gitStartGuard(gitCmd string, workDir string) (string, bool) {
-	script := "tmpout=$(mktemp)\n" +
-		gitCmd + " >\"$tmpout\" 2>&1 &\n" +
-		"gpid=$!\n" +
-		"sleep 10\n" +
-		"if [ ! -s \"$tmpout\" ]; then\n" +
-		"  kill $gpid 2>/dev/null; wait $gpid 2>/dev/null\n" +
-		"  rm -f \"$tmpout\"\n" +
-		"  exit 124\n" +
-		"fi\n" +
-		"wait $gpid\n" +
-		"code=$?\n" +
-		"cat \"$tmpout\"\n" +
-		"rm -f \"$tmpout\"\n" +
-		"exit $code"
-
-	pid, err := ForkExec(script, workDir)
-	if err != nil {
-		return "", false
-	}
-	Wait(pid)
-	result := GetResult(pid)
-	if strings.TrimSpace(result) == "" {
-		return "", false // exit 124 produces no stdout → start timeout
-	}
-	return result, true
-}
-
 // GitCloneOrReuse ensures dir is a usable clone of ownerRepo, synced to remote HEAD.
-// If .git exists → fetch + reset (TLS may fail, retry with 2s start guard).
-// If .git missing or corrupt → remove residue, clone fresh (2s start guard).
-// 10 attempts — each start-timeout attempt only costs 2s, not 30-60s.
+// If .git exists → fetch + reset. If .git is missing or corrupt → remove residue,
+// clone fresh. Every network step runs under gitGuard: a process with no sign of life
+// after 10 s is killed and a new one started (see git_guard.go), up to
+// gitNetAttempts() times. Success is the process's exit code, not whether it printed
+// anything: an up-to-date `git fetch` prints nothing.
 func GitCloneOrReuse(ownerRepo, dir string) error {
+	attempts := gitNetAttempts()
 	var lastErr error
-	for attempt := 1; attempt <= 10; attempt++ {
+	for attempt := 1; attempt <= attempts; attempt++ {
 		if _, err := os.Stat(dir + "/.git"); err == nil {
 			// .git exists — fetch, then reset locally.
 			// do NOT rm -rf: the local repo is valid, only the network failed.
-			fetchCmd := fmt.Sprintf("git -C %q fetch origin", dir)
-			result, started := gitStartGuard(fetchCmd, dir)
-			if !started {
-				log.Printf("git_clone_or_reuse: %s attempt %d/10 fetch start timeout (10s)", ownerRepo, attempt)
-				lastErr = fmt.Errorf("fetch start timeout")
-				continue // no sleep — only waited 2s
-			}
-			if strings.Contains(result, "GnuTLS") || strings.Contains(result, "TLS handshake") ||
-				strings.Contains(result, "the remote end hung up") {
-				lastErr = fmt.Errorf("fetch TLS error: %s", truncStr(result, 200))
-				log.Printf("git_clone_or_reuse: %s attempt %d/10 fetch TLS error", ownerRepo, attempt)
+			r := gitGuard(fmt.Sprintf("git -C %q fetch origin", dir), dir, gitStartWindow, gitMaxRun)
+			switch {
+			case !r.Started:
+				log.Printf("git_clone_or_reuse: %s attempt %d/%d fetch hung (no output for %s), killed", ownerRepo, attempt, attempts, gitStartWindow)
+				lastErr = fmt.Errorf("fetch hung")
+				continue
+			case r.TimedOut:
+				log.Printf("git_clone_or_reuse: %s attempt %d/%d fetch still running after %s, killed", ownerRepo, attempt, attempts, gitMaxRun)
+				lastErr = fmt.Errorf("fetch timed out")
+				continue
+			case r.Code != 0:
+				lastErr = fmt.Errorf("fetch exit %d: %s", r.Code, truncStr(r.Out, 200))
+				log.Printf("git_clone_or_reuse: %s attempt %d/%d fetch failed (exit %d): %s", ownerRepo, attempt, attempts, r.Code, truncStr(strings.TrimSpace(r.Out), 120))
 				continue
 			}
-			// fetch ok — reset to remote HEAD (local operation, no guard needed)
-			resetCmd := fmt.Sprintf("cd %q && git reset --hard origin/HEAD 2>&1", dir)
-			rpid, rErr := ForkExec(resetCmd, dir)
-			if rErr == nil {
-				Wait(rpid)
+			// fetch ok (exit 0, possibly silent) — reset to remote HEAD (local, no guard needed)
+			if out, rerr := exec.Command("bash", "-c", fmt.Sprintf("cd %q && git reset --hard origin/HEAD 2>&1", dir)).CombinedOutput(); rerr != nil {
+				log.Printf("git_clone_or_reuse: %s reset after fetch: %v: %s", ownerRepo, rerr, truncStr(strings.TrimSpace(string(out)), 120))
 			}
 			log.Printf("git_clone_or_reuse: %s synced (attempt %d)", ownerRepo, attempt)
 			return nil
@@ -100,24 +72,23 @@ func GitCloneOrReuse(ownerRepo, dir string) error {
 
 		// .git missing or corrupt — clean residue, clone fresh
 		os.RemoveAll(dir)
-		cloneCmd := fmt.Sprintf("git clone %q %q", CloneURL(ownerRepo), dir)
-		_, started := gitStartGuard(cloneCmd, "/tmp")
-		if !started {
+		r := gitGuard(fmt.Sprintf("git clone %q %q", CloneURL(ownerRepo), dir), "/tmp", gitStartWindow, gitCloneMaxRun)
+		if !r.Started || r.TimedOut || r.Code != 0 {
 			os.RemoveAll(dir)
-			log.Printf("git_clone_or_reuse: %s attempt %d/10 clone start timeout (10s)", ownerRepo, attempt)
-			lastErr = fmt.Errorf("clone start timeout")
-			continue // no sleep — only waited 2s
+			lastErr = fmt.Errorf("clone failed (started=%v timed_out=%v exit=%d)", r.Started, r.TimedOut, r.Code)
+			log.Printf("git_clone_or_reuse: %s attempt %d/%d clone failed (started=%v timed_out=%v exit=%d)", ownerRepo, attempt, attempts, r.Started, r.TimedOut, r.Code)
+			continue
 		}
 		if _, err := os.Stat(dir + "/.git"); err != nil {
 			os.RemoveAll(dir)
-			lastErr = fmt.Errorf("clone failed")
-			log.Printf("git_clone_or_reuse: %s attempt %d/10 clone failed", ownerRepo, attempt)
+			lastErr = fmt.Errorf("clone exited 0 but left no .git")
+			log.Printf("git_clone_or_reuse: %s attempt %d/%d clone left no .git", ownerRepo, attempt, attempts)
 			continue
 		}
 		log.Printf("git_clone_or_reuse: %s cloned (attempt %d)", ownerRepo, attempt)
 		return nil
 	}
-	return fmt.Errorf("GitCloneOrReuse %s failed after 10 attempts: %v", ownerRepo, lastErr)
+	return fmt.Errorf("GitCloneOrReuse %s failed after %d attempts: %v", ownerRepo, attempts, lastErr)
 }
 
 // GitCheckoutOrCreate checks out a branch, creating it if needed.
@@ -151,8 +122,8 @@ func GitCommit(repoDir, message string) bool {
 }
 
 // GitPushRetry pushes a branch with retry on TLS/network failures.
-// Uses 2s start guard — if TLS hangs, kill and retry immediately (no 10s sleep).
-// 10 attempts: each start-timeout costs 2s, each real failure gets 10s backoff.
+// Uses the 10 s start guard — if TLS hangs, kill and retry immediately (no 10s sleep).
+// each hung attempt costs 10 s, each real failure gets a 10 s backoff.
 func GitPushRetry(repoDir, ownerRepo, branch string, maxRetry int) error {
 	pushURL := CloneURL(ownerRepo)
 	if maxRetry < 20 {
