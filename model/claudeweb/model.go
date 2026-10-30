@@ -19,6 +19,7 @@ import (
 var localExecPrefix string
 
 func BuildSystemPrompt(axleCookie, axleCSRF string) {
+	configureAxleProxy() // decide direct vs proxy for Axle once, before any child process starts
 	var axleBlock string
 	if axleCookie != "" {
 		// the kernel verifies spec proofs itself (proof_ledger.go); it cannot

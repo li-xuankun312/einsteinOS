@@ -345,27 +345,38 @@ func extractTheoremSig(code string) string {
 // axleExecWithRetry calls Axle via Go http.Post — no shell, no escaping issues.
 func axleExecWithRetry(payload, session, csrf string) string {
 	type round struct {
-		name  string
-		proxy string // "" = use env proxy, "direct" = no proxy
-		tries int
-		guard time.Duration
+		name   string
+		direct bool
+		tries  int
+		guard  time.Duration
 	}
-	rounds := []round{
-		{"proxy", "", 5, 15 * time.Second},
-		{"direct", "direct", 1, 15 * time.Second},
-		{"proxy", "", 5, 20 * time.Second},
+	// Which path first: whichever worked last (set at boot by configureAxleProxy and
+	// after every success). The "proxy" rounds really use the environment proxy now;
+	// they used to be direct as well (a zero http.Transport has no proxy), which made
+	// the Go path useless on a network that can only reach Axle through its proxy.
+	direct := round{"direct", true, 2, 15 * time.Second}
+	viaProxy := round{"proxy", false, 2, 20 * time.Second}
+	rounds := []round{direct, viaProxy, direct}
+	if !axleDirectPreferred.Load() {
+		rounds = []round{viaProxy, direct, viaProxy}
 	}
+	hasProxy := envProxyFunc() != nil
 
+	attempts := 0
 	for _, r := range rounds {
+		if !r.direct && !hasProxy {
+			continue // no env proxy: a "proxy" attempt would just be direct again
+		}
 		for attempt := 1; attempt <= r.tries; attempt++ {
+			attempts++
 			t0 := time.Now()
-			result := axleHTTPOnce(payload, session, csrf, r.proxy == "direct", r.guard)
+			result := axleHTTPOnce(payload, session, csrf, r.direct, r.guard)
 			elapsed := time.Since(t0)
 			trimmed := strings.TrimSpace(result)
 			if trimmed == "" {
-				log.Printf("[shadow] axle %s %d/%d: timeout (%s, took %s)", r.name, attempt, r.tries, r.guard, elapsed.Round(time.Second))
+				log.Printf("[shadow] axle %s %d/%d: no response (%s, took %s)", r.name, attempt, r.tries, r.guard, elapsed.Round(time.Second))
 				// if request returned instantly (connection refused, not timeout),
-				// wait to avoid 11 attempts in 1 second
+				// wait to avoid a burst of attempts in one second
 				if elapsed < 3*time.Second {
 					time.Sleep(3*time.Second - elapsed)
 				}
@@ -377,10 +388,11 @@ func axleExecWithRetry(payload, session, csrf string) string {
 				continue
 			}
 			log.Printf("[shadow] axle %s %d/%d: got response (%d bytes)", r.name, attempt, r.tries, len(result))
+			axleDirectPreferred.Store(r.direct) // remember which path works
 			return fmt.Sprintf("[pid 0 exit=0] %s", result)
 		}
 	}
-	log.Printf("[shadow] axle: all rounds exhausted (proxy 5 + direct 1 + proxy 5)")
+	log.Printf("[shadow] axle: all %d attempts exhausted", attempts)
 	return ""
 }
 
@@ -389,22 +401,11 @@ func axleHTTPOnce(payload, session, csrf string, directNoProxy bool, timeout tim
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	var transport *http.Transport
-	if directNoProxy {
-		transport = &http.Transport{
-			Proxy: nil, // no proxy
-			TLSHandshakeTimeout: timeout,
-		}
-	} else {
-		// NOTE: a zero-value http.Transport has Proxy == nil, so this does NOT
-		// consult the env proxy (that needs Proxy: http.ProxyFromEnvironment).
-		// In practice both "proxy" and "direct" rounds here are direct — which
-		// is why the Go path always answered in ~1s while the curl path, which
-		// really did use the proxy, hung. Kept as-is: it works.
-		transport = &http.Transport{
-			TLSHandshakeTimeout: timeout,
-		}
+	transport := &http.Transport{TLSHandshakeTimeout: timeout, DisableKeepAlives: true}
+	if !directNoProxy {
+		transport.Proxy = envProxyFunc() // nil when no proxy is configured
 	}
+	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport, Timeout: timeout}
 
 	req, err := http.NewRequestWithContext(ctx, "POST",
@@ -512,10 +513,9 @@ func formatAxleRun(r axleRun) string {
 func axleExecWithRetryCurl(command string, workDir string) string {
 	// a script, not a curl: one run, long guard, report everything it printed
 	if !curlWordRe.MatchString(command) {
-		// proxy stripped: every successful Axle call in the logs went direct (the Go
-		// path's "proxy" transport has no proxy either), while curl through the env
-		// proxy is what kept timing out
-		run := axleRunOnce(command, workDir, true, axleScriptGuard)
+		// proxy stripped when direct is the working path (see axle_path.go): through
+		// the env proxy the same calls took ~87 s each instead of ~1.6 s
+		run := axleRunOnce(command, workDir, axleDirectPreferred.Load(), axleScriptGuard)
 		log.Printf("[shadow] axle-script: exit=%d timed_out=%v took=%s stdout=%d stderr=%d",
 			run.ExitCode, run.TimedOut, run.Elapsed.Round(time.Second), len(run.Stdout), len(run.Stderr))
 		if run.TimedOut {
