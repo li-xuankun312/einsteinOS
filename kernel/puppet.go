@@ -552,10 +552,15 @@ func (pe *ProcEngine) verifyCommit(pid int64, branch string, cursor int, sha str
 		log.Printf("proc_engine: verify_conv fork failed: %v", err)
 		return "FAIL: verify_conv fork failed"
 	}
+	var verifyConvID string
 	if m := getMeta(child); m != nil && m.ConvID != "" {
+		verifyConvID = m.ConvID
 		RegisterConv(pid, m.ConvID, pe.RefOwner+"/"+pe.RefName, "verify_conv", 0)
 	}
 	Wait(child)
+	if verifyConvID != "" {
+		ConvDone(verifyConvID, "done")
+	}
 
 	result := GetResult(child)
 	log.Printf("proc_engine: verify_conv returned %d bytes", len(result))

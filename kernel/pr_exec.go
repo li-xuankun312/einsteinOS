@@ -498,10 +498,15 @@ var proofFixRunner = func(pid int64, repo, role string, attempt int, prompt stri
 	if err != nil {
 		return err
 	}
+	var fixConvID string
 	if m := getMeta(child); m != nil && m.ConvID != "" {
+		fixConvID = m.ConvID
 		RegisterConv(pid, m.ConvID, repo, role, attempt)
 	}
 	Wait(child)
+	if fixConvID != "" {
+		ConvDone(fixConvID, "done")
+	}
 	return nil
 }
 
@@ -642,10 +647,15 @@ func dev_plan(pid int64, repo string, theory string, branch string) []devUnit {
 		log.Printf("dev_plan: %s planner fork failed: %v, using static split", repo, err)
 		return dev_static_split(fileSections)
 	}
+	var devPlannerConvID string
 	if m := getMeta(child); m != nil && m.ConvID != "" {
+		devPlannerConvID = m.ConvID
 		RegisterConv(pid, m.ConvID, repo, "dev_planner", 0)
 	}
 	Wait(child)
+	if devPlannerConvID != "" {
+		ConvDone(devPlannerConvID, "done")
+	}
 	planOutput := GetResult(child)
 	log.Printf("dev_plan: %s planner returned %d bytes", repo, len(planOutput))
 
@@ -1176,6 +1186,7 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 			// but may not be available immediately after Fork returns.
 			if m := getMeta(child); m != nil && m.ConvID != "" {
 				RegisterConv(pid, m.ConvID, repo, fmt.Sprintf("dev_unit_%d", i+1), i+1)
+				ConvDone(m.ConvID, "done") // Wait already returned above
 				log.Printf("dev_from_theorems: %s unit %d/%d registered conv %s",
 					repo, i+1, len(units), m.ConvID[:8])
 			} else {
@@ -1513,10 +1524,15 @@ func dev_fix(pid int64, step *Step) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	var fixUnitConvID string
 	if m := getMeta(child); m != nil && m.ConvID != "" {
+		fixUnitConvID = m.ConvID
 		RegisterConv(pid, m.ConvID, repo, fmt.Sprintf("dev_fix_%d", attempt), attempt)
 	}
 	Wait(child)
+	if fixUnitConvID != "" {
+		ConvDone(fixUnitConvID, "done")
+	}
 	step.ChildPid = child
 
 	stdout, status := dev_collect_child(child, repo)
@@ -1699,10 +1715,15 @@ func dev_review_unit_inner(pid int64, repo, branch string, unitNum, totalUnits i
 		}
 		return "FAIL: review fork failed, compile=" + status["compile"]
 	}
+	var reviewConvID string
 	if m := getMeta(child); m != nil && m.ConvID != "" {
+		reviewConvID = m.ConvID
 		RegisterConv(pid, m.ConvID, repo, fmt.Sprintf("review_unit_%d", unitNum), unitNum)
 	}
 	Wait(child)
+	if reviewConvID != "" {
+		ConvDone(reviewConvID, "done")
+	}
 
 	result := GetResult(child)
 	log.Printf("dev_review_unit: %s unit %d review_conv returned %d bytes", repo, unitNum, len(result))

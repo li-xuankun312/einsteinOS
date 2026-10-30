@@ -721,12 +721,22 @@ func RegisterConv(parentPid int64, convID, repo, role string, phase int) {
 		convID[:8], repo, role, phase)
 }
 
+// ConvDone marks every registry row for convID as no longer running.
+//
+// A single real conversation gets TWO rows: a generic one from TrackChildConv
+// at fork time (before its role is known) and a role-specific one from
+// RegisterConv once it is. They share convID, so every row must be updated —
+// the original version here stopped at the first match, which meant the
+// role-specific row (added second) was the one that stayed "running" forever
+// in practice, even when ConvDone was called. status is purely informational:
+// nothing in this codebase branches on it, so getting it wrong is confusing,
+// not unsafe — but confusing is still worth fixing, see the table a `/status`
+// dump prints.
 func ConvDone(convID string, status string) {
 	convRegistryMu.Lock()
 	for i := range convRegistry {
 		if convRegistry[i].ConvID == convID {
 			convRegistry[i].Status = status
-			break
 		}
 	}
 	convRegistryMu.Unlock()

@@ -64,6 +64,7 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 		role := fmt.Sprintf("theorize_chunk_%d", i+1)
 		if m := getMeta(child_pid); m != nil && m.ConvID != "" {
 			RegisterConv(parent_pid, m.ConvID, owner+"/"+repo, role, 0)
+			ConvDone(m.ConvID, "done") // Wait already returned above
 		}
 
 		result := GetResult(child_pid)
@@ -291,6 +292,7 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 			if m := getMeta(retryPid); m != nil && m.ConvID != "" {
 				retryConvID = m.ConvID
 				RegisterConv(parent_pid, m.ConvID, owner+"/"+repo, fmt.Sprintf("%s_r%d", role, attempt), 0)
+				ConvDone(m.ConvID, "done") // Wait already returned above
 			}
 			// also download the retry conversation (not one that was itself stopped on a downgrade)
 			if retryConvID != "" && !strings.Contains(retryResult, ModelDowngradeMarker) {
@@ -600,10 +602,15 @@ func theory_plan(parent_pid int64, owner, repo string, files []string) [][]strin
 		log.Printf("theory_plan: %s/%s planner fork failed: %v, using static split", owner, repo, err)
 		return theory_static_split(files)
 	}
+	var plannerConvID string
 	if m := getMeta(child); m != nil && m.ConvID != "" {
+		plannerConvID = m.ConvID
 		RegisterConv(parent_pid, m.ConvID, owner+"/"+repo, "theory_planner", 0)
 	}
 	Wait(child)
+	if plannerConvID != "" {
+		ConvDone(plannerConvID, "done")
+	}
 	output := GetResult(child)
 	log.Printf("theory_plan: %s/%s planner returned %d bytes", owner, repo, len(output))
 
