@@ -34,6 +34,10 @@ const (
 	// after it has started, a command may run this long before it is killed.
 	gitMaxRun      = 180 * time.Second
 	gitCloneMaxRun = 300 * time.Second
+	// a push that is genuinely transferring data (confirmed by --progress output,
+	// so it is not stuck at "no connection") gets longer before giving up — a
+	// large diff over a slow proxy legitimately takes a while.
+	gitPushMaxRun = 120 * time.Second
 	// attempts for clone/fetch. A person needs ~9 manual tries on a bad day; at
 	// 10 s per hung attempt, 30 gives about five minutes.
 	gitDefaultAttempts = 30
@@ -142,4 +146,20 @@ func gitStartGuard(gitCmd string, workDir string) (string, bool) {
 		return "", false // e.g. `curl -s` that failed without a word: retry as before
 	}
 	return r.Out, true
+}
+
+// lastProgressLine returns the last non-empty line of git --progress output,
+// which uses \r to overwrite a line in a real terminal; when redirected (as we
+// do) those \r-separated updates land as one blob. Splitting on both \r and \n
+// and taking the last non-empty piece gives the most recent status (e.g.
+// "Writing objects: 73% (12/16)") instead of the raw multi-kilobyte blob.
+func lastProgressLine(s string) string {
+	s = strings.ReplaceAll(s, "\r", "\n")
+	lines := strings.Split(s, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if t := strings.TrimSpace(lines[i]); t != "" {
+			return t
+		}
+	}
+	return ""
 }

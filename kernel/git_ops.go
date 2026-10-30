@@ -194,12 +194,31 @@ func GitPushRetry(repoDir, ownerRepo, branch string, maxRetry int) error {
 		maxRetry = 20 // with 10s start guard, attempts are cheap; network needs 200s window
 	}
 	for attempt := 1; attempt <= maxRetry; attempt++ {
-		pushCmd := fmt.Sprintf("cd %q && git push %q %s", repoDir, pushURL, branch)
-		result, started := gitStartGuard(pushCmd, repoDir)
-		if !started {
-			log.Printf("git_push: attempt %d/%d start timeout (10s), retrying", attempt, maxRetry)
-			continue // no sleep — only waited 2s
+		// --progress forces git to emit "Counting objects...", "Writing objects..."
+		// etc to stderr even though stdout/stderr are not a terminal. Without it a
+		// push that is slow but succeeding prints NOTHING until it is completely
+		// done (verified: 0 bytes at 300ms, vs 462 bytes of progress with
+		// --progress at the same point) — so the "no output = hung" guard was
+		// killing pushes that were actually working, not just ones that never
+		// connected.
+		pushCmd := fmt.Sprintf("cd %q && git push --progress %q %s", repoDir, pushURL, branch)
+		r := gitGuard(pushCmd, repoDir, gitStartWindow, gitPushMaxRun)
+		if !r.Started {
+			log.Printf("git_push: attempt %d/%d start timeout (%s, no progress output at all — likely never connected), retrying",
+				attempt, maxRetry, gitStartWindow)
+			continue // no sleep — only waited the start window
 		}
+		if r.TimedOut {
+			// it DID produce progress output (otherwise Started would be false),
+			// so it connected and was moving — just too slowly to finish within
+			// gitPushMaxRun. Worth a fresh retry (a new connection often does
+			// better), but this is a different failure mode than "never
+			// connected" and is logged as such.
+			log.Printf("git_push: attempt %d/%d connected and made progress but did not finish within %s, retrying: %s",
+				attempt, maxRetry, gitPushMaxRun, truncStr(lastProgressLine(r.Out), 160))
+			continue
+		}
+		result := r.Out
 		// a rejected push prints "! [rejected] a -> a (non-fast-forward)": that line
 		// contains "->" too, and used to be read as success. Retrying the same push
 		// cannot change a rejection, so stop with the reason.
