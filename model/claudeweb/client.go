@@ -285,6 +285,9 @@ func (c *Client) DownloadConversation(convID string) (string, error) {
 	}
 
 	var conv struct {
+		// the model the SERVER has recorded for this conversation (it can differ from the
+		// one we request: a model_update event changes it mid-stream)
+		Model        string `json:"model"`
 		ChatMessages []struct {
 			Sender  string            `json:"sender"`
 			Content []json.RawMessage `json:"content"`
@@ -364,8 +367,8 @@ func (c *Client) DownloadConversation(convID string) (string, error) {
 			}
 		}
 	}
-	log.Printf("claudeweb: downloaded %s: %d chars from %d messages (%d created files)",
-		convID[:8], md.Len(), len(conv.ChatMessages), createdFiles)
+	log.Printf("claudeweb: downloaded %s: %d chars from %d messages (%d created files) server-side model=%q",
+		convID[:8], md.Len(), len(conv.ChatMessages), createdFiles, conv.Model)
 	return md.String(), nil
 }
 
