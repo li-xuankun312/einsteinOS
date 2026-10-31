@@ -35,6 +35,48 @@ func CloneURL(ownerRepo string) string {
 	return fmt.Sprintf("https://github.com/%s.git", ownerRepo)
 }
 
+// sshRemoteURL is the SCP-style form git/ssh expects: git@github.com:owner/repo.git.
+func sshRemoteURL(ownerRepo string) string {
+	return fmt.Sprintf("git@github.com:%s.git", ownerRepo)
+}
+
+// gitSSHKeyPath: EINSTEIN_GIT_SSH_KEY overrides it; default is the deploy key
+// this project's push problem was actually solved with (see GitPushRetry) —
+// ~/.ssh/einsteinos_deploy, scoped with write access to the dev repo only,
+// not a general account key.
+func gitSSHKeyPath() string {
+	if v := strings.TrimSpace(os.Getenv("EINSTEIN_GIT_SSH_KEY")); v != "" {
+		return v
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return home + "/.ssh/einsteinos_deploy"
+}
+
+// gitSSHAvailable reports whether the configured deploy key exists, i.e.
+// whether GitPushRetry can use SSH at all.
+func gitSSHAvailable() bool {
+	key := gitSSHKeyPath()
+	if key == "" {
+		return false
+	}
+	_, err := os.Stat(key)
+	return err == nil
+}
+
+// gitSSHCommand is what GIT_SSH_COMMAND must be set to so git's ssh uses this
+// one deploy key instead of whatever keys/agent the account running the
+// process happens to have — IdentitiesOnly makes that exclusive, not just
+// preferred. AcceptNew (not "no") still verifies a HOST key it has already
+// seen; it only skips the interactive prompt for one it has never seen, so a
+// fresh known_hosts does not hang this waiting for a y/n that nothing can
+// answer.
+func gitSSHCommand() string {
+	return fmt.Sprintf("ssh -i %q -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15", gitSSHKeyPath())
+}
+
 // GitCloneOrReuse ensures dir is a usable clone of ownerRepo, synced to remote HEAD.
 // If .git exists → fetch + reset. If .git is missing or corrupt → remove residue,
 // clone fresh. Every network step runs under gitGuard: a process with no sign of life
@@ -225,12 +267,30 @@ func GitCommit(repoDir, message string) bool {
 // Uses the 10 s start guard — if TLS hangs, kill and retry immediately (no 10s sleep).
 // each hung attempt costs 10 s, each real failure gets a 10 s backoff.
 func GitPushRetry(repoDir, ownerRepo, branch string, maxRetry int) error {
-	pushURL := CloneURL(ownerRepo)
+	// HTTPS push had a 100% failure rate across two separate 90-attempt real
+	// runs (0/180 total, every attempt a zero-byte "never connected" within the
+	// 10s start window) while HTTPS clone/fetch on the exact same network kept
+	// succeeding throughout. SSH (a different port, protocol and auth entirely)
+	// was confirmed working on that same network and authenticated for this repo
+	// before this was written. Prefer it; fall back to the old HTTPS path only if
+	// no deploy key is configured here (e.g. a different machine that hasn't set
+	// one up), so this never regresses an environment that relied on HTTPS push
+	// actually working.
+	pushURL := sshRemoteURL(ownerRepo)
+	sshEnv := ""
+	usingSSH := gitSSHAvailable()
+	if usingSSH {
+		sshEnv = fmt.Sprintf("GIT_SSH_COMMAND=%q ", gitSSHCommand())
+	} else {
+		pushURL = CloneURL(ownerRepo)
+	}
 	if floor := gitPushAttempts(); maxRetry < floor {
 		maxRetry = floor // see gitPushAttempts: a zero-byte connection failure needs
 		// more independent tries, not more patience within one — 20 was not enough
 		// in a real run (20/20 failed)
 	}
+	log.Printf("git_push: %s using %s (%s)", branch, map[bool]string{true: "SSH", false: "HTTPS"}[usingSSH],
+		map[bool]string{true: gitSSHKeyPath(), false: "no deploy key found, falling back to token"}[usingSSH])
 	for attempt := 1; attempt <= maxRetry; attempt++ {
 		// --progress forces git to emit "Counting objects...", "Writing objects..."
 		// etc to stderr even though stdout/stderr are not a terminal. Without it a
@@ -239,7 +299,7 @@ func GitPushRetry(repoDir, ownerRepo, branch string, maxRetry int) error {
 		// --progress at the same point) — so the "no output = hung" guard was
 		// killing pushes that were actually working, not just ones that never
 		// connected.
-		pushCmd := fmt.Sprintf("cd %q && git push --progress %q %s", repoDir, pushURL, branch)
+		pushCmd := fmt.Sprintf("cd %q && %sgit push --progress %q %s", repoDir, sshEnv, pushURL, branch)
 		r := gitGuard(pushCmd, repoDir, gitStartWindow, gitPushMaxRun, gitPushStallTimeout, func(elapsed time.Duration, line string) {
 			// this IS the live "it's connected and moving" signal the silent final
 			// verdict couldn't give: proof that bytes are actually flowing, with real
