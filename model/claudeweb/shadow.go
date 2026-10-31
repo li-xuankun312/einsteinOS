@@ -131,8 +131,19 @@ func (s *ShadowExecutor) Execute(toolName string, inputJSON string) string {
 		log.Printf("[shadow] axle: using curl fallback (extraction failed): %s",
 			truncateCmd(redactAxle(strings.Join(strings.Fields(command), " ")), 300))
 		result := axleExecWithRetryCurl(command, s.WorkDir)
-		if result != "" {
+		// axleExecWithRetryCurl never returns "" on exhaustion — it returns a
+		// synthetic explanatory message (axleCurlExhaustedPrefix) so the child sees
+		// WHY nothing came back, instead of an empty string making the remote
+		// sandbox's own failure look like the real answer. Log that distinction
+		// honestly: "got N bytes" previously fired for THIS synthetic message too,
+		// reading exactly like a real Axle response had arrived when every attempt
+		// had in fact timed out.
+		if strings.HasPrefix(result, axleCurlExhaustedPrefix) {
+			log.Printf("[shadow] axle verify_proof (curl fallback): all attempts failed, returning explanatory message (%d bytes) to the child", len(result))
+		} else if result != "" {
 			log.Printf("[shadow] axle verify_proof (curl fallback): got %d bytes", len(result))
+		}
+		if result != "" {
 			return result
 		}
 		log.Printf("[shadow] axle verify_proof: all retries failed, letting remote result stand")
@@ -508,6 +519,13 @@ func formatAxleRun(r axleRun) string {
 	return fmt.Sprintf("[pid 0 exit=%d] %s", code, out)
 }
 
+// axleCurlExhaustedPrefix marks axleExecWithRetryCurl's own synthetic
+// give-up message so callers can log/handle it as "no real response", not as
+// Axle data. It must never itself look like real Axle output, so a child
+// parsing JSON out of a response correctly fails to find any — exactly as it
+// should when nothing actually answered.
+const axleCurlExhaustedPrefix = "\x00AXLE_CURL_EXHAUSTED\x00"
+
 // axleExecWithRetryCurl runs the child's raw command locally when its Axle
 // requests could not be parsed (see extractAxleRequests).
 func axleExecWithRetryCurl(command string, workDir string) string {
@@ -581,8 +599,9 @@ func axleExecWithRetryCurl(command string, workDir string) string {
 	}
 	log.Printf("[shadow] axle-curl: all %d attempts exhausted (%d timed out)", attempts, timeouts)
 	// say so explicitly: returning "" made the remote sandbox's own failure ("could
-	// not resolve host") stand, which reads as "Axle is down", not "no answer yet"
-	return fmt.Sprintf("[pid 0 exit=28] axle: no response from the local machine after %d attempts (%d timed out). "+
+	// not resolve host") stand, which reads as "Axle is down", not "no answer yet".
+	// axleCurlExhaustedPrefix lets the caller log this distinctly from a real response.
+	return fmt.Sprintf(axleCurlExhaustedPrefix+"[pid 0 exit=28] axle: no response from the local machine after %d attempts (%d timed out). "+
 		"This is a network problem, not a proof failure — retry later.", attempts, timeouts)
 }
 
