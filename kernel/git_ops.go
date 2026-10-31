@@ -226,8 +226,10 @@ func GitCommit(repoDir, message string) bool {
 // each hung attempt costs 10 s, each real failure gets a 10 s backoff.
 func GitPushRetry(repoDir, ownerRepo, branch string, maxRetry int) error {
 	pushURL := CloneURL(ownerRepo)
-	if maxRetry < 20 {
-		maxRetry = 20 // with 10s start guard, attempts are cheap; network needs 200s window
+	if floor := gitPushAttempts(); maxRetry < floor {
+		maxRetry = floor // see gitPushAttempts: a zero-byte connection failure needs
+		// more independent tries, not more patience within one — 20 was not enough
+		// in a real run (20/20 failed)
 	}
 	for attempt := 1; attempt <= maxRetry; attempt++ {
 		// --progress forces git to emit "Counting objects...", "Writing objects..."

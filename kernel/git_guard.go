@@ -56,6 +56,12 @@ const (
 	// attempts for clone/fetch. A person needs ~9 manual tries on a bad day; at
 	// 10 s per hung attempt, 30 gives about five minutes.
 	gitDefaultAttempts = 30
+	// 3x gitDefaultAttempts: a real run saw 20/20 independent push attempts fail
+	// with zero bytes in a row, well past what the clone/fetch ceiling needed in
+	// its worst observed case (8 attempts). At 10s per zero-byte failure this is
+	// a 15-minute worst-case wall time if the connection truly never comes up —
+	// bounded, and acceptable for a background pipeline step.
+	gitPushDefaultAttempts = 90
 )
 
 // gitNetAttempts is the attempt budget for clone/fetch; EINSTEIN_GIT_ATTEMPTS overrides it.
@@ -66,6 +72,25 @@ func gitNetAttempts() int {
 		}
 	}
 	return gitDefaultAttempts
+}
+
+// gitPushAttempts: how many independent connection attempts a push gets. This
+// is a SEPARATE budget from gitNetAttempts (clone/fetch) because push has shown
+// a markedly worse zero-byte ("never connected within the 10s start window")
+// failure rate on this project's network path — a real run hit 20/20 straight
+// zero-byte failures (3m10s, no partial connection, no progress) even though
+// manual single retries typically succeed within 1-2 tries. That gap matters:
+// the stall-timeout/live-progress work (git_ops.go's GitPushRetry) only helps
+// once a connection partially works; it does nothing for a connection that
+// never starts at all, which is what needs MORE independent rolls of the dice,
+// not more patience within one roll.
+func gitPushAttempts() int {
+	if v := strings.TrimSpace(os.Getenv("EINSTEIN_GIT_PUSH_ATTEMPTS")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return gitPushDefaultAttempts
 }
 
 // gitGuardResult is what one guarded command did.
