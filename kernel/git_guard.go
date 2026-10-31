@@ -37,7 +37,17 @@ const (
 	// a push that is genuinely transferring data (confirmed by --progress output,
 	// so it is not stuck at "no connection") gets longer before giving up — a
 	// large diff over a slow proxy legitimately takes a while.
-	gitPushMaxRun = 120 * time.Second
+	// a push that keeps producing genuinely new --progress content is no longer
+	// killed at a flat ceiling (see gitPushStallTimeout below) — this is now just
+	// the absolute backstop for a push that somehow keeps "progressing" forever
+	// without ever finishing. Large on purpose: it should practically never fire
+	// for a real push; gitPushStallTimeout is what actually ends a dead one.
+	gitPushMaxRun = 15 * time.Minute
+	// once a push has shown at least one real progress line, this is how long it
+	// may go with NO NEW distinct progress line before it's considered stalled
+	// (not "never connected" — that's startWindow's job — but "connected, then
+	// stopped moving") and killed for a fresh retry.
+	gitPushStallTimeout = 45 * time.Second
 	// how often a long-running push reports its latest --progress line, once it
 	// has started producing output. Independent of the 50ms internal poll —
 	// that's for responsiveness to the process exiting/timing out, this is for
@@ -108,7 +118,18 @@ func exitCodeOf(err error) int {
 // final verdict. It receives the elapsed time and the most recent non-empty
 // line of output seen so far (see lastProgressLine). Pass nil for the
 // clone/fetch callers, which don't need this chatter.
-func gitGuard(gitCmd, workDir string, startWindow, maxRun time.Duration, onTick func(elapsed time.Duration, lastLine string)) gitGuardResult {
+//
+// stallTimeout, if nonzero, changes what "stuck" means once real progress has
+// been seen: a command that keeps producing genuinely NEW progress lines is
+// kept running past maxRun's old role as a flat ceiling — it is only killed
+// once stallTimeout passes with NO new progress content (the same distinct
+// line repeating, or nothing at all). A push that connects and is advancing
+// should not be killed-and-restarted from zero at a fixed clock; a push that
+// connects, shows one line, then goes quiet, should not be allowed to sit for
+// the full (now much larger) maxRun before anyone notices it died. maxRun
+// remains the absolute backstop either way — pass 0 to disable stall-based
+// killing entirely (clone/fetch's case: unchanged flat-ceiling behavior).
+func gitGuard(gitCmd, workDir string, startWindow, maxRun, stallTimeout time.Duration, onTick func(elapsed time.Duration, lastLine string)) gitGuardResult {
 	cmd := exec.Command("bash", "-c", gitCmd)
 	cmd.Dir = workDir
 	setProcGroup(cmd) // git spawns git-remote-https; kill them all, not just bash
@@ -129,9 +150,12 @@ func gitGuard(gitCmd, workDir string, startWindow, maxRun time.Duration, onTick 
 	tick := time.NewTicker(50 * time.Millisecond)
 	defer tick.Stop()
 	sawOutput := false
-	lastReported := "" // only call onTick when the line actually changed — a stalled
-	// transfer (same percentage for many ticks) shouldn't spam identical lines
+	lastReported := "" // onTick's own cadence (progressInterval) — how often we LOG
 	var lastReportAt time.Duration
+	lastSeenLine := "" // stall detection — checked every poll, independent of onTick's
+	// slower logging cadence: WHEN we give up depends on real content changing, not
+	// on how often we chose to tell the operator about it
+	var lastProgressAt time.Duration
 	for {
 		select {
 		case err := <-done:
@@ -146,7 +170,12 @@ func gitGuard(gitCmd, workDir string, startWindow, maxRun time.Duration, onTick 
 				<-done
 				return gitGuardResult{Code: -1}
 			}
-			if el >= maxRun {
+			if line := lastProgressLine(out.String()); line != lastSeenLine {
+				lastSeenLine = line
+				lastProgressAt = el
+			}
+			stalled := stallTimeout > 0 && sawOutput && el-lastProgressAt >= stallTimeout
+			if el >= maxRun || stalled {
 				killProcGroup(cmd)
 				<-done
 				return gitGuardResult{Out: out.String(), Code: -1, Started: true, TimedOut: true}
@@ -166,7 +195,7 @@ func gitGuard(gitCmd, workDir string, startWindow, maxRun time.Duration, onTick 
 // started=false means "hung, or failed with nothing to show", i.e. retry. A
 // command that exits 0 with no output has started (a silent success).
 func gitStartGuard(gitCmd string, workDir string) (string, bool) {
-	r := gitGuard(gitCmd, workDir, gitStartWindow, gitMaxRun, nil)
+	r := gitGuard(gitCmd, workDir, gitStartWindow, gitMaxRun, 0, nil)
 	if !r.Started {
 		return "", false
 	}
