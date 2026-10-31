@@ -48,7 +48,7 @@ func GitCloneOrReuse(ownerRepo, dir string) error {
 		if _, err := os.Stat(dir + "/.git"); err == nil {
 			// .git exists — fetch, then reset locally.
 			// do NOT rm -rf: the local repo is valid, only the network failed.
-			r := gitGuard(fmt.Sprintf("git -C %q fetch origin", dir), dir, gitStartWindow, gitMaxRun)
+			r := gitGuard(fmt.Sprintf("git -C %q fetch origin", dir), dir, gitStartWindow, gitMaxRun, nil)
 			switch {
 			case !r.Started:
 				log.Printf("git_clone_or_reuse: %s attempt %d/%d fetch hung (no output for %s), killed", ownerRepo, attempt, attempts, gitStartWindow)
@@ -73,7 +73,7 @@ func GitCloneOrReuse(ownerRepo, dir string) error {
 
 		// .git missing or corrupt — clean residue, clone fresh
 		os.RemoveAll(dir)
-		r := gitGuard(fmt.Sprintf("git clone %q %q", CloneURL(ownerRepo), dir), "/tmp", gitStartWindow, gitCloneMaxRun)
+		r := gitGuard(fmt.Sprintf("git clone %q %q", CloneURL(ownerRepo), dir), "/tmp", gitStartWindow, gitCloneMaxRun, nil)
 		if !r.Started || r.TimedOut || r.Code != 0 {
 			os.RemoveAll(dir)
 			lastErr = fmt.Errorf("clone failed (started=%v timed_out=%v exit=%d)", r.Started, r.TimedOut, r.Code)
@@ -238,7 +238,12 @@ func GitPushRetry(repoDir, ownerRepo, branch string, maxRetry int) error {
 		// killing pushes that were actually working, not just ones that never
 		// connected.
 		pushCmd := fmt.Sprintf("cd %q && git push --progress %q %s", repoDir, pushURL, branch)
-		r := gitGuard(pushCmd, repoDir, gitStartWindow, gitPushMaxRun)
+		r := gitGuard(pushCmd, repoDir, gitStartWindow, gitPushMaxRun, func(elapsed time.Duration, line string) {
+			// this IS the live "it's connected and moving" signal the silent final
+			// verdict couldn't give: proof that bytes are actually flowing, with real
+			// content (percent complete, object counts), not just elapsed time
+			log.Printf("git_push: attempt %d/%d in progress (%s elapsed): %s", attempt, maxRetry, elapsed.Round(time.Second), line)
+		})
 		if !r.Started {
 			log.Printf("git_push: attempt %d/%d start timeout (%s, no progress output at all — likely never connected), retrying",
 				attempt, maxRetry, gitStartWindow)

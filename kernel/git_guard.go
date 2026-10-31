@@ -38,6 +38,11 @@ const (
 	// so it is not stuck at "no connection") gets longer before giving up — a
 	// large diff over a slow proxy legitimately takes a while.
 	gitPushMaxRun = 120 * time.Second
+	// how often a long-running push reports its latest --progress line, once it
+	// has started producing output. Independent of the 50ms internal poll —
+	// that's for responsiveness to the process exiting/timing out, this is for
+	// how chatty the log gets.
+	progressInterval = 5 * time.Second
 	// attempts for clone/fetch. A person needs ~9 manual tries on a bad day; at
 	// 10 s per hung attempt, 30 gives about five minutes.
 	gitDefaultAttempts = 30
@@ -94,7 +99,16 @@ func exitCodeOf(err error) int {
 }
 
 // gitGuard runs gitCmd under bash in workDir.
-func gitGuard(gitCmd, workDir string, startWindow, maxRun time.Duration) gitGuardResult {
+//
+// onTick, if non-nil, is called roughly every progressInterval while the
+// command is still running and has produced at least one byte of output — the
+// live equivalent of --progress's "Counting objects... Writing objects..."
+// updates, for a caller that wants to show its operator the command is
+// actually connected and moving, not just silently wait up to maxRun for one
+// final verdict. It receives the elapsed time and the most recent non-empty
+// line of output seen so far (see lastProgressLine). Pass nil for the
+// clone/fetch callers, which don't need this chatter.
+func gitGuard(gitCmd, workDir string, startWindow, maxRun time.Duration, onTick func(elapsed time.Duration, lastLine string)) gitGuardResult {
 	cmd := exec.Command("bash", "-c", gitCmd)
 	cmd.Dir = workDir
 	setProcGroup(cmd) // git spawns git-remote-https; kill them all, not just bash
@@ -115,6 +129,9 @@ func gitGuard(gitCmd, workDir string, startWindow, maxRun time.Duration) gitGuar
 	tick := time.NewTicker(50 * time.Millisecond)
 	defer tick.Stop()
 	sawOutput := false
+	lastReported := "" // only call onTick when the line actually changed — a stalled
+	// transfer (same percentage for many ticks) shouldn't spam identical lines
+	var lastReportAt time.Duration
 	for {
 		select {
 		case err := <-done:
@@ -134,6 +151,13 @@ func gitGuard(gitCmd, workDir string, startWindow, maxRun time.Duration) gitGuar
 				<-done
 				return gitGuardResult{Out: out.String(), Code: -1, Started: true, TimedOut: true}
 			}
+			if onTick != nil && sawOutput && el-lastReportAt >= progressInterval {
+				if line := lastProgressLine(out.String()); line != "" && line != lastReported {
+					onTick(el, line)
+					lastReported = line
+				}
+				lastReportAt = el
+			}
 		}
 	}
 }
@@ -142,7 +166,7 @@ func gitGuard(gitCmd, workDir string, startWindow, maxRun time.Duration) gitGuar
 // started=false means "hung, or failed with nothing to show", i.e. retry. A
 // command that exits 0 with no output has started (a silent success).
 func gitStartGuard(gitCmd string, workDir string) (string, bool) {
-	r := gitGuard(gitCmd, workDir, gitStartWindow, gitMaxRun)
+	r := gitGuard(gitCmd, workDir, gitStartWindow, gitMaxRun, nil)
 	if !r.Started {
 		return "", false
 	}
