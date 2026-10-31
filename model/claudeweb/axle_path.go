@@ -19,6 +19,7 @@ package claudeweb
 
 import (
 	"log"
+	"strconv"
 	"net/http"
 	"net/url"
 	"os"
@@ -76,6 +77,24 @@ func configureAxleProxy() {
 			log.Printf("claudeweb: Axle path: unreachable directly (%v) and via the env proxy (%v); keeping the proxy", derr, perr)
 		}
 	})
+}
+
+const axleCurlDefaultAttempts = 30
+
+// axleCurlAttempts: total independent connection attempts for the curl
+// fallback's retry loop (see axleExecWithRetryCurl). EINSTEIN_AXLE_CURL_ATTEMPTS
+// overrides it; invalid/non-positive values fall back to the default. 30
+// attempts at up to 15s each is a 7.5-minute worst case if the connection truly
+// never comes up — several minutes of genuine patience, matching what manual
+// Ctrl+C-and-retry testing in this project actually needed, rather than the
+// fixed 6 (~100s) this replaces.
+func axleCurlAttempts() int {
+	if v := strings.TrimSpace(os.Getenv("EINSTEIN_AXLE_CURL_ATTEMPTS")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return axleCurlDefaultAttempts
 }
 
 func axleProxyMode() string {

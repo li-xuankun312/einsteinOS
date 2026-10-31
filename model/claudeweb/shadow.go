@@ -260,7 +260,12 @@ func waitWithHeartbeat(wait func() (int64, int, error), every time.Duration, bea
 	}
 }
 
-var axleScriptRe = regexp.MustCompile(`(?i)(^|[^a-z0-9])axle[._-]?[a-z0-9_]*\.(sh|py)\b`)
+// matches BOTH "axle" baked into the filename (axle.sh, axle_run.py, verify_axle.py)
+// AND "axle" as a path/directory component (/tmp/axle/run.py) — a real case this
+// missed: axleScriptRe required "axle" adjacent to the filename, so a script a
+// child wrote to /tmp/axle/run.py (axle as a DIRECTORY, not part of the filename)
+// fell through to the unbounded generic exec path (only the 150-min idle backstop).
+var axleScriptRe = regexp.MustCompile(`(?i)(^|[^a-z0-9])axle(?:[._-]?[a-z0-9_]*|/[a-z0-9_]*)\.(sh|py)\b`)
 
 // isAxleCommand: any command that talks to Axle. The URL and verify_proof were the
 // only markers, so a child that wraps the call in /tmp/axle.sh and loops over files
@@ -528,6 +533,58 @@ const axleCurlExhaustedPrefix = "\x00AXLE_CURL_EXHAUSTED\x00"
 
 // axleExecWithRetryCurl runs the child's raw command locally when its Axle
 // requests could not be parsed (see extractAxleRequests).
+// axleCurlRound is one batch of same-path attempts in the curl fallback's retry
+// loop.
+type axleCurlRound struct {
+	name     string
+	envUnset bool
+	tries    int
+	guard    time.Duration
+}
+
+// axleCurlRounds builds the retry schedule: total independent connection
+// attempts, split into repeating (3 preferred-path, 1 other-path) windows,
+// preferred-first. Pure (no I/O, no timing) so the schedule itself — not just
+// the eventual outcome of actually running it — is directly testable:
+//
+//   - a kill-and-restart here IS what a manual Ctrl+C + retry does
+//     (axleRunOnce's hardKillOnCancel SIGKILLs the whole process group on
+//     timeout, same as the terminal's SIGINT would), so each attempt already
+//     opens a genuinely fresh connection — the only real gap was how many
+//     times this was willing to do that before giving up (a fixed 6, ~100s,
+//     far short of the patience manual retrying needed in practice)
+//   - the order still favors whichever path last worked (set by
+//     configureAxleProxy at boot and updated on every success), but never
+//     fully abandons the other path, since conditions can change over the
+//     several minutes this may now run for
+func axleCurlRounds(total int, preferDirect bool) []axleCurlRound {
+	primary, secondary := "proxy", "direct"
+	primaryUnset, secondaryUnset := false, true
+	if preferDirect {
+		primary, secondary = "direct", "proxy"
+		primaryUnset, secondaryUnset = true, false
+	}
+	var rounds []axleCurlRound
+	for remaining := total; remaining > 0; {
+		n := 3
+		if n > remaining {
+			n = remaining
+		}
+		rounds = append(rounds, axleCurlRound{primary, primaryUnset, n, 15 * time.Second})
+		remaining -= n
+		if remaining <= 0 {
+			break
+		}
+		n = 1
+		if n > remaining {
+			n = remaining
+		}
+		rounds = append(rounds, axleCurlRound{secondary, secondaryUnset, n, 15 * time.Second})
+		remaining -= n
+	}
+	return rounds
+}
+
 func axleExecWithRetryCurl(command string, workDir string) string {
 	// a script, not a curl: one run, long guard, report everything it printed
 	if !curlWordRe.MatchString(command) {
@@ -543,28 +600,9 @@ func axleExecWithRetryCurl(command string, workDir string) string {
 		return formatAxleRun(run)
 	}
 
-	type round struct {
-		name     string
-		envUnset bool
-		tries    int
-		guard    time.Duration
-	}
-	// Evidence from the Strata run: with the env proxy every attempt timed out,
-	// and the first direct attempt answered in ~3s. So the order adapts: start
-	// with whichever path last worked, and fewer blind repeats of the one that
-	// just failed (the old 5/1/5 spent up to 75s+ before ever trying direct).
-	rounds := []round{
-		{"proxy", false, 2, 15 * time.Second},
-		{"direct", true, 2, 15 * time.Second},
-		{"proxy", false, 3, 20 * time.Second},
-	}
-	if axleDirectPreferred.Load() {
-		rounds = []round{
-			{"direct", true, 2, 15 * time.Second},
-			{"proxy", false, 2, 15 * time.Second},
-			{"direct", true, 2, 20 * time.Second},
-		}
-	}
+	// How many independent connection attempts this gets, total, across both
+	// paths, and in what order — see axleCurlRounds.
+	rounds := axleCurlRounds(axleCurlAttempts(), axleDirectPreferred.Load())
 
 	attempts, timeouts := 0, 0
 	for _, r := range rounds {
