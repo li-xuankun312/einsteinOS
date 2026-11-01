@@ -398,6 +398,15 @@ func ref_store_chunk(convID string, chunkIdx int, owner, repo string) {
 	}
 
 	// write conv JSON to temp
+	// children have repeatedly hardcoded the Axle session cookie and CSRF token
+	// into verification scripts (/tmp/axle.sh, /tmp/verify.py, ...) they write via
+	// bash_tool — the raw conversation transcript records those commands verbatim,
+	// and this JSON is what lands in the git-tracked conv.json. GitHub's secret
+	// scanning push protection correctly blocked it ("push declined due to
+	// repository rule violations") — the fix is to never let the secret reach a
+	// tracked file in the first place, not to react after GitHub catches it.
+	rawJSON = []byte(redactSecrets(string(rawJSON)))
+
 	convTmp := fmt.Sprintf("/tmp/chunk_%d_conv.json", chunkIdx)
 	if err := os.WriteFile(convTmp, rawJSON, 0644); err != nil {
 		log.Printf("ref_store_chunk: %s write conv tmp failed: %v", chunkName, err)
@@ -462,6 +471,7 @@ func ref_store_chunk(convID string, chunkIdx int, owner, repo string) {
 		// local temp path
 		baseName := filepath.Base(remotePath)
 		localTmp := fmt.Sprintf("%s/%s", chunkDir, baseName)
+		fileBytes = []byte(redactSecrets(string(fileBytes))) // see the conv.json redaction above
 		if err := os.WriteFile(localTmp, fileBytes, 0644); err != nil {
 			log.Printf("ref_store_chunk: %s write file %s failed: %v", chunkName, baseName, err)
 			continue

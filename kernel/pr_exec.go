@@ -580,6 +580,12 @@ func dev_store_theory(theory, repo, branch string) error {
 	if err := os.MkdirAll(repoDir+"/.einsteinOS", 0o755); err != nil {
 		return fmt.Errorf("dev_store_theory: %w", err)
 	}
+	// defense in depth, same reasoning as ref_store_chunk: theory text flows from
+	// child-written .lean content through theorem_store/theorem_get, so a secret
+	// that slipped past the chunk-level redaction (or was stored by an older
+	// binary before that redaction existed) still gets caught here before this
+	// — the actual git-tracked write — happens.
+	theory = redactSecrets(theory)
 	if err := os.WriteFile(repoDir+"/.einsteinOS/theory.md", []byte(theory), 0o644); err != nil {
 		return fmt.Errorf("dev_store_theory: write theory.md: %w", err)
 	}
@@ -1920,6 +1926,10 @@ func dev_store_conv(convID, repo, branch string, unitNum int, status map[string]
 		log.Printf("dev_store_conv: %s unit %d download failed: %v", repo, unitNum, err)
 		return
 	}
+	// same reasoning as ref_store_chunk's conv.json redaction: this raw
+	// transcript can contain a child's verification-script commands verbatim,
+	// Axle cookie/CSRF included, before it becomes part of a git-tracked summary.
+	rawJSON = []byte(redactSecrets(string(rawJSON)))
 
 	summary := dev_conv_summary(rawJSON, convID, unitNum, status)
 	if len(summary) < 50 {
