@@ -1261,7 +1261,7 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 			p.WriteString("\n")
 		}
 
-		p.WriteString(fmt.Sprintf(dev_incremental_instruction, branch, gpuAll, gpuUsable, gpuUsable, i+1, len(units)))
+		p.WriteString(fmt.Sprintf(dev_incremental_instruction, branch, gpuAll, gpuUsable, gpuUsable, i+1, len(units), devUnitGitAuthInstruction(branch)))
 
 		feedback := pr_feedback(pid)
 		if feedback != "" {
@@ -2745,6 +2745,42 @@ VERIFICATION STEPS:
 5. smoke test end to end
 `
 
+// devUnitGitAuthInstruction: the git-auth block injected into
+// dev_incremental_instruction's %[7]s. A real run (log 2026/11/01) showed every
+// dev_unit child's own code dying right here — review FAIL: "source files ...
+// absent from einsteinOS/dev-7 (commit ... was never pushed)" twice, then the
+// child's own status block saying "push blocked (no GitHub token)" outright.
+// The child was being told to push itself via HTTPS with a token
+// (/tmp/.gh_token), the exact path that failed 0/180 times for the KERNEL's
+// OWN pushes earlier this session before SSH fixed it (9cc14c58) — but that
+// fix only ever touched the kernel's own git_ops.go calls, never the text
+// instructing the CHILD to push. The child's bash_tool runs on the SAME local
+// machine as the kernel (ForkExec is a plain local exec.Command, confirmed
+// earlier this session — there is no separate "child machine"), so the SAME
+// deploy key the kernel itself uses is just as reachable from here. Mirrors
+// GitPushRetry's own preference: SSH if the key is configured, HTTPS+token
+// (unchanged from before) if it is not, so an environment that has not set up
+// the deploy key does not regress.
+// branch is substituted directly here, NOT via the outer Sprintf's %[1]s — this
+// function's return value becomes the VALUE of dev_incremental_instruction's
+// %[7]s, which is substituted exactly once; any literal "%[1]s" left inside
+// that value would never get a second pass and would show up verbatim in the
+// child's prompt instead of the real branch name.
+func devUnitGitAuthInstruction(branch string) string {
+	if gitSSHAvailable() {
+		// gitSSHCommand()'s value uses only double quotes internally (the key
+		// path, via Go's %q) and never a single quote, so wrapping it in single
+		// quotes for this shell export is safe without a general-purpose quoter.
+		return fmt.Sprintf("for git auth, use SSH (not a token):\n"+
+			"  export GIT_SSH_COMMAND='%s'\n"+
+			"  git clone git@github.com:OWNER/REPO.git\n"+
+			"  git push git@github.com:OWNER/REPO.git %s",
+			gitSSHCommand(), branch)
+	}
+	return fmt.Sprintf("for git auth: TOKEN=$(cat /tmp/.gh_token 2>/dev/null)\n"+
+		"  git push https://${TOKEN}@github.com/OWNER/REPO.git %s", branch)
+}
+
 const dev_incremental_instruction = `
 
 [INCREMENTAL BUILD — unit %[5]d of %[6]d]
@@ -2783,8 +2819,7 @@ if unit 1 and no structure exists yet, create one that fits YOUR project name.
 4. compile the WHOLE project after adding your code
 5. push to branch %[1]s (NOT main)
 
-for git auth: TOKEN=$(cat /tmp/.gh_token 2>/dev/null)
-  git push https://${TOKEN}@github.com/OWNER/REPO.git %[1]s
+%[7]s
 
 [THEORY → CODE]
 LAYER 2 form templates use placeholder identifiers:
