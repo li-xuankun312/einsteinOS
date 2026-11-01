@@ -263,6 +263,31 @@ func GitCommit(repoDir, message string) bool {
 	return runLocalGit(cmd, repoDir) == nil
 }
 
+// rejectionReason pulls the lines that actually explain a push rejection out of
+// git's full --progress output — the "! [rejected] ... -> ... (reason)" summary
+// line and any "error:"/"hint:" lines, which is where GitHub puts the REAL
+// reason (non-fast-forward, a protected-branch policy, etc. all print
+// differently here even though the trigger strings checked above are the same).
+// Falls back to the raw (trimmed) text if none of those markers are found, so
+// nothing is ever silently dropped.
+func rejectionReason(output string) string {
+	var kept []string
+	for _, line := range strings.Split(output, "\n") {
+		t := strings.TrimSpace(line)
+		if t == "" {
+			continue
+		}
+		if strings.HasPrefix(t, "!") || strings.HasPrefix(t, "error:") || strings.HasPrefix(t, "hint:") ||
+			strings.HasPrefix(t, "To ") || strings.Contains(t, "rejected") {
+			kept = append(kept, t)
+		}
+	}
+	if len(kept) == 0 {
+		return strings.TrimSpace(output)
+	}
+	return strings.Join(kept, " | ")
+}
+
 // GitPushRetry pushes a branch with retry on TLS/network failures.
 // Uses the 10 s start guard — if TLS hangs, kill and retry immediately (no 10s sleep).
 // each hung attempt costs 10 s, each real failure gets a 10 s backoff.
@@ -327,8 +352,13 @@ func GitPushRetry(repoDir, ownerRepo, branch string, maxRetry int) error {
 		// cannot change a rejection, so stop with the reason.
 		if strings.Contains(result, "[rejected]") || strings.Contains(result, "failed to push some refs") ||
 			strings.Contains(result, "non-fast-forward") {
-			return fmt.Errorf("push of %s rejected by the remote (%s) — not retrying: %s", branch,
-				"non-fast-forward / rejected", truncStr(strings.TrimSpace(result), 160))
+			// the actual reason (the "! [rejected] ... (non-fast-forward)" line, any
+			// "error:"/"hint:" lines) is near the END of git's output, after the
+			// "Enumerating/Counting/Writing objects..." progress text that comes
+			// first — truncating the START of the buffer (as the old code did) threw
+			// away exactly the diagnostic part and kept only the progress noise.
+			return fmt.Errorf("push of %s rejected by the remote — not retrying: %s", branch,
+				truncStr(rejectionReason(result), 300))
 		}
 		// success indicators
 		if strings.Contains(result, "->") || strings.Contains(result, "Everything up-to-date") || strings.Contains(result, "already exists") {
