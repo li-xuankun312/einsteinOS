@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -999,6 +1000,88 @@ func dev_split_theory(theory string) []string {
 
 
 
+// devUnitMarker persists what happened to one unit across re-entrant calls to
+// dev_from_theorems — every failure (review FAIL, or a unit that needed a fix)
+// re-queues the WHOLE function, which used to restart the loop from unit 0 every
+// time: already-passed units got completely redone (new child, new review, new
+// quota spent) and dev_push_fix/dev_fix's "give up after 3 attempts" checks were
+// comparing against the UNIT'S POSITION in the list (i+1), not how many times
+// THAT unit had actually been retried — unit 4+ hit "exceeded max attempts" on
+// its first-ever failure (4 > 3), while units 1-3 could never hit it at all
+// (their position never exceeds 3, however many times they actually failed) and
+// could retry forever. The marker file is the one thing that survives a
+// restart: read at the top of each loop iteration to skip units already marked
+// PASS, and to recover the REAL fix-attempt count for a unit that's failing.
+type devUnitState struct {
+	Pass        bool
+	FixAttempts int
+}
+
+func devUnitMarkerPath(unitNum int) string {
+	return fmt.Sprintf(".einsteinOS/convs/dev_unit_%d.state", unitNum)
+}
+
+// readDevUnitState reads the marker for unitNum from branch's current remote
+// tip. Never errors on "file doesn't exist" (the normal case for a unit never
+// attempted yet) — only genuine git failures are logged, and either way the
+// caller gets the safe default (not yet passed, 0 fix attempts).
+func readDevUnitState(devRepo, branch string, unitNum int) devUnitState {
+	repoDir, derr := devRepoLocalDir(devRepo)
+	if derr != nil {
+		log.Printf("readDevUnitState: %s unit %d: %v", devRepo, unitNum, derr)
+		return devUnitState{}
+	}
+	// fetch first: a push does not update the local origin/<branch>
+	// remote-tracking ref on its own (same lesson as gitUseBranchFromRemote),
+	// so without this a marker written moments ago by this same process could
+	// read back as "not found" against a stale local cache.
+	out, err := exec.Command("bash", "-c",
+		fmt.Sprintf("cd %q && git fetch origin %q >/dev/null 2>&1; git show origin/%s:%s 2>/dev/null",
+			repoDir, branch, branch, devUnitMarkerPath(unitNum))).Output()
+	if err != nil || len(out) == 0 {
+		return devUnitState{} // no marker yet — unit has never been attempted
+	}
+	text := strings.TrimSpace(string(out))
+	lines := strings.SplitN(text, "\n", 2)
+	state := devUnitState{Pass: strings.HasPrefix(lines[0], "PASS")}
+	if len(lines) > 1 {
+		fmt.Sscanf(strings.TrimSpace(lines[1]), "fix_attempts=%d", &state.FixAttempts)
+	}
+	return state
+}
+
+// writeDevUnitState commits and pushes the marker for unitNum. Logged but not
+// fatal on failure — this is bookkeeping for future re-entrant calls, not the
+// unit's actual code/review result, which is already on the branch regardless.
+func writeDevUnitState(devRepo, branch string, unitNum int, state devUnitState) {
+	repoDir, derr := devRepoLocalDir(devRepo)
+	if derr != nil {
+		log.Printf("writeDevUnitState: %s unit %d: %v", devRepo, unitNum, derr)
+		return
+	}
+	if err := gitUseBranchFromRemote(repoDir, branch, "main"); err != nil {
+		log.Printf("writeDevUnitState: %s unit %d checkout %s: %v", devRepo, unitNum, branch, err)
+		return
+	}
+	status := "FAIL"
+	if state.Pass {
+		status = "PASS"
+	}
+	content := fmt.Sprintf("%s\nfix_attempts=%d\n", status, state.FixAttempts)
+	if err := os.MkdirAll(repoDir+"/.einsteinOS/convs", 0o755); err != nil {
+		log.Printf("writeDevUnitState: %s unit %d mkdir: %v", devRepo, unitNum, err)
+		return
+	}
+	if err := os.WriteFile(repoDir+"/"+devUnitMarkerPath(unitNum), []byte(content), 0o644); err != nil {
+		log.Printf("writeDevUnitState: %s unit %d write: %v", devRepo, unitNum, err)
+		return
+	}
+	GitCommit(repoDir, fmt.Sprintf("state: unit %d %s", unitNum, status))
+	if err := GitPushRetry(repoDir, devRepo, branch, 20); err != nil {
+		log.Printf("writeDevUnitState: %s unit %d NOT stored: %v", devRepo, unitNum, err)
+	}
+}
+
 func dev_from_theorems(pid int64, step *Step) (string, error) {
 	repo := step.Owner + "/" + step.Repo
 
@@ -1076,7 +1159,28 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 	// "all units pass" below — nothing reads this slice before then.
 	var unitVerdicts []string
 
+	devRepo := ""
+	if len(devRepos) > 0 {
+		devRepo = devRepos[0]
+	}
+
 	for i, unit := range units {
+		// a re-queue (review FAIL, or a fix pushed) restarts this whole function
+		// from unit 0 — without this check every already-passed unit would be
+		// forked, written and reviewed all over again, burning the same quota
+		// that is already the project's tightest constraint, for work that is
+		// already correctly on the branch. See devUnitMarker's doc comment.
+		priorState := devUnitState{}
+		if devRepo != "" {
+			priorState = readDevUnitState(devRepo, branch, i+1)
+		}
+		if priorState.Pass {
+			log.Printf("dev_from_theorems: %s unit %d/%d already PASS on %s (resuming), skipping",
+				repo, i+1, len(units), branch)
+			unitVerdicts = append(unitVerdicts, fmt.Sprintf("unit %d/%d: PASS — %s", i+1, len(units), strings.Join(unit.Files, ", ")))
+			continue
+		}
+
 		var p strings.Builder
 
 		if hw_info != "" {
@@ -1274,6 +1378,9 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 			log.Printf("dev_from_theorems: %s unit %d/%d pass (review confirmed), branch %s updated",
 				repo, i+1, len(units), branch)
 			unitVerdicts = append(unitVerdicts, fmt.Sprintf("unit %d/%d: PASS — %s", i+1, len(units), strings.Join(unit.Files, ", ")))
+			if devRepo != "" {
+				writeDevUnitState(devRepo, branch, i+1, devUnitState{Pass: true})
+			}
 		} else {
 			// FAIL — push fix, then re-queue remaining units
 			log.Printf("dev_from_theorems: %s unit %d/%d review FAIL: %s, pushing fix",
@@ -1290,7 +1397,15 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 				log.Printf("dev_from_theorems: %s unit %d/%d proof gate FAIL — no code fix, re-running preflight",
 					repo, i+1, len(units))
 			} else {
-				dev_push_fix(pid, step.Owner, step.Repo, lastStatus, i+1)
+				// REAL per-unit fix-attempt count, not the unit's position in the
+				// list — see priorState/devUnitState above. Persisted so the count
+				// survives the restart-from-unit-0 that dev_push_fix/pr_push_step
+				// is about to trigger.
+				fixAttempt := priorState.FixAttempts + 1
+				if devRepo != "" {
+					writeDevUnitState(devRepo, branch, i+1, devUnitState{Pass: false, FixAttempts: fixAttempt})
+				}
+				dev_push_fix(pid, step.Owner, step.Repo, lastStatus, fixAttempt)
 			}
 			pr_push_step(pid, &Step{
 				Kind:  STEP_DEV_FROM_THEOREMS,
