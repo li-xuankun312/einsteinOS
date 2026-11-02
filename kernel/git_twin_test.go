@@ -274,15 +274,108 @@ func TestGitTwinSyncAndTouches(t *testing.T) {
 	t.Cleanup(func() { twinMu.Lock(); delete(twinDirs, dir); twinMu.Unlock() })
 
 	cmd := "cd " + filepath.Dir(dir) + " && git clone " + up.url + " " + filepath.Base(dir) + " && ls"
-	notes := GitTwinSync(cmd, "")
-	if len(notes) != 1 || !strings.Contains(notes[0], "cloned") {
-		t.Fatalf("notes=%v", notes)
+	GitTwinSync(cmd, "")
+	gitTwinWG.Wait() // the work is in the background
+	if !isTwin(dir) {
+		t.Fatal("the clone did not happen")
 	}
-	// the compound command was split: the clone happened, `ls` was not treated as git
+	// a read inside the twin is answered by the sandbox; an unrelated command still runs locally
 	if !GitTwinTouches("cd " + dir + "/lean && find . -name '*.lean' | head -5") {
 		t.Fatal("a read inside the twin should be answered by the sandbox")
 	}
 	if GitTwinTouches("ls /mnt/user-data/outputs") {
 		t.Fatal("an unrelated command must still run locally")
+	}
+}
+
+// the 2026/11/02 12:26 and 13:10 log lines: "Cloning into '/home/claude/2>&1'" and
+// "cloned … into /home/claude/baloon)"
+func TestTwinParsingIgnoresRedirectionsAndBrackets(t *testing.T) {
+	cases := []struct{ cmd, want string }{
+		{"git clone https://x/y.git 2>&1", "/tmp/w/y"},
+		{"git clone https://x/y.git /tmp/y 2>&1 | tail -5", "/tmp/y"},
+		{"(git clone https://x/y.git /tmp/y)", "/tmp/y"},
+		{"(cd /tmp && git clone https://x/y.git y2)", "/tmp/y2"},
+		{"git clone https://x/y.git /tmp/y > /dev/null 2>&1", "/tmp/y"},
+		{"git clone https://x/y.git >/tmp/log", "/tmp/w/y"},
+		{"git clone -q https://x/y.git /tmp/y &>/dev/null", "/tmp/y"},
+		{"git clone https://x/y.git /tmp/y 2> err.txt", "/tmp/y"},
+		{"git clone https://x/y.git '/tmp/a)b'", ""}, // a bracket is not part of a directory name
+	}
+	for _, c := range cases {
+		acts := parseGitTwinActions(c.cmd, "/tmp/w")
+		got := ""
+		if len(acts) > 0 {
+			got = acts[0].Dir
+		}
+		if got != c.want {
+			t.Errorf("%q → %q want %q", c.cmd, got, c.want)
+		}
+	}
+	for _, d := range []string{"2>&1", "baloon)", "a;b", "x|y", "<in"} {
+		if resolveDir("/tmp", d) != "" {
+			t.Errorf("%q must not resolve to a directory", d)
+		}
+	}
+	if resolveDir("/tmp", "a b") != "/tmp/a b" {
+		t.Error("a quoted name with a space is a legitimate directory")
+	}
+}
+
+func TestACloneRunsInTheBackgroundAndBlocksNothing(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "slow")
+	t.Cleanup(func() { twinMu.Lock(); delete(twinDirs, dir); twinMu.Unlock() })
+	oldGit := twinGit
+	started := make(chan struct{})
+	twinGit = func(d, cmdline string, to time.Duration) (int, string) {
+		if strings.HasPrefix(cmdline, "git clone") {
+			close(started)
+			time.Sleep(600 * time.Millisecond) // a TLS handshake that takes its time
+			os.MkdirAll(filepath.Join(dir, ".git"), 0o755)
+			return 0, ""
+		}
+		return oldGit(d, cmdline, to)
+	}
+	t.Cleanup(func() { twinGit = oldGit })
+
+	t0 := time.Now()
+	GitTwinSync("git clone file:///nonexistent/up.git "+dir, "")
+	if time.Since(t0) > 200*time.Millisecond {
+		t.Fatalf("GitTwinSync took %s: it must return at once", time.Since(t0))
+	}
+	<-started
+	// while the clone runs: the directory already counts as a twin, and asking is instant
+	t1 := time.Now()
+	if !GitTwinTouches("cat " + dir + "/x") {
+		t.Fatal("a directory whose clone has started must already be answered by the sandbox")
+	}
+	if time.Since(t1) > 100*time.Millisecond {
+		t.Fatalf("GitTwinTouches waited %s for the clone: the shadow asks it for every command", time.Since(t1))
+	}
+	gitTwinWG.Wait()
+	if !isTwinMarked(dir) {
+		t.Fatal("the clone finished but the twin was not marked")
+	}
+}
+
+func isTwinMarked(dir string) bool { return isTwin(dir) }
+
+func TestAFailedCloneIsNotATwinAndLocalCommandsRunAgain(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "unreachable")
+	oldGit := twinGit
+	twinGit = func(d, cmdline string, to time.Duration) (int, string) {
+		if strings.HasPrefix(cmdline, "git clone") {
+			return 128, "fatal: unable to access: gnutls_handshake() failed"
+		}
+		return oldGit(d, cmdline, to)
+	}
+	t.Cleanup(func() { twinGit = oldGit })
+	GitTwinSync("git clone file:///nonexistent/up.git "+dir, "")
+	gitTwinWG.Wait()
+	if GitTwinTouches("cat " + dir + "/x") {
+		t.Fatal("after a failed clone the directory is no twin: a command reading it must run locally and say so")
+	}
+	if _, err := os.Stat(dir); err == nil {
+		t.Fatal("a failed clone must not leave a directory behind")
 	}
 }

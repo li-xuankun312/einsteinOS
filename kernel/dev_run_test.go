@@ -31,6 +31,7 @@ type fakeModel struct {
 	unitWork func(prompt, unitID string, attempt int) // writes into the mirror like shadow replays do
 	attempts map[string]int
 	planner  func(prompt string) string
+	reply    func(unit string, attempt int) string // what a unit conversation says at the end; nil: a normal summary
 }
 
 func (f *fakeModel) exec(prompt string) (string, string) {
@@ -60,6 +61,9 @@ func (f *fakeModel) exec(prompt string) (string, string) {
 		n := f.attempts[unit]
 		f.mu.Unlock()
 		f.unitWork(prompt, unit, n)
+		if f.reply != nil {
+			return f.reply(unit, n), ""
+		}
 		return "wrote the files.\ncompile=pass\nsmoke=pass\n" + strings.Repeat("padding so the kernel does not poll a thin conversation. ", 12), ""
 	}
 	return strings.Repeat("ok ", 200), ""
@@ -384,5 +388,46 @@ func TestTheoryPhaseOutputRunsThroughTheDevLoopToAFinishedBranch(t *testing.T) {
 	// and the unit's code is on the branch, pushed by the kernel
 	if !strings.Contains(bareShow(env.bare, branch+":"+"src/"), ".cu") {
 		t.Fatalf("no unit code on the dev branch")
+	}
+}
+
+// the 2026/11/02 unit 2: two attempts wrote nothing and nobody could say why
+func TestAConversationThatWritesNothingHandsItsLastWordsToTheNextAttempt(t *testing.T) {
+	env := newDevEnv(t, theory2("Alpha"))
+	env.model.reply = func(unit string, n int) string {
+		if n == 1 {
+			return "I looked for the repository for a long time.\nBLOCKER: I cannot see /home/claude/x anywhere in my sandbox, so I did not write anything.\n" + strings.Repeat("more explanation. ", 30)
+		}
+		return "wrote the files.\n" + strings.Repeat("padding. ", 80)
+	}
+	var fixPrompt string
+	env.model.unitWork = func(prompt, unit string, n int) {
+		if n == 1 {
+			return // writes nothing
+		}
+		fixPrompt = prompt
+		mustWrite(env.mirror, "src/impl.cu", "// ok\n")
+		env.model.writeScripts(unit, 0, 0, "built")
+	}
+	const pid = 9201
+	if _, err := dev_from_theorems(pid, &Step{Owner: "ref", Repo: "proj"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"FIX ATTEMPT 1", "nothing_written", "wrote no file", "BLOCKER: I cannot see /home/claude/x"} {
+		if !strings.Contains(fixPrompt, want) {
+			t.Fatalf("the fix conversation must be told what the failed one said; lacks %q in:\n%.1500s", want, fixPrompt)
+		}
+	}
+}
+
+func TestDevPromptTellsTheChildWhereTheRepoReallyIs(t *testing.T) {
+	r := &devRun{pid: 1, repo: "o/r", devRepo: "o/baloon", branch: "b", task: "t", gpuAll: "0,1", devRepoBlock: "[DEV REPO]\n"}
+	plan := newDevPlan("o/r", "s", []DevModule{{Name: "A.lean", Hash: "h", Bytes: 10}}, [][]string{{"A.lean"}}, "p")
+	r.plan = plan
+	p := r.unitPrompt(plan.Leaves()[0], 0, 1, 1, DevFailure{}, "b")
+	for _, want := range []string{"THE REPO IS ON THE MACHINE THAT RUNS YOUR COMMANDS", "/home/claude/baloon exists on that machine", "believe the local result", "ls /home/claude/baloon"} {
+		if !strings.Contains(p, want) {
+			t.Fatalf("dev prompt lacks %q", want)
+		}
 	}
 }

@@ -99,6 +99,28 @@ func splitSegments(cmd string) []string {
 
 var envAssignRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
 
+// redirRe: a token that is (or starts with) a redirection: >, >>, <, 2>, 2>&1, &>, >&2 ...
+var redirRe = regexp.MustCompile(`^([0-9]*[<>]|&>)`)
+
+// stripRedirections removes redirections from a segment's tokens, and the file name
+// that follows a bare one (`> file`, `2> file`).
+func stripRedirections(toks []string) []string {
+	var out []string
+	for i := 0; i < len(toks); i++ {
+		t := toks[i]
+		if redirRe.MatchString(t) {
+			// "2>&1", ">file": the target is attached; ">", "2>>", "<": it is the next token
+			bare := strings.Trim(t, "0123456789<>&")
+			if bare == "" && !strings.Contains(t, "&") && i+1 < len(toks) {
+				i++
+			}
+			continue
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
 // cloneOptWithValue: git clone options whose next token is their value.
 var cloneOptWithValue = map[string]bool{
 	"-b": true, "--branch": true, "--depth": true, "-c": true, "--config": true, "-o": true, "--origin": true,
@@ -114,7 +136,9 @@ var twinReadCmds = map[string]bool{
 // resolveDir joins a directory token onto cwd; "" means it cannot be known.
 func resolveDir(cwd, d string) string {
 	switch {
-	case d == "" || strings.ContainsAny(d, "$`") || strings.HasPrefix(d, "~") || d == "-":
+	case d == "" || strings.ContainsAny(d, "$`<>()&|;") || strings.HasPrefix(d, "~") || d == "-":
+		// shell metacharacters are not part of a directory name: "2>&1" read as a clone
+		// target made /home/claude/2>&1, and "baloon)" made a directory with a bracket in it
 		return ""
 	case strings.HasPrefix(d, "/"):
 		return path.Clean(d)
@@ -129,7 +153,9 @@ func parseGitTwinActions(command, workDir string) []twinAction {
 	cwd := workDir
 	var acts []twinAction
 	for _, seg := range splitSegments(command) {
-		toks := splitArgs(seg)
+		// a subshell or a brace group around the command: "(git clone u d)"
+		seg = strings.TrimSpace(strings.Trim(strings.TrimSpace(seg), "(){}"))
+		toks := stripRedirections(splitArgs(seg))
 		for len(toks) > 0 && envAssignRe.MatchString(toks[0]) {
 			toks = toks[1:]
 		}
@@ -329,9 +355,37 @@ var twinGit = func(dir, cmdline string, timeout time.Duration) (int, string) {
 func shq(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
 var (
-	twinMu   sync.Mutex
-	twinDirs = map[string]bool{} // directories this process keeps twins in
+	twinMu       sync.Mutex          // guards twinDirs and dirLocks only: never held across git
+	twinDirs     = map[string]bool{} // directories this process keeps (or is making) twins in
+	dirLocks     = map[string]*sync.Mutex{}
+	gitTwinWG    sync.WaitGroup // background work, for tests and a clean exit
+	twinCloneMax = 90 * time.Second
+	twinFetchMax = 60 * time.Second
+	twinProbeMax = 30 * time.Second
 )
+
+// lockDir serialises the operations on ONE directory without blocking the others.
+func lockDir(dir string) func() {
+	twinMu.Lock()
+	m := dirLocks[dir]
+	if m == nil {
+		m = &sync.Mutex{}
+		dirLocks[dir] = m
+	}
+	twinMu.Unlock()
+	m.Lock()
+	return m.Unlock
+}
+
+func setTwinDir(dir string, on bool) {
+	twinMu.Lock()
+	if on {
+		twinDirs[dir] = true
+	} else {
+		delete(twinDirs, dir)
+	}
+	twinMu.Unlock()
+}
 
 func isTwin(dir string) bool {
 	_, err := os.Stat(filepath.Join(dir, ".git", twinMarker))
@@ -346,7 +400,15 @@ func firstField(s string) string {
 	return f[0]
 }
 
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 // ensureTwin makes dir a current shallow clone of url, doing as little as it can.
+// It holds only dir's own lock while it runs git, so a slow clone blocks nothing else.
 func ensureTwin(a twinAction) string {
 	cloneURL, key, ok := normTwinURL(a.URL)
 	if !ok {
@@ -355,8 +417,8 @@ func ensureTwin(a twinAction) string {
 	if !twinDirAllowed(a.Dir) {
 		return fmt.Sprintf("clone into %s refused (not a place the kernel keeps twins)", a.Dir)
 	}
-	twinMu.Lock()
-	defer twinMu.Unlock()
+	unlock := lockDir(a.Dir)
+	defer unlock()
 
 	ref := "HEAD"
 	if a.Branch != "" {
@@ -374,15 +436,15 @@ func ensureTwin(a twinAction) string {
 		}
 	}
 	if exists {
-		_, origin := twinGit(a.Dir, "git remote get-url origin", 20*time.Second)
+		_, origin := twinGit(a.Dir, "git remote get-url origin", twinProbeMax)
 		if originKey(strings.TrimSpace(origin)) != key {
 			return fmt.Sprintf("%s exists with a different origin (%s), left alone", a.Dir, truncStr(strings.TrimSpace(origin), 60))
 		}
-		code, remote := twinGit(a.Dir, "git ls-remote "+shq(cloneURL)+" "+shq(ref), 60*time.Second)
-		_, local := twinGit(a.Dir, "git rev-parse HEAD", 20*time.Second)
+		code, remote := twinGit(a.Dir, "git ls-remote "+shq(cloneURL)+" "+shq(ref), twinProbeMax)
+		_, local := twinGit(a.Dir, "git rev-parse HEAD", twinProbeMax)
 		rsha, lsha := firstField(remote), firstField(local)
 		if code == 0 && rsha != "" && rsha == lsha {
-			twinDirs[a.Dir] = true
+			setTwinDir(a.Dir, true)
 			return fmt.Sprintf("%s is at the remote HEAD (%s), skipped", a.Dir, rsha[:minInt(8, len(rsha))])
 		}
 		if !isTwin(a.Dir) {
@@ -395,15 +457,16 @@ func ensureTwin(a twinAction) string {
 		if a.Branch != "" {
 			fetchRef = a.Branch
 		}
-		c, out := twinGit(a.Dir, "git fetch --depth 1 origin "+shq(fetchRef)+" && git reset --hard FETCH_HEAD", 300*time.Second)
+		c, out := twinGit(a.Dir, "git fetch --depth 1 origin "+shq(fetchRef)+" && git reset --hard FETCH_HEAD", twinFetchMax)
 		if c != 0 {
 			return fmt.Sprintf("%s: update failed (exit %d): %s", a.Dir, c, truncStr(strings.TrimSpace(out), 120))
 		}
-		twinDirs[a.Dir] = true
+		setTwinDir(a.Dir, true)
 		return fmt.Sprintf("%s updated to the remote HEAD", a.Dir)
 	}
 
 	if err := os.MkdirAll(path.Dir(a.Dir), 0o755); err != nil {
+		setTwinDir(a.Dir, false)
 		return fmt.Sprintf("clone into %s: %v", a.Dir, err)
 	}
 	cmdline := "git clone --depth 1 "
@@ -411,21 +474,15 @@ func ensureTwin(a twinAction) string {
 		cmdline += "-b " + shq(a.Branch) + " "
 	}
 	cmdline += shq(cloneURL) + " " + shq(a.Dir)
-	code, out := twinGit("/tmp", cmdline, 300*time.Second)
+	code, out := twinGit("/tmp", cmdline, twinCloneMax)
 	if code != 0 {
 		os.RemoveAll(a.Dir)
+		setTwinDir(a.Dir, false) // not a twin after all: local commands run normally again
 		return fmt.Sprintf("clone of %s failed (exit %d): %s", key, code, truncStr(strings.TrimSpace(redactSecrets(out)), 120))
 	}
 	os.WriteFile(filepath.Join(a.Dir, ".git", twinMarker), []byte(key+"\n"), 0o644)
-	twinDirs[a.Dir] = true
+	setTwinDir(a.Dir, true)
 	return fmt.Sprintf("cloned %s into %s (shallow, kernel credentials)", key, a.Dir)
-}
-
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 // replayRead runs a read-only git command in a twin; its output is discarded (the
@@ -434,42 +491,57 @@ func replayRead(a twinAction) string {
 	if !twinDirAllowed(a.Dir) || !isTwin(a.Dir) {
 		return ""
 	}
-	twinMu.Lock()
-	defer twinMu.Unlock()
+	unlock := lockDir(a.Dir)
+	defer unlock()
 	quoted := make([]string, len(a.Args))
 	for i, x := range a.Args {
 		quoted[i] = shq(x)
 	}
-	code, _ := twinGit(a.Dir, "git "+strings.Join(quoted, " "), 120*time.Second)
+	code, _ := twinGit(a.Dir, "git "+strings.Join(quoted, " "), 2*twinFetchMax)
 	return fmt.Sprintf("replayed git %s in %s (exit %d)", a.Args[0], a.Dir, code)
 }
 
-// GitTwinSync does the local side of the git commands in a command line the shadow
-// is about to skip, and returns a note per action for the log.
+// GitTwinSync starts the local side of the git commands in a command line the shadow
+// is about to skip. It returns at once: the work runs in the background, in order.
+// A clone takes as long as the network lets it (a TLS handshake that never finishes
+// held the whole shadow batch for two minutes), and nothing waits for it: a command
+// that reads inside a twin is answered by the sandbox anyway (GitTwinTouches), and the
+// directory is marked as a twin from the moment its clone starts.
 func GitTwinSync(command, workDir string) []string {
-	var notes []string
-	for _, a := range parseGitTwinActions(command, workDir) {
-		var n string
-		switch a.Kind {
-		case "clone":
-			n = ensureTwin(a)
-		case "read":
-			n = replayRead(a)
-		}
-		if n != "" {
-			notes = append(notes, n)
+	acts := parseGitTwinActions(command, workDir)
+	if len(acts) == 0 {
+		return nil
+	}
+	for _, a := range acts {
+		if a.Kind == "clone" {
+			if _, _, ok := normTwinURL(a.URL); ok && twinDirAllowed(a.Dir) {
+				setTwinDir(a.Dir, true) // pending: reads inside it are the sandbox's to answer
+			}
 		}
 	}
-	for _, n := range notes {
-		log.Printf("git_twin: %s", n)
-	}
-	return notes
+	gitTwinWG.Add(1)
+	go func() {
+		defer gitTwinWG.Done()
+		for _, a := range acts {
+			var n string
+			switch a.Kind {
+			case "clone":
+				n = ensureTwin(a)
+			case "read":
+				n = replayRead(a)
+			}
+			if n != "" {
+				log.Printf("git_twin: %s", n)
+			}
+		}
+	}()
+	return nil
 }
 
-// GitTwinTouches reports whether a command reads inside a directory the kernel
-// keeps a twin in. The twin exists so that local state is true, not so that a local
-// run answers the child: such a read is better answered by the sandbox, whose
-// output is complete (the local result is cut at LocalOutputCap).
+// GitTwinTouches reports whether a command reads inside a directory the kernel keeps
+// (or is making) a twin in. The twin exists so that local state is true, not so that a
+// local run answers the child: such a read is better answered by the sandbox, whose
+// output is complete (the local result is cut at LocalResultCap).
 func GitTwinTouches(command string) bool {
 	twinMu.Lock()
 	defer twinMu.Unlock()

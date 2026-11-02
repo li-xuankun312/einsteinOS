@@ -1303,10 +1303,10 @@ func dev_review_unit_inner(pid int64, repo, branch string, unitNum, totalUnits i
 	// compile is one piece of evidence, not the verdict. The reviewer's job is to
 	// compare implementation against theory spec; cutting it short on compile
 	// skips the most valuable check.
-	reviewTerm := OrConditions(
+	reviewTerm := WithDoneMarker(OrConditions(
 		&ConsecutiveTextRounds{Threshold: 2}, // reviewer done reading → writes verdict
 		&MaxRounds{Limit: 10},
-	)
+	))
 	child, err := ForkWithTermination(prompt.String(), ".", "review_conv", reviewTerm)
 	if err != nil {
 		log.Printf("dev_review_unit: %s unit %d fork failed: %v, using compile status",

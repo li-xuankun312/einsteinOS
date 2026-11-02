@@ -36,3 +36,17 @@ func TestLocalResultHeaderTellsTheChildWhenOutputWasCut(t *testing.T) {
 		t.Fatalf("a cut result must say so, and must not claim to be the whole output: %q", cut)
 	}
 }
+
+// the answer of a conversation that ends on the done marker is the text of THAT round
+func TestTerminalTextKeepsTheAnswerAndDropsOnlyTheMarker(t *testing.T) {
+	plan := "unit: A, B\nunit: C\n" + kernel.DoneMarker
+	if got := terminalText(plan); got != "unit: A, B\nunit: C" {
+		t.Fatalf("%q", got)
+	}
+	if got := terminalText(kernel.DoneMarker); got != "" {
+		t.Fatalf("a round that is only the marker has no text: %q", got)
+	}
+	if got := terminalText("PASS"); got != "PASS" {
+		t.Fatalf("%q", got)
+	}
+}

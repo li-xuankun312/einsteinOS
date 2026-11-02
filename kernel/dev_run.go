@@ -317,6 +317,12 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 		switch {
 		case len(out.Changed) == 0 && len(out.Removed) == 0:
 			kind = "nothing_written"
+			// the only evidence of WHY is what the conversation said: 2026/11/02 unit 2 spent
+			// two attempts (27 rounds) writing nothing, and the log held none of it
+			words := tailText(stdout, 1500)
+			text = "the conversation wrote no file. what it said last:\n" + words
+			log.Printf("dev_from_theorems: %s unit %s wrote nothing; its last words: %s", r.repo, unit.ID,
+				truncStr(strings.Join(strings.Fields(tailText(stdout, 600)), " "), 600))
 		case out.Result.Compile == "pass" && out.Result.Smoke != "pass":
 			kind, text = "smoke_fail", st["smoke_error"]
 		case out.Result.Compile == "missing":
@@ -442,7 +448,7 @@ func (r *devRun) unitPrompt(unit DevPlanNode, idx, total, attempt int, fail DevF
 	p.WriteString("\n")
 
 	build, test := devVerifyScripts(unit.ID)
-	p.WriteString(fmt.Sprintf(dev_unit_instruction, idx+1, total, unit.ID, r.gpuAll, r.gpuUsable(), r.gpuUsable(), build, test, einsteinHelp, DoneInstruction()))
+	p.WriteString(fmt.Sprintf(dev_unit_instruction, idx+1, total, unit.ID, r.gpuAll, r.gpuUsable(), r.gpuUsable(), build, test, einsteinHelp, DoneInstruction(), devMirrorDir(r.devRepo)))
 
 	if fb := pr_feedback(r.pid); fb != "" {
 		p.WriteString(fmt.Sprintf("\n\n[PRIOR FEEDBACK]\n%s", fb))
@@ -474,6 +480,12 @@ CUDA_VISIBLE_DEVICES=%[6]s
 [WHERE YOUR FILES GO]
 work in the repo directory shown under [DEV REPO]. it already contains the branch. use the dev repo's existing layout
 (include/<project>/, src/<project>/, tests/); if it has none yet, create one that fits YOUR project name.
+
+[THE REPO IS ON THE MACHINE THAT RUNS YOUR COMMANDS]
+%[11]s exists on that machine, not necessarily in your own sandbox. every command you run is also run there, and its
+result is written back to you as LOCAL MACHINE RESULT: that is the truth about the repo, the theory and your build.
+if your sandbox says a file is missing and the local result shows it, believe the local result. do not search the whole
+filesystem for the repo and do not clone it: start with ls %[11]s, read the theory, then write the files.
 
 [THE KERNEL VERIFIES YOU — WRITE THESE TWO SCRIPTS]
 %[7]s

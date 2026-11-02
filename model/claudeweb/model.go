@@ -130,6 +130,12 @@ func shapeToolResults(in []ToolResult) []ToolResult {
 	return out
 }
 
+// terminalText is the text of the round that ended the conversation, as the result
+// should carry it: the done marker line removed, nothing else touched.
+func terminalText(text string) string {
+	return strings.TrimSpace(kernel.StripDoneMarker(text))
+}
+
 // settledNow reports whether the server says convID's last turn has finished and
 // been persisted (a GET — see kernel/conv_tail.go). The turn can take a moment to
 // become visible after the stream ends, so look a few times before saying no.
@@ -781,6 +787,17 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 				if sig := termCond.Check(event); sig != nil {
 					log.Printf("claudeweb: termination fired (text round): %s", sig.Reason)
 					kernel.StoreSignal(kernel.GetLastForkedPid(), sig)
+					// This round's text is yielded AFTER these checks, so exiting here used to
+					// drop it. With the done marker the round that ends the conversation IS the
+					// answer (a plan, a verdict, a hardware report): dev_planner came back as the
+					// 25 bytes of "[terminated: done_marker]" and the merged survey+plan call
+					// with it. Keep the text, without the marker line.
+					if t := terminalText(textBuf.String()); t != "" {
+						yield(&model.LLMResponse{
+							Content: &genai.Content{Role: "model", Parts: []*genai.Part{{Text: t}}},
+							Partial: true,
+						}, nil)
+					}
 					doExit(exitNormal, fmt.Sprintf("[terminated: %s]", sig.Reason))
 					return
 				}
