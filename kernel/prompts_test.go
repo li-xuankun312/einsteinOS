@@ -59,7 +59,7 @@ func TestEveryConversationPromptAsksForTheMarker(t *testing.T) {
 	if !strings.Contains(spawnPreamble("p", "work", ""), DoneMarker) {
 		t.Error("spawned work")
 	}
-	if !strings.Contains(buildSurveyPlanPrompt("o", "r", "abc", "t", nil, nil, nil, true), DoneMarker) {
+	if !strings.Contains(buildSurveyPlanPrompt("o", "r", "abc", "t", nil, nil, nil, true, true), DoneMarker) {
 		t.Error("survey+plan")
 	}
 }

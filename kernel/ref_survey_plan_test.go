@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -228,5 +229,111 @@ func TestParsePlanLinesIsDeterministic(t *testing.T) {
 		if len(chunks) != 2 || strings.Join(chunks[1], ",") != "c" {
 			t.Fatalf("%v", chunks)
 		}
+	}
+}
+
+// ---- the directory section ---------------------------------------------------------------
+
+// 240 files: core code, and the directories the old directory survey existed to drop
+func fixtureDirs(t *testing.T) (heavy []string, light []lightFile, byDir map[string][]string) {
+	old := refFileAtFn
+	refFileAtFn = func(owner, name, sha, path string) (string, error) { return strings.Repeat("line\n", 40), nil }
+	t.Cleanup(func() { refFileAtFn = old })
+	byDir = map[string][]string{}
+	for dir, n := range map[string]int{"src/core": 90, "src/kernels": 60, "tests": 40, "bench": 30, "examples": 20} {
+		for i := 0; i < n; i++ {
+			f := fmt.Sprintf("%s/f%02d.cpp", dir, i)
+			byDir[dir] = append(byDir[dir], f)
+			heavy = append(heavy, f) // the kernel's own line-count rule calls every one of them heavy
+		}
+	}
+	sort.Strings(heavy)
+	return heavy, nil, byDir
+}
+
+func TestParseDirsBlock(t *testing.T) {
+	stats := map[string]*dirStat{"src/core": {1, 1}, "src/kernels/cuda": {1, 1}, "tests": {1, 1}, ".": {1, 1}}
+	got := parseDirsBlock("keep=src/core, ghost, src/kernels/, tests,src/core\nkeep=.", stats)
+	if strings.Join(got, ",") != "src/core,src/kernels,tests,." {
+		// src/kernels is a PARENT of an existing directory: accepted; ghost dropped; duplicates once; "." is a real directory here
+		t.Fatalf("%q", strings.Join(got, ","))
+	}
+}
+
+func TestDirsSectionPrunesTestsBenchmarksAndExamplesAndTheSurveyCannotUndoIt(t *testing.T) {
+	heavy, light, byDir := fixtureDirs(t)
+	kept := append(append([]string{}, byDir["src/core"]...), byDir["src/kernels"]...)
+	sort.Strings(kept)
+	prompts := stubSurveyRunner(t, func(string) string {
+		// the model keeps two directories, but its survey ALSO lists a test file and a benchmark as heavy
+		surveyHeavy := append(append([]string{}, kept...), byDir["tests"][0], byDir["bench"][0])
+		return "<dirs>\nkeep=src/core,src/kernels\n</dirs>\n<survey>\nheavy=" + strings.Join(surveyHeavy, ",") +
+			"\nlight=" + strings.Join(byDir["examples"], ",") + "\n</survey>\n<plan>\n" + chunkLines(surveyHeavy, 10) + "</plan>\n" + DoneMarker
+	})
+	h, l, chunks := surveyAndPlan(1, "o", "r", "abcdef0123456789", heavy, light, "task")
+	if len(*prompts) != 1 {
+		t.Fatalf("one conversation, got %d", len(*prompts))
+	}
+	if !strings.Contains((*prompts)[0], "PART 0 — DIRECTORIES") || !strings.Contains((*prompts)[0], "skip tests, benchmarks, examples, docs, CI, vendored, build scripts") {
+		t.Fatal("the directory part and the skip rule must be in the prompt")
+	}
+	if len(h) != len(kept) {
+		t.Fatalf("heavy=%d want exactly the %d files of the kept directories (the test and benchmark file the survey called heavy must be light)", len(h), len(kept))
+	}
+	for _, f := range h {
+		if !strings.HasPrefix(f, "src/") {
+			t.Fatalf("%s is heavy but is outside the kept directories", f)
+		}
+	}
+	if len(h)+len(l) != len(heavy) {
+		t.Fatalf("files lost: %d+%d vs %d", len(h), len(l), len(heavy))
+	}
+	placed := map[string]int{}
+	for _, c := range chunks {
+		for _, f := range c {
+			placed[f]++
+			if !strings.HasPrefix(f, "src/") {
+				t.Fatalf("the plan contains %s from a directory that was skipped", f)
+			}
+		}
+	}
+	if len(placed) != len(h) {
+		t.Fatalf("plan covers %d of %d heavy files", len(placed), len(h))
+	}
+	// the point of the whole section: 150 heavy files → 15 chunks of 10; without the
+	// directories the same repository planned 240 files' worth
+	if len(chunks) > 16 {
+		t.Fatalf("chunks=%d", len(chunks))
+	}
+}
+
+func TestMissingDirsSectionIsAskedForAloneWithTheShortPrompt(t *testing.T) {
+	heavy, light, byDir := fixtureDirs(t)
+	stubSurveyRunner(t, func(string) string { // survey and plan present, <dirs> absent
+		return "<survey>\nheavy=" + strings.Join(heavy, ",") + "\nlight=\n</survey>\n<plan>\n" + chunkLines(heavy, 10) + "</plan>\n" + DoneMarker
+	})
+	m := useSeqModel(t, func(prompt string) string {
+		if strings.Contains(prompt, "which have core algorithms") {
+			return "keep=src/core"
+		}
+		return ""
+	})
+	h, _, _ := surveyAndPlan(1, "o", "r", "abcdef0123456789", heavy, light, "task")
+	if len(m.prompts) < 1 || !strings.Contains(m.prompts[0], "directories in o/r") {
+		t.Fatalf("the directory question must have been asked alone, got %d prompts", len(m.prompts))
+	}
+	if len(h) != len(byDir["src/core"]) {
+		t.Fatalf("heavy=%d want the %d files of src/core", len(h), len(byDir["src/core"]))
+	}
+}
+
+func TestNoDirectoryPartForSmallRepositories(t *testing.T) {
+	heavy, light := fixtureRef(t, 60)
+	prompts := stubSurveyRunner(t, func(string) string {
+		return "<survey>\nheavy=" + strings.Join(heavy, ",") + "\nlight=\n</survey>\n<plan>\n" + chunkLines(heavy, 10) + "</plan>\n" + DoneMarker
+	})
+	surveyAndPlan(1, "o", "r", "abcdef0123456789", heavy, light, "task")
+	if strings.Contains((*prompts)[0], "PART 0") || strings.Contains((*prompts)[0], "<dirs>") {
+		t.Fatal("60 files: no directory step (the old threshold was 200)")
 	}
 }
