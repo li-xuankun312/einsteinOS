@@ -68,11 +68,30 @@ func collectStrings(v any, out *[]string) {
 	}
 }
 
+// placeholderBefore: a name directly after one of these is a template, not a file
+// ("$f.lean" in a shell loop, "%s.lean", "{name}.lean", "*.lean" is already not a token).
+func placeholderBefore(text string, pos int) bool {
+	if pos == 0 {
+		return false
+	}
+	switch text[pos-1] {
+	case '$', '{', '%', '*', '`':
+		return true
+	}
+	return false
+}
+
 // candidatesInText returns the .lean paths under dir that text mentions, in order.
 // cwd starts at dir and follows the cd commands it passes; a cd to an unresolvable
 // target (a shell variable) makes later relative names unresolvable, so they are
 // skipped rather than guessed.
-func candidatesInText(text, dir string) []string {
+//
+// fromResult is true for the TEXT A COMMAND PRINTED (a tool result): there is no cd
+// to follow, so only an absolute path under dir or a bare name (what `ls` of the
+// outputs directory prints) is believed. A relative path with directories in it is
+// the output of a `find` or `ls -R` somewhere else (the Lean examples the child
+// reads), not a file of ours; resolving it against dir made six ghosts per chunk.
+func candidatesInText(text, dir string, fromResult bool) []string {
 	type ev struct {
 		pos  int
 		cd   string
@@ -104,7 +123,10 @@ func candidatesInText(text, dir string) []string {
 			continue
 		}
 		p := e.path
-		if strings.HasPrefix(p, "~") || strings.HasPrefix(path.Base(p), ".") {
+		if strings.HasPrefix(p, "~") || strings.HasPrefix(path.Base(p), ".") || placeholderBefore(text, e.pos) {
+			continue
+		}
+		if fromResult && !strings.HasPrefix(p, "/") && strings.Contains(p, "/") {
 			continue
 		}
 		var full string
@@ -192,7 +214,7 @@ func discoverOutputPaths(rawJSON []byte, dir string) []string {
 				}
 			}
 			for _, t := range texts {
-				add(candidatesInText(t, dir))
+				add(candidatesInText(t, dir, block.Type == "tool_result"))
 			}
 		}
 	}

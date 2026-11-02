@@ -93,7 +93,7 @@ func TestCandidatesInTextCdHandling(t *testing.T) {
 		{"cat .hidden.lean", ""},
 	}
 	for _, c := range cases {
-		got := candidatesInText(c.text, od)
+		got := candidatesInText(c.text, od, false)
 		g := strings.Join(got, ",")
 		if g != c.want {
 			t.Errorf("%q → %q want %q", c.text, g, c.want)
@@ -181,5 +181,33 @@ func TestChunkFilesForDownloadsOncePerConversation(t *testing.T) {
 	chunkFilesFor("conv-once")
 	if rawCalls != 2 {
 		t.Fatal("after forget the conversation is fetched again")
+	}
+}
+
+func TestPlaceholdersAndFindOutputAreNotFiles(t *testing.T) {
+	// "$f.lean" in a shell loop is a template
+	for _, text := range []string{
+		"for f in A B; do s=open('$f.lean').read(); done",
+		"printf '%s.lean' x",
+		"echo {name}.lean",
+		"ls *.lean",
+	} {
+		if got := candidatesInText(text, od, false); len(got) != 0 {
+			t.Errorf("%q → %v: a template is not a file", text, got)
+		}
+	}
+	// the output of a find in the examples repo: relative paths with directories
+	find := "Algorithms/Sorting/MergeSort.lean\nAlgorithms/Search/Binary.lean\nCombinatorics/Choose.lean\n"
+	if got := candidatesInText(find, od, true); len(got) != 0 {
+		t.Errorf("find output resolved against the outputs dir: %v", got)
+	}
+	// but the same text as a COMMAND the child wrote is resolved (cd-aware)
+	if got := candidatesInText("cat Algorithms/X.lean", od, false); len(got) != 1 {
+		t.Errorf("a command's relative path is still a candidate: %v", got)
+	}
+	// the manifest the prompt asks for: bare names, and absolute paths, are believed
+	ls := "ExpertCacheResidency.lean\nExpertSourceDispatch.lean\n" + od + "/Third.lean\n"
+	if got := candidatesInText(ls, od, true); len(got) != 3 {
+		t.Errorf("ls output of the outputs dir: %v", got)
 	}
 }
