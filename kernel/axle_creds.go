@@ -15,6 +15,8 @@ package kernel
 // work (see AxleConfigured and ref_bind_at).
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"os"
 	"strings"
 	"sync"
@@ -23,7 +25,7 @@ import (
 const axleCookiePrefix = "provertools_session="
 
 var (
-	axleCredMu      sync.RWMutex
+	axleCredMu  sync.RWMutex
 	axleSession string
 	axleCSRF    string
 )
@@ -54,7 +56,44 @@ func axleCredentials() (session, csrf string) {
 	if csrf == "" {
 		csrf = strings.TrimSpace(os.Getenv("AXLE_CSRF"))
 	}
+	if csrf == "" {
+		csrf = csrfFromCookie(session)
+	}
 	return session, csrf
+}
+
+// AxleCredentials is axleCredentials for callers outside the package (main.go builds
+// the system prompt from it): the session value without its prefix, and the CSRF
+// token, which is derived from the cookie when it was not set separately.
+func AxleCredentials() (session, csrf string) { return axleCredentials() }
+
+// csrfFromCookie reads the CSRF token out of the session cookie. A provertools_session
+// cookie is "<base64 JSON>.<sig>.<sig>", and the JSON holds {"browser_api_csrf": "..."}:
+// the token the server expects in x-browser-api-csrf is the one inside the cookie, so
+// a person only has to supply the cookie. Returns "" if the cookie is not that shape.
+func csrfFromCookie(session string) string {
+	seg := session
+	if i := strings.Index(seg, "."); i >= 0 {
+		seg = seg[:i]
+	}
+	if seg == "" {
+		return ""
+	}
+	var raw []byte
+	for _, enc := range []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding, base64.URLEncoding, base64.RawURLEncoding} {
+		if b, err := enc.DecodeString(seg); err == nil {
+			raw = b
+			break
+		}
+	}
+	var m map[string]any
+	if raw == nil || json.Unmarshal(raw, &m) != nil {
+		return ""
+	}
+	if v, ok := m["browser_api_csrf"].(string); ok {
+		return v
+	}
+	return ""
 }
 
 // AxleConfigured reports whether both credentials are present.

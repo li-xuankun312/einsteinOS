@@ -322,7 +322,7 @@ func ref_bind_at(pid int64, owner, repo string, startIdx int) (string, error) {
 	// the theory phase is a proof-checking loop; without Axle credentials every
 	// child would be handed a verification step that cannot work (axle_creds.go)
 	if !AxleConfigured() {
-		return "", fmt.Errorf("ref_bind: Axle credentials are not configured (set AXLE_COOKIE and AXLE_CSRF); " +
+		return "", fmt.Errorf("ref_bind: Axle credentials are not configured (set AXLE_COOKIE; AXLE_CSRF is read from it); " +
 			"refusing to start the theory phase, which verifies every proof through Axle")
 	}
 	commits, err := RefListCommits(owner, repo)

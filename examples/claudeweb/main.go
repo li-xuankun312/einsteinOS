@@ -69,8 +69,10 @@ func main() {
 	}
 
 	kernel.SetAxleCredentials(cfg.axleCookie, cfg.axleCSRF)
+	// the CSRF token is read from inside the cookie when AXLE_CSRF is not set
+	cfg.axleCookie, cfg.axleCSRF = kernel.AxleCredentials()
 	if !kernel.AxleConfigured() {
-		log.Printf("WARNING: AXLE_COOKIE / AXLE_CSRF are not set — proofs cannot be verified, and the theory phase will refuse to start")
+		log.Printf("WARNING: AXLE_COOKIE is not set — proofs cannot be verified, and the theory phase will refuse to start")
 	}
 
 	claudeweb.BuildSystemPrompt(cfg.axleCookie, cfg.axleCSRF)

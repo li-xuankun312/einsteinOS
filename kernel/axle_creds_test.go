@@ -1,6 +1,8 @@
 package kernel
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -107,5 +109,47 @@ func TestPRSetupRefusesBeforeForkingAnything(t *testing.T) {
 	}
 	if len(prTable) != before {
 		t.Fatal("a PR process was created although the setup was refused")
+	}
+}
+
+// a cookie shaped like the real one, built here so no credential-shaped literal exists in the tests
+func fakeCookie(csrf string) string {
+	payload, _ := json.Marshal(map[string]string{"browser_api_csrf": csrf})
+	return "provertools_session=" + base64.StdEncoding.EncodeToString(payload) + ".sigpart.sigpart2"
+}
+
+func TestCSRFIsReadFromInsideTheCookie(t *testing.T) {
+	clearAxle(t)
+	t.Setenv("AXLE_COOKIE", fakeCookie("TOKEN-FROM-COOKIE"))
+	s, c := axleCredentials()
+	if c != "TOKEN-FROM-COOKIE" || !strings.HasSuffix(s, ".sigpart.sigpart2") || strings.HasPrefix(s, "provertools_session=") {
+		t.Fatalf("session %q csrf %q", s, c)
+	}
+	if !AxleConfigured() {
+		t.Fatal("a cookie alone must be enough")
+	}
+	// an explicitly set CSRF wins over the derived one
+	t.Setenv("AXLE_CSRF", "EXPLICIT")
+	if _, c := axleCredentials(); c != "EXPLICIT" {
+		t.Fatalf("explicit CSRF must win, got %q", c)
+	}
+	// SetAxleCredentials with an empty csrf derives it too, and the exported accessor shows it
+	clearAxle(t)
+	SetAxleCredentials(fakeCookie("VIA-SET"), "")
+	if _, c := AxleCredentials(); c != "VIA-SET" {
+		t.Fatalf("%q", c)
+	}
+}
+
+func TestCSRFFromAMalformedCookieIsEmptyNotAGuess(t *testing.T) {
+	for _, bad := range []string{"", "notbase64!!.x.y", "bm90IGpzb24=.x.y", "e30=.x.y"} { // not base64 / not JSON / JSON without the field
+		if got := csrfFromCookie(bad); got != "" {
+			t.Errorf("%q → %q", bad, got)
+		}
+	}
+	clearAxle(t)
+	t.Setenv("AXLE_COOKIE", "provertools_session=garbage")
+	if AxleConfigured() {
+		t.Fatal("a cookie that has no CSRF inside and no AXLE_CSRF is not a configuration")
 	}
 }
