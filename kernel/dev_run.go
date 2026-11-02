@@ -25,6 +25,11 @@ import (
 	"time"
 )
 
+// devNoProgressRounds: productive attempts in the logs wrote their first file by round 5
+// or 6; the ones that wrote nothing ran 12 to 22 rounds. Ten is past the first and well
+// before the second.
+const devNoProgressRounds = 10
+
 // devCompletionPR opens the PR that marks a finished dev branch; a variable so a
 // test does not reach for the GitHub API.
 var devCompletionPR = dev_open_completion_pr
@@ -257,9 +262,16 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 	log.Printf("dev_from_theorems: %s unit %d/%d id=%s attempt %d forking %s (prompt %d bytes, base %s, modules: %s)",
 		r.repo, idx+1, total, unit.ID, attempt, role, len(prompt), baseRef, nodeDesc(unit))
 
+	// a unit conversation that has written nothing after devNoProgressRounds rounds is
+	// stopped: every round is a request, and the account has 40 per 5 hours
+	produced := func() bool {
+		c, rm, err := treeDelta(mirror, base)
+		return err != nil || len(c)+len(rm) > 0 // when unsure, do not stop it
+	}
 	cond := WithDoneMarker(OrConditions(
 		&ConsecutiveTextRounds{Threshold: 4},
 		&MaxRounds{Limit: 30},
+		&NoProgress{Rounds: devNoProgressRounds, Produced: produced},
 	))
 	var child int64
 	var convID string
