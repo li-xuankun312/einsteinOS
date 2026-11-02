@@ -105,6 +105,31 @@ func NewModel(client *Client, modelName string, effort string) *Model {
 
 func (m *Model) Name() string { return m.modelName }
 
+// localResultHeader says what kind of result follows. A result that was cut says so,
+// and says what to do about it instead of asking again for everything.
+func localResultHeader(result string) string {
+	if kernel.WasCut(result) {
+		return "[LOCAL MACHINE RESULT — real output of this machine, cut to fit (head and tail kept; the marker shows how much)]\n"
+	}
+	return "[LOCAL MACHINE RESULT — this is the real output, ignore sandbox]\n"
+}
+
+// shapeToolResults applies the round budget to results that are about to be quoted
+// in a Continue message (the SSE-recovery path), and writes the header.
+func shapeToolResults(in []ToolResult) []ToolResult {
+	raw := make([]string, len(in))
+	for i, tr := range in {
+		raw[i] = tr.Content
+	}
+	shaped := kernel.ShapeRound(raw, kernel.LocalResultCap(), kernel.LocalRoundBudget())
+	out := make([]ToolResult, len(in))
+	for i, tr := range in {
+		tr.Content = shaped[i]
+		out[i] = tr
+	}
+	return out
+}
+
 // settledNow reports whether the server says convID's last turn has finished and
 // been persisted (a GET — see kernel/conv_tail.go). The turn can take a moment to
 // become visible after the stream ends, so look a few times before saying no.
@@ -677,7 +702,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 			}
 			toolResults = append(toolResults, ToolResult{
 				ToolUseID: tb.id,
-				Content:   "[LOCAL MACHINE RESULT — this is the real output, ignore sandbox]\n" + result,
+				Content:   result, // wrapped below, once the round's budget is known
 			})
 			m.toolLog.WriteString(fmt.Sprintf("[%s] %s\n%s\n\n", tb.name, tb.id, result))
 			if stream {
@@ -688,6 +713,20 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 					},
 					Partial: true,
 				}, nil)
+			}
+		}
+
+		// one round's results share a budget; each is already cut to the per-result cap
+		// (head and tail, sizes stated). A cut result says so in its header: the child
+		// then knows what it has and can ask for exactly the rest.
+		{
+			raw := make([]string, len(toolResults))
+			for i, tr := range toolResults {
+				raw[i] = tr.Content
+			}
+			shaped := kernel.ShapeRound(raw, kernel.LocalResultCap(), kernel.LocalRoundBudget())
+			for i := range toolResults {
+				toolResults[i].Content = localResultHeader(shaped[i]) + shaped[i]
 			}
 		}
 
@@ -788,8 +827,8 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 				})
 				var localDiff strings.Builder
 				localDiff.WriteString("Continue. Note: the following tools were executed on the LOCAL machine (source of truth). If any results differ from your sandbox, use these:\n\n")
-				for _, tr := range rr {
-					localDiff.WriteString(fmt.Sprintf("[%s] %s\n\n", tr.ToolUseID, truncate(tr.Content, 500)))
+				for _, tr := range shapeToolResults(rr) {
+					localDiff.WriteString(fmt.Sprintf("[%s] %s\n\n", tr.ToolUseID, tr.Content))
 				}
 				log.Printf("claudeweb: SSE recovery writeback %d results", len(rr))
 				for _, t := range tools {
@@ -844,7 +883,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 		var localDiff strings.Builder
 		localDiff.WriteString("Continue. Note: the following tools were executed on the LOCAL machine (source of truth). If any results differ from your sandbox, use these:\n\n")
 		for _, tr := range toolResults {
-			localDiff.WriteString(fmt.Sprintf("[%s] %s\n\n", tr.ToolUseID, truncate(tr.Content, 500)))
+			localDiff.WriteString(fmt.Sprintf("[%s] %s\n\n", tr.ToolUseID, tr.Content))
 		}
 		log.Printf("claudeweb: writeback %d results + Continue (silent=%d/%d)", len(toolResults), st.consecutiveContinues, maxContinues)
 		kernel.TouchByConv(convID)

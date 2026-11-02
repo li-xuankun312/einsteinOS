@@ -8,12 +8,6 @@ import (
 	"strings"
 )
 
-// LocalOutputCap is about how much of a command's output the local machine sends
-// back to a conversation (the shadow truncates there). The probe is told, so it
-// gathers what it needs in one compact command instead of paging through several:
-// in the Strata run its first batch was cut at the cap and a second round followed.
-const LocalOutputCap = 2000
-
 // hwProbePrompt: facts only. The old prompt ended with "context: <the task>", and
 // the child answered by comparing the machine with the task ("the probe results
 // don't match the setup described..."); that sentence then became the [HARDWARE]
@@ -22,9 +16,9 @@ func hwProbePrompt() string {
 	return fmt.Sprintf("probe this machine's hardware and report FACTS ONLY: GPU vendor/model/count, "+
 		"interconnect topology, CPU model and cores, memory, kernel version. do not compare what you find with anything.\n"+
 		"run ONE command that gathers all of it (lspci, nvidia-smi or ixsmi, lscpu, free, uname...). "+
-		"what a command prints is cut at about %d characters, so keep the output compact: "+
+		"what a command prints is cut (head and tail kept) beyond about %d characters, so keep the output compact: "+
 		"pick the lines you need with grep/head/awk. if a tool is missing, say so in one line and go on.\n%s",
-		LocalOutputCap, DoneInstruction())
+		LocalOutputCap(), DoneInstruction())
 }
 
 // gpuIndexCmd lists the GPU device indices on this machine: /dev/iluvatar<N> and

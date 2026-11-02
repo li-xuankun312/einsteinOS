@@ -151,10 +151,10 @@ func (s *ShadowExecutor) Execute(toolName string, inputJSON string) string {
 	}
 
 	// don't shadow-exec git commands locally.
-	// remote sandbox runs them and gets full output; local shadow truncates
-	// stdout to 2000 chars, and writeback overrides the remote's complete
-	// result with the truncated version. this causes children to re-read
-	// the same file 10+ times in a loop trying to get untruncated content.
+	// remote sandbox runs them and gets full output; the local result is cut to
+	// kernel.LocalResultCap and writeback overrides the remote's complete result
+	// with the cut version. that used to make children re-read the same file 10+
+	// times in a loop trying to get the rest.
 	// git state is shared via GitHub — no local side-effects needed.
 	if isGitCommand(command) {
 		// the sandbox's output stands, but the local machine keeps up with what the
@@ -210,10 +210,11 @@ func (s *ShadowExecutor) Execute(toolName string, inputJSON string) string {
 		return fmt.Sprintf("[pid %d] wait: %v", pid, err)
 	}
 
-	result := kernel.GetResult(childPid)
-	if len(result) > 2000 {
-		result = result[:2000] + "\n..."
-	}
+	// head AND tail, with the sizes of what was cut (kernel/local_result.go). The old
+	// first-2000-characters cut hid the end of every long output (a build's errors, the
+	// last verdict of a loop) and said nothing about it, so the child asked again —
+	// one file per round.
+	result := kernel.ShapeOutput(kernel.GetResult(childPid), kernel.LocalResultCap())
 
 	errStr := kernel.GetStderr(childPid)
 
@@ -236,7 +237,7 @@ func (s *ShadowExecutor) Execute(toolName string, inputJSON string) string {
 	}
 
 	if exitCode != 0 {
-		return fmt.Sprintf("[pid %d exit=%d] %s\nstderr: %s", childPid, exitCode, result, truncateCmd(errStr, 500))
+		return fmt.Sprintf("[pid %d exit=%d] %s\nstderr: %s", childPid, exitCode, result, kernel.ShapeOutput(errStr, kernel.LocalResultCap()/4))
 	}
 	return fmt.Sprintf("[pid %d exit=0] %s", childPid, result)
 }

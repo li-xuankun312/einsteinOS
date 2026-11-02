@@ -63,8 +63,14 @@ func main() {
 		modelName:  envOr("CLAUDE_WEB_MODEL", "claude-sonnet-5-5"),
 		effort:     envOr("CLAUDE_WEB_EFFORT", "medium"),
 		workDir:    envOr("CLAUDE_WEB_WORKDIR", mustGetwd()),
-		axleCookie: envOr("AXLE_COOKIE", "provertools_session=eyJicm93c2VyX2FwaV9jc3JmIjogIllGYm5BZ2FQS3ZQdTgwR21KUFVaTkhWVzVHY0hfWF9ZYnhFZnhKcElDdU0ifQ==.atBFEQ.XT1vAvHEhv3QOhNsvZlJwDItLcQ"),
-		axleCSRF:   envOr("AXLE_CSRF", "YFbnAgaPKvPu80GmJPUZNHVW5GcH_X_YbxEfxJpICuM"),
+		// no default: a default here was a live session cookie committed to git
+		axleCookie: os.Getenv("AXLE_COOKIE"),
+		axleCSRF:   os.Getenv("AXLE_CSRF"),
+	}
+
+	kernel.SetAxleCredentials(cfg.axleCookie, cfg.axleCSRF)
+	if !kernel.AxleConfigured() {
+		log.Printf("WARNING: AXLE_COOKIE / AXLE_CSRF are not set — proofs cannot be verified, and the theory phase will refuse to start")
 	}
 
 	claudeweb.BuildSystemPrompt(cfg.axleCookie, cfg.axleCSRF)

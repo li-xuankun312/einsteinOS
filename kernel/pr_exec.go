@@ -319,6 +319,12 @@ func ref_bind(pid int64, owner, repo string) (string, error) {
 // after theorizing one batch, fork an eval child to decide "continue or sufficient".
 // if continue, push a new STEP_REF_BIND with SHA=cursor so kernel picks up next batch.
 func ref_bind_at(pid int64, owner, repo string, startIdx int) (string, error) {
+	// the theory phase is a proof-checking loop; without Axle credentials every
+	// child would be handed a verification step that cannot work (axle_creds.go)
+	if !AxleConfigured() {
+		return "", fmt.Errorf("ref_bind: Axle credentials are not configured (set AXLE_COOKIE and AXLE_CSRF); " +
+			"refusing to start the theory phase, which verifies every proof through Axle")
+	}
 	commits, err := RefListCommits(owner, repo)
 	if err != nil {
 		return "", err

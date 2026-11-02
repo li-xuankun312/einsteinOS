@@ -3,6 +3,8 @@ package claudeweb
 import (
 	"strings"
 	"testing"
+
+	"google.golang.org/adk/v2/kernel"
 )
 
 func TestShadowExecuteAnswersEinsteinosCommandsItself(t *testing.T) {
@@ -21,5 +23,16 @@ func TestShadowExecuteAnswersEinsteinosCommandsItself(t *testing.T) {
 	// anything else still goes to the shadow
 	if got := m.shadowExecute("c", "bash_tool", `{"command":"ls"}`); got != "" {
 		t.Fatalf("ordinary commands must go to the shadow (disabled here → empty), got %q", got)
+	}
+}
+
+func TestLocalResultHeaderTellsTheChildWhenOutputWasCut(t *testing.T) {
+	whole := localResultHeader("short output")
+	if !strings.Contains(whole, "ignore sandbox") {
+		t.Fatalf("an uncut result keeps its authority: %q", whole)
+	}
+	cut := localResultHeader(kernel.ShapeOutput(strings.Repeat("x", 50000), 1000))
+	if strings.Contains(cut, "ignore sandbox") || !strings.Contains(cut, "cut to fit") {
+		t.Fatalf("a cut result must say so, and must not claim to be the whole output: %q", cut)
 	}
 }

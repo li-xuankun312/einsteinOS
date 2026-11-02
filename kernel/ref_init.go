@@ -87,19 +87,6 @@ const thi_scope = `produce theory ONLY for your assigned files. do not write .md
 do not push to git. before you finish, run ls %[1]s once so the list of your files is in the conversation, then write a brief summary.
 %[2]s`
 
-// axleCredentials returns the session cookie and CSRF token for Axle API calls.
-func axleCredentials() (session, csrf string) {
-	session = os.Getenv("AXLE_SESSION")
-	csrf = os.Getenv("AXLE_CSRF")
-	if session == "" {
-		session = "eyJicm93c2VyX2FwaV9jc3JmIjogIllGYm5BZ2FQS3ZQdTgwR21KUFVaTkhWVzVHY0hfWF9ZYnhFZnhKcElDdU0ifQ==.atBFEQ.XT1vAvHEhv3QOhNsvZlJwDItLcQ"
-	}
-	if csrf == "" {
-		csrf = "YFbnAgaPKvPu80GmJPUZNHVW5GcH_X_YbxEfxJpICuM"
-	}
-	return
-}
-
 // formatTheorizeInstruction assembles the theory prompt from pieces.
 func formatTheorizeInstruction() string {
 	session, csrf := axleCredentials()
