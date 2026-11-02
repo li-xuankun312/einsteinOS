@@ -332,3 +332,57 @@ func TestDevCollectLiteNeverPollsAndNeverTrustsTheChildsCompileClaim(t *testing.
 		t.Fatal("a real summary must not be retried as a dead child")
 	}
 }
+
+// The theory the theory phase really produces: one "## FILE: <sandbox path>" section per
+// .lean file, rendered by renderChunkFiles (chunk_files.go) — not the hand-written
+// "## MODULE:" form the other tests use. This runs it from the files to a finished dev branch.
+func theoryFromSandboxFiles(names ...string) string {
+	var files []chunkFile
+	for _, n := range names {
+		body := "/-! # MODULE: " + n + " -/\ntheorem " + strings.ToLower(n) + "_ok : True := trivial\n" + strings.Repeat("-- spec line\n", 20)
+		files = append(files, chunkFile{RemotePath: TheoryOutputsDir + "/" + n + ".lean", Name: n + ".lean", Content: []byte(body)})
+	}
+	return renderChunkFiles(files)
+}
+
+func TestTheoryPhaseOutputRunsThroughTheDevLoopToAFinishedBranch(t *testing.T) {
+	theory := theoryFromSandboxFiles("ExpertCacheResidency", "ExpertSourceDispatch", "GgufHeaderReader")
+	env := newDevEnv(t, theory)
+	var prompts []string
+	env.model.unitWork = func(prompt, unit string, n int) {
+		prompts = append(prompts, prompt)
+		mustWrite(env.mirror, "src/"+unit+".cu", "// "+unit+"\n")
+		env.model.writeScripts(unit, 0, 0, "built")
+	}
+	const pid = 9101
+	branch := fmt.Sprintf("einsteinOS/dev-%d", pid)
+
+	if _, err := dev_from_theorems(pid, &Step{Owner: "ref", Repo: "proj"}); err != nil {
+		t.Fatalf("the loop did not close: %v", err)
+	}
+	// the three sandbox files became three modules named by file, in one unit
+	plan := bareShow(env.bare, branch+":"+devPlanFile)
+	for _, m := range []string{"ExpertCacheResidency.lean", "ExpertSourceDispatch.lean", "GgufHeaderReader.lean"} {
+		if !strings.Contains(plan, m) {
+			t.Fatalf("module %s missing from the plan:\n%s", m, plan)
+		}
+	}
+	if strings.Contains(plan, TheoryOutputsDir) {
+		t.Fatalf("modules must be named by file, not by sandbox path:\n%s", plan)
+	}
+	// the theory the child is told to read is on the branch, with the headers the prompt tells it to grep for
+	th := bareShow(env.bare, branch+":.einsteinOS/theory.md")
+	if !strings.Contains(th, "## FILE: "+TheoryOutputsDir+"/ExpertCacheResidency.lean") {
+		t.Fatalf("theory.md on the branch lacks the sections:\n%.300s", th)
+	}
+	if len(prompts) != 1 || !strings.Contains(prompts[0], `grep -n '^## \(FILE\|MODULE\):'`) {
+		t.Fatalf("the child's instructions must search for the headers the theory really has; prompts=%d", len(prompts))
+	}
+	if len(*env.prDone) != 1 {
+		t.Fatalf("the loop must end in the completion report: %v", *env.prDone)
+	}
+	// and the unit's code is on the branch, pushed by the kernel
+	if !strings.Contains(bareShow(env.bare, branch+":"+"src/"), ".cu") {
+		t.Fatalf("no unit code on the dev branch")
+	}
+}

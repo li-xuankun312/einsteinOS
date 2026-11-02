@@ -404,7 +404,7 @@ func (r *devRun) unitPrompt(unit DevPlanNode, idx, total, attempt int, fail DevF
 	p.WriteString(fmt.Sprintf("[THEORY — unit %d/%d, id=%s, %d module(s), %d bytes]\n", idx+1, total, unit.ID, len(unit.Modules), plan.UnitTheoryBytes(unit)))
 	p.WriteString(fmt.Sprintf("your modules: %s\n", strings.Join(unit.Modules, ", ")))
 	p.WriteString("the full theory is at .einsteinOS/theory.md in your repo. find YOUR sections and read them (the theory is the specification):\n")
-	p.WriteString("  grep -n 'MODULE:' .einsteinOS/theory.md      — where each module starts\n")
+	p.WriteString("  grep -n '^## \\(FILE\\|MODULE\\):' .einsteinOS/theory.md — where each section starts (its header line ends with the module's name)\n")
 	p.WriteString("  sed -n '<start>,<end>p' .einsteinOS/theory.md — read a section\n")
 	if unit.Scope != "" {
 		p.WriteString(fmt.Sprintf("\n[YOUR SCOPE INSIDE THE MODULE] %s\nthis module was too big for one session and was split. implement ONLY the scope above; other units cover the rest.\n", unit.Scope))
