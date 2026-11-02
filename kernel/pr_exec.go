@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -591,212 +590,11 @@ func dev_store_theory(theory, repo, branch string) error {
 		return fmt.Errorf("dev_store_theory: write theory.md: %w", err)
 	}
 	GitCommit(repoDir, fmt.Sprintf("theory: %d bytes", len(theory)))
-	if err := GitPushRetry(repoDir, devRepos[0], branch, 20); err != nil {
+	if err := devGitPush(repoDir, devRepos[0], branch, 20); err != nil {
 		return fmt.Errorf("dev_store_theory: %s theory (%d bytes) NOT stored on %s: %w", repo, len(theory), branch, err)
 	}
 	log.Printf("dev_store_theory: %s stored %d bytes to %s:.einsteinOS/theory.md", repo, len(theory), branch)
 	return nil
-}
-
-func dev_plan(pid int64, repo string, theory string, branch string) []devUnit {
-	fileSections := dev_extract_file_sections(theory)
-	if len(fileSections) <= 10 {
-		log.Printf("dev_plan: %s %d sections ≤ 10, single unit", repo, len(fileSections))
-		return []devUnit{{
-			Files:  dev_section_paths(fileSections),
-			Theory: theory,
-		}}
-	}
-
-	// build module list for planner — names + sizes, not content
-	var moduleList strings.Builder
-	for i, sec := range fileSections {
-		moduleList.WriteString(fmt.Sprintf("  %d. %s (%d bytes)\n", i+1, sec.path, len(sec.content)))
-	}
-
-	devRepos := GetDevRepos()
-
-	cloneCmd := ""
-	if len(devRepos) > 0 {
-		cloneCmd = fmt.Sprintf(
-			"git clone https://github.com/%s.git /tmp/devrepo 2>/dev/null\n"+
-				"cd /tmp/devrepo && git checkout %s 2>/dev/null\n"+
-				"view .einsteinOS/theory.md  # full theory is here\n",
-			devRepos[0], branch)
-	}
-
-	plannerPrompt := fmt.Sprintf(
-		"[TASK] group the %d modules below into implementation units.\n\n"+
-			"[IMPORTANT] the complete list of modules is below. this IS the input.\n"+
-			"you do NOT need to search for files, clone repos, or find anything.\n"+
-			"just read the list and group them.\n\n"+
-			"[MODULES] (%d entries — each is a ## MODULE section from the theory)\n%s\n"+
-			"[OPTIONAL] if you need to understand module dependencies to group better:\n%s\n"+
-			"[RULES]\n"+
-			"- group related modules together (same subsystem)\n"+
-			"- foundational modules first (types, config, utils), then core, then high-level\n"+
-			"- each unit should be a meaningful chunk of work for one developer session\n"+
-			"- don't split too fine: a unit with 1-2 modules is too small unless they're very large\n"+
-			"- don't lump too much: a unit with 15+ modules is too big for one session\n"+
-			"- sweet spot: 5-10 modules per unit for most cases\n"+
-			"- every module from the list above must appear in exactly one unit\n\n"+
-			"[OUTPUT FORMAT]\n"+
-			"output ONLY lines like:\n"+
-			"unit: module_name_1, module_name_2, module_name_3\n"+
-			"unit: module_name_4, module_name_5\n"+
-			"use the EXACT module names from the list above (copy-paste). one line per unit. nothing else.\n",
-		len(fileSections),
-		len(fileSections), moduleList.String(),
-		cloneCmd)
-
-	child, err := ForkWithRole(plannerPrompt, ".", "dev_planner")
-	if err != nil {
-		log.Printf("dev_plan: %s planner fork failed: %v, using static split", repo, err)
-		return dev_static_split(fileSections)
-	}
-	var devPlannerConvID string
-	if m := getMeta(child); m != nil && m.ConvID != "" {
-		devPlannerConvID = m.ConvID
-		RegisterConv(pid, m.ConvID, repo, "dev_planner", 0)
-	}
-	Wait(child)
-	if devPlannerConvID != "" {
-		ConvDone(devPlannerConvID, "done")
-	}
-	planOutput := GetResult(child)
-	log.Printf("dev_plan: %s planner returned %d bytes", repo, len(planOutput))
-
-	units := dev_parse_plan(planOutput, fileSections)
-	if len(units) == 0 {
-		log.Printf("dev_plan: %s planner output unparseable, using static split", repo)
-		return dev_static_split(fileSections)
-	}
-
-	log.Printf("dev_plan: %s planner split %d modules into %d units", repo, len(fileSections), len(units))
-	for i, u := range units {
-		log.Printf("dev_plan:   unit %d: %d modules, %d bytes theory", i+1, len(u.Files), len(u.Theory))
-	}
-	return units
-}
-
-// dev_parse_plan: parse "unit: file1, file2, ..." lines from planner output.
-//
-// the planner sees module names like "expert_cache (expert routing weight cache)"
-// but may output just "expert_cache" in its unit lines. we need fuzzy matching:
-//   1. exact match on sectionMap key
-//   2. prefix match: planner output is a prefix of the section key
-//   3. normalized match: strip parenthetical, lowercase, compare
-func dev_parse_plan(output string, sections []devFileSection) []devUnit {
-	// build exact map and prefix index
-	sectionMap := make(map[string]*devFileSection)
-	for i := range sections {
-		sectionMap[sections[i].path] = &sections[i]
-	}
-
-	// dev_match_section: find the section that best matches a planner name.
-	// returns the section and its map key, or nil if no match.
-	matchSection := func(name string) (*devFileSection, string) {
-		// 1. exact match
-		if sec, ok := sectionMap[name]; ok {
-			return sec, name
-		}
-		// 2. prefix match: "expert_cache" matches "expert_cache (expert routing...)"
-		for key, sec := range sectionMap {
-			if strings.HasPrefix(key, name+" ") || strings.HasPrefix(key, name+"(") {
-				return sec, key
-			}
-		}
-		// 3. normalized: strip parens from both, lowercase compare
-		normName := strings.ToLower(strings.TrimSpace(name))
-		for key, sec := range sectionMap {
-			normKey := key
-			if parenIdx := strings.Index(normKey, "("); parenIdx > 0 {
-				normKey = strings.TrimSpace(normKey[:parenIdx])
-			}
-			normKey = strings.ToLower(normKey)
-			if normKey == normName {
-				return sec, key
-			}
-		}
-		// 4. substring: planner name appears anywhere in section key
-		for key, sec := range sectionMap {
-			if strings.Contains(strings.ToLower(key), normName) {
-				return sec, key
-			}
-		}
-		return nil, ""
-	}
-
-	var units []devUnit
-	for _, line := range strings.Split(output, "\n") {
-		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(strings.ToLower(line), "unit:") {
-			continue
-		}
-		rest := strings.TrimSpace(line[5:])
-		if rest == "" {
-			continue
-		}
-
-		var files []string
-		var theoryBuf strings.Builder
-		matched := 0
-		for _, f := range strings.Split(rest, ",") {
-			f = strings.TrimSpace(f)
-			if f == "" {
-				continue
-			}
-			files = append(files, f)
-			if sec, key := matchSection(f); sec != nil {
-				theoryBuf.WriteString(sec.content)
-				theoryBuf.WriteString("\n\n")
-				delete(sectionMap, key) // claimed
-				matched++
-			}
-		}
-		if len(files) > 0 {
-			units = append(units, devUnit{
-				Files:  files,
-				Theory: strings.TrimSpace(theoryBuf.String()),
-			})
-			if matched < len(files) {
-				log.Printf("dev_parse_plan: unit has %d files but only %d matched theory sections",
-					len(files), matched)
-			}
-		}
-	}
-
-	// any unclaimed sections? distribute into chunks, not one giant unit
-	if len(sectionMap) > 0 && len(units) > 0 {
-		var unclaimed []*devFileSection
-		for _, sec := range sectionMap {
-			unclaimed = append(unclaimed, sec)
-		}
-		log.Printf("dev_plan: %d unclaimed modules after matching", len(unclaimed))
-
-		// split unclaimed into groups of 8, each becomes its own unit
-		for start := 0; start < len(unclaimed); start += 8 {
-			end := start + 8
-			if end > len(unclaimed) {
-				end = len(unclaimed)
-			}
-			var files []string
-			var theory strings.Builder
-			for _, sec := range unclaimed[start:end] {
-				files = append(files, sec.path)
-				theory.WriteString(sec.content)
-				theory.WriteString("\n\n")
-			}
-			units = append(units, devUnit{
-				Files:  files,
-				Theory: strings.TrimSpace(theory.String()),
-			})
-		}
-		log.Printf("dev_plan: %d unclaimed modules → %d extra units",
-			len(unclaimed), (len(unclaimed)+7)/8)
-	}
-
-	return units
 }
 
 // dev_static_split: fallback when planner fails. group by directory, split
@@ -999,450 +797,6 @@ func dev_split_theory(theory string) []string {
 }
 
 
-
-// devUnitMarker persists what happened to one unit across re-entrant calls to
-// dev_from_theorems — every failure (review FAIL, or a unit that needed a fix)
-// re-queues the WHOLE function, which used to restart the loop from unit 0 every
-// time: already-passed units got completely redone (new child, new review, new
-// quota spent) and dev_push_fix/dev_fix's "give up after 3 attempts" checks were
-// comparing against the UNIT'S POSITION in the list (i+1), not how many times
-// THAT unit had actually been retried — unit 4+ hit "exceeded max attempts" on
-// its first-ever failure (4 > 3), while units 1-3 could never hit it at all
-// (their position never exceeds 3, however many times they actually failed) and
-// could retry forever. The marker file is the one thing that survives a
-// restart: read at the top of each loop iteration to skip units already marked
-// PASS, and to recover the REAL fix-attempt count for a unit that's failing.
-type devUnitState struct {
-	Pass        bool
-	FixAttempts int
-}
-
-func devUnitMarkerPath(unitNum int) string {
-	return fmt.Sprintf(".einsteinOS/convs/dev_unit_%d.state", unitNum)
-}
-
-// readDevUnitState reads the marker for unitNum from branch's current remote
-// tip. Never errors on "file doesn't exist" (the normal case for a unit never
-// attempted yet) — only genuine git failures are logged, and either way the
-// caller gets the safe default (not yet passed, 0 fix attempts).
-func readDevUnitState(devRepo, branch string, unitNum int) devUnitState {
-	repoDir, derr := devRepoLocalDir(devRepo)
-	if derr != nil {
-		log.Printf("readDevUnitState: %s unit %d: %v", devRepo, unitNum, derr)
-		return devUnitState{}
-	}
-	// fetch first: a push does not update the local origin/<branch>
-	// remote-tracking ref on its own (same lesson as gitUseBranchFromRemote),
-	// so without this a marker written moments ago by this same process could
-	// read back as "not found" against a stale local cache.
-	out, err := exec.Command("bash", "-c",
-		fmt.Sprintf("cd %q && git fetch origin %q >/dev/null 2>&1; git show origin/%s:%s 2>/dev/null",
-			repoDir, branch, branch, devUnitMarkerPath(unitNum))).Output()
-	if err != nil || len(out) == 0 {
-		return devUnitState{} // no marker yet — unit has never been attempted
-	}
-	text := strings.TrimSpace(string(out))
-	lines := strings.SplitN(text, "\n", 2)
-	state := devUnitState{Pass: strings.HasPrefix(lines[0], "PASS")}
-	if len(lines) > 1 {
-		fmt.Sscanf(strings.TrimSpace(lines[1]), "fix_attempts=%d", &state.FixAttempts)
-	}
-	return state
-}
-
-// writeDevUnitState commits and pushes the marker for unitNum. Logged but not
-// fatal on failure — this is bookkeeping for future re-entrant calls, not the
-// unit's actual code/review result, which is already on the branch regardless.
-func writeDevUnitState(devRepo, branch string, unitNum int, state devUnitState) {
-	repoDir, derr := devRepoLocalDir(devRepo)
-	if derr != nil {
-		log.Printf("writeDevUnitState: %s unit %d: %v", devRepo, unitNum, derr)
-		return
-	}
-	if err := gitUseBranchFromRemote(repoDir, branch, "main"); err != nil {
-		log.Printf("writeDevUnitState: %s unit %d checkout %s: %v", devRepo, unitNum, branch, err)
-		return
-	}
-	status := "FAIL"
-	if state.Pass {
-		status = "PASS"
-	}
-	content := fmt.Sprintf("%s\nfix_attempts=%d\n", status, state.FixAttempts)
-	if err := os.MkdirAll(repoDir+"/.einsteinOS/convs", 0o755); err != nil {
-		log.Printf("writeDevUnitState: %s unit %d mkdir: %v", devRepo, unitNum, err)
-		return
-	}
-	if err := os.WriteFile(repoDir+"/"+devUnitMarkerPath(unitNum), []byte(content), 0o644); err != nil {
-		log.Printf("writeDevUnitState: %s unit %d write: %v", devRepo, unitNum, err)
-		return
-	}
-	GitCommit(repoDir, fmt.Sprintf("state: unit %d %s", unitNum, status))
-	if err := GitPushRetry(repoDir, devRepo, branch, 20); err != nil {
-		log.Printf("writeDevUnitState: %s unit %d NOT stored: %v", devRepo, unitNum, err)
-	}
-}
-
-func dev_from_theorems(pid int64, step *Step) (string, error) {
-	repo := step.Owner + "/" + step.Repo
-
-	theory := theorem_get(repo, "")
-	if theory == "" {
-		return "", fmt.Errorf("dev_from_theorems: no theory for %s", repo)
-	}
-
-	pr := GetPR(pid)
-	task := ""
-	hw_info := ""
-	gpuAll, gpuUsable := pr_gpu_args(pid)
-	if pr != nil {
-		task = strip_credentials(pr.Title)
-		hw_info = pr.HWInfo
-	}
-
-	if pr != nil {
-		writeGHToken(pr.Title)
-	}
-
-	// strip ref repo references from task — dev conv must NOT know the source repo.
-	// it should only see the dev repo and the abstract theory.
-	if pr != nil {
-		for _, ref := range pr.RefRepos {
-			refFull := ref.Owner + "/" + ref.Name
-			task = strings.ReplaceAll(task, refFull, "(reference project)")
-			task = strings.ReplaceAll(task, "github.com/"+refFull, "(reference)")
-			task = strings.ReplaceAll(task, ref.Name, "(ref)")
-		}
-	}
-
-	// shared branch for all incremental children
-	branch := fmt.Sprintf("einsteinOS/dev-%d", pid)
-
-	// proofs are verified by the KERNEL before any dev child runs; a failing
-	// proof is repaired (or blocks the pipeline) here, not discovered by a
-	// reviewer an hour later.
-	patchedTheory, perr := dev_proof_preflight(pid, repo, branch, theory)
-	if perr != nil {
-		PRFeedbackAdd(pid, "- "+perr.Error())
-		return "", perr
-	}
-	theory = patchedTheory
-
-	// store theory to branch — planner and dev convs read it from there. If it is not
-	// there they cannot work, so do not fork them.
-	if serr := dev_store_theory(theory, repo, branch); serr != nil {
-		PRFeedbackAdd(pid, "- "+serr.Error())
-		return "", serr
-	}
-
-	// planner decides the split — NOT the dev conv, NOT static grouping
-	units := dev_plan(pid, repo, theory, branch)
-	log.Printf("dev_from_theorems: %s %d planned units, total %d bytes theory, gpu_all=%s gpu_usable=%s",
-		repo, len(units), len(theory), gpuAll, gpuUsable)
-
-	devRepos := GetDevRepos()
-	var devRepoBlock string
-	if len(devRepos) > 0 {
-		var drb strings.Builder
-		drb.WriteString("[DEV REPO]\n")
-		for _, dr := range devRepos {
-			parts := strings.Split(dr, "/")
-			drb.WriteString(fmt.Sprintf("  %s → /home/claude/%s/\n", dr, parts[len(parts)-1]))
-		}
-		devRepoBlock = drb.String()
-	}
-
-	var lastStdout string
-	var lastStatus map[string]string
-	// tracks every unit that passed review in THIS pass. A unit that fails gets
-	// re-queued and this whole function is called again from unit 0, so these
-	// entries are only ever complete and accurate for the pass that reaches
-	// "all units pass" below — nothing reads this slice before then.
-	var unitVerdicts []string
-
-	devRepo := ""
-	if len(devRepos) > 0 {
-		devRepo = devRepos[0]
-	}
-
-	for i, unit := range units {
-		// a re-queue (review FAIL, or a fix pushed) restarts this whole function
-		// from unit 0 — without this check every already-passed unit would be
-		// forked, written and reviewed all over again, burning the same quota
-		// that is already the project's tightest constraint, for work that is
-		// already correctly on the branch. See devUnitMarker's doc comment.
-		priorState := devUnitState{}
-		if devRepo != "" {
-			priorState = readDevUnitState(devRepo, branch, i+1)
-		}
-		if priorState.Pass {
-			log.Printf("dev_from_theorems: %s unit %d/%d already PASS on %s (resuming), skipping",
-				repo, i+1, len(units), branch)
-			unitVerdicts = append(unitVerdicts, fmt.Sprintf("unit %d/%d: PASS — %s", i+1, len(units), strings.Join(unit.Files, ", ")))
-			continue
-		}
-
-		var p strings.Builder
-
-		if hw_info != "" {
-			p.WriteString("[HARDWARE]\n")
-			p.WriteString(hw_info)
-			p.WriteString("\n\n")
-		}
-
-		// --- conv address list: prior units as addresses, NOT full text ---
-		// dev conv gets: summary + convID for each prior unit.
-		// it reads code from the branch (git checkout). if it needs to understand
-		// WHY a prior unit made a decision, it can DownloadConv(convID).
-		// this keeps the prompt small: ~200 bytes per prior unit, not ~200KB.
-		if i > 0 {
-			p.WriteString(fmt.Sprintf("[PRIOR UNITS 1..%d — code + work logs on branch %s]\n", i, branch))
-			for j := 0; j < i; j++ {
-				rec := FindConv(repo, fmt.Sprintf("dev_unit_%d", j+1), j+1)
-				convStatus := "done"
-				if rec != nil {
-					convStatus = rec.Status
-				}
-				fileList := ""
-				if j < len(units) {
-					fileList = strings.Join(units[j].Files, ", ")
-					if len(fileList) > 120 {
-						fileList = fileList[:120] + "..."
-					}
-				}
-				p.WriteString(fmt.Sprintf("  unit %d: status=%s files=[%s]\n",
-					j+1, convStatus, fileList))
-				p.WriteString(fmt.Sprintf("    work log: .einsteinOS/convs/dev_unit_%d.md\n", j+1))
-			}
-			p.WriteString("\nall code is on the branch. git checkout and READ the source files.\n")
-			p.WriteString("work logs in .einsteinOS/convs/ contain each unit's full process:\n")
-			p.WriteString("  tool calls, compile output, decisions. use view/grep to read selectively.\n")
-			p.WriteString("  do NOT cat the whole file — use view with line ranges or grep for specifics.\n")
-			p.WriteString("do NOT rewrite prior code unless your theory REQUIRES it.\n\n")
-		}
-
-		// --- theory reference: on the branch, not in the prompt ---
-		p.WriteString(fmt.Sprintf("[THEORY — unit %d/%d, %d modules]\n", i+1, len(units), len(unit.Files)))
-		p.WriteString(fmt.Sprintf("your modules: %s\n", strings.Join(unit.Files, ", ")))
-		p.WriteString(fmt.Sprintf("full theory is at: .einsteinOS/theory.md on branch %s\n", branch))
-		p.WriteString("after git checkout, use view/grep to read the ## MODULE sections for YOUR modules.\n")
-		p.WriteString("example: grep -n 'MODULE:' .einsteinOS/theory.md  — find your sections\n")
-		p.WriteString("         view .einsteinOS/theory.md <start> <end>  — read a section\n")
-		p.WriteString("you decide what to read and how much.\n\n")
-
-		// --- proof status: kernel fact, not something the dev child verifies ---
-		if tbl := Proofs.Table(SpecTheorems(unit.Theory)); tbl != "" {
-			p.WriteString("[PROOF STATUS — checked by the kernel against Axle. do NOT re-verify these]\n")
-			p.WriteString(tbl)
-			p.WriteString("a VERIFIED theorem is a fact you may rely on. for anything UNPROVEN/UNVERIFIED, never claim in code or\n")
-			p.WriteString("comments that it is verified; guard the property with a static_assert or runtime check plus a test.\n\n")
-		}
-
-		// --- strict scope: execute only, no self-judging ---
-		p.WriteString("[YOUR ROLE]\n")
-		p.WriteString("you are an EXECUTOR — write code, compile, push. that's it.\n")
-		p.WriteString("a separate REVIEW conversation will judge your work after you finish.\n")
-		p.WriteString("do NOT decide whether your work is 'good enough' — just do your best.\n")
-		p.WriteString("do NOT fork new conversations or delegate to sub-tasks.\n")
-		p.WriteString("do NOT spend tools exploring beyond what YOUR modules need.\n")
-		p.WriteString("if you can't finish a module, write what you can and note it in your output.\n\n")
-
-		if i > 0 {
-			p.WriteString(fmt.Sprintf("[EXISTING CODE]\n"+
-				"branch %s has code from units 1..%d.\n"+
-				"  cd /home/claude/<repo> && git fetch origin && git checkout %s\n"+
-				"read what's there. ADD your new code, then compile the WHOLE project.\n\n",
-				branch, i, branch))
-		}
-
-		p.WriteString(fmt.Sprintf("[TASK]\n%s\n\n", task))
-
-		if devRepoBlock != "" {
-			p.WriteString(devRepoBlock)
-			p.WriteString("\n")
-		}
-
-		p.WriteString(fmt.Sprintf(dev_incremental_instruction, branch, gpuAll, gpuUsable, gpuUsable, i+1, len(units), devUnitGitAuthInstruction(branch)))
-
-		feedback := pr_feedback(pid)
-		if feedback != "" {
-			p.WriteString(fmt.Sprintf("\n\n[PRIOR FEEDBACK]\n%s", feedback))
-		}
-
-		log.Printf("dev_from_theorems: %s unit %d/%d forking (prompt %d bytes, %d files: %v)",
-			repo, i+1, len(units), p.Len(), len(unit.Files), unit.Files)
-
-		prompt := p.String()
-		// termination: behavioral signals only, no hard timeout.
-		// ProbeConvBusy handles liveness detection at the transport layer.
-		devTermination := OrConditions(
-			&BashExitZero{Pattern: "git push"},
-			AndConditions(
-				&CompileResult{BuildCmd: "make"},
-				&ConsecutiveTextRounds{Threshold: 2},
-			),
-			// the And above never fired in dev_unit#2 (compile went green via
-			// build_and_test.sh, not a bare `make`), leaving 7 idle rounds.
-			&ConsecutiveTextRounds{Threshold: 4},
-			&MaxRounds{Limit: 20},
-		)
-		var child int64
-		for attempt := 1; attempt <= 5; attempt++ {
-			var err error
-			child, err = ForkWithTermination(prompt, ".", fmt.Sprintf("dev_unit_%d", i+1), devTermination)
-			if err != nil {
-				log.Printf("dev_from_theorems: %s unit %d/%d fork failed (attempt %d/5): %v",
-					repo, i+1, len(units), attempt, err)
-				continue
-			}
-			Wait(child)
-			step.ChildPid = child
-
-			// register AFTER Wait — ConvID is set by model during Fork execution,
-			// but may not be available immediately after Fork returns.
-			if m := getMeta(child); m != nil && m.ConvID != "" {
-				RegisterConv(pid, m.ConvID, repo, fmt.Sprintf("dev_unit_%d", i+1), i+1)
-				ConvDone(m.ConvID, "done") // Wait already returned above
-				log.Printf("dev_from_theorems: %s unit %d/%d registered conv %s",
-					repo, i+1, len(units), m.ConvID[:8])
-			} else {
-				log.Printf("dev_from_theorems: %s unit %d/%d WARNING: no ConvID after Wait",
-					repo, i+1, len(units))
-			}
-
-			lastStdout, lastStatus = dev_collect_child(child, repo)
-
-			// retry logic: only no_response means child did nothing.
-			// any other non-empty compile status (pass, fail, unknown, pending, etc.)
-			// means dev_collect found real work — don't retry, even if the downloaded
-			// text contains "no context" phrases from Continue's preamble.
-			// empty compile means dev_collect set nothing — fall through to text heuristic.
-			needsRetry := false
-			compile := lastStatus["compile"]
-			if compile == "no_response" {
-				needsRetry = true
-			} else if compile != "" {
-				// any real status from dev_collect = child worked
-				needsRetry = false
-			} else if strings.Contains(lastStdout, "[API Error]") || strings.Contains(lastStdout, ModelDowngradeMarker) ||
-				strings.Contains(lastStdout, "TLS handshake timeout") ||
-				strings.Contains(lastStdout, "net/http:") {
-				log.Printf("dev_from_theorems: %s unit %d/%d child hit API/network error (attempt %d/5), retrying",
-					repo, i+1, len(units), attempt)
-				needsRetry = true
-			}
-			if !needsRetry {
-				break
-			}
-			if attempt < 5 {
-				log.Printf("dev_from_theorems: %s unit %d/%d no_response (attempt %d/5), retrying fresh",
-					repo, i+1, len(units), attempt)
-			}
-		}
-
-		dev_update_gpu(pid, lastStatus, gpuAll, gpuUsable)
-		PRFeedbackAdd(pid, fmt.Sprintf("- dev[%s] unit %d/%d: compile=%s smoke=%s",
-			repo, i+1, len(units), lastStatus["compile"], lastStatus["smoke"]))
-
-		// interrupted (SSE broke before compile finished): compile is "pending",
-		// empty, or "no_response". this is NOT a failure — the child was cut off.
-		devCompile := lastStatus["compile"]
-		interrupted := devCompile == "pending" || devCompile == "" || devCompile == "no_response"
-		if interrupted {
-			log.Printf("dev_from_theorems: %s unit %d/%d interrupted (compile=%q), re-queuing dev_from_theorems",
-				repo, i+1, len(units), devCompile)
-			pr_push_step(pid, &Step{
-				Kind:  STEP_DEV_FROM_THEOREMS,
-				Owner: step.Owner,
-				Repo:  step.Repo,
-			})
-			return lastStdout, nil
-		}
-
-		// store conv content to branch BEFORE review — review_conv reads it
-		if m := getMeta(child); m != nil && m.ConvID != "" {
-			dev_store_conv(m.ConvID, repo, branch, i+1, lastStatus)
-		}
-
-		// --- REVIEW CONV: separate decision from execution ---
-		// dev_unit wrote code and stopped. now fork a review_conv that:
-		//   - reads the branch code + .einsteinOS/convs/dev_unit_N.md
-		//   - checks compile status from dev_collect
-		//   - compares against the theory spec on the branch
-		//   - outputs PASS, FAIL: reason
-		// review_conv does NOT write code. it only judges.
-		reviewVerdict := dev_review_unit(pid, repo, branch, i+1, len(units), unit, lastStatus)
-		log.Printf("dev_from_theorems: %s unit %d/%d review → %s",
-			repo, i+1, len(units), reviewVerdict)
-
-		if strings.HasPrefix(reviewVerdict, "PASS") {
-			log.Printf("dev_from_theorems: %s unit %d/%d pass (review confirmed), branch %s updated",
-				repo, i+1, len(units), branch)
-			unitVerdicts = append(unitVerdicts, fmt.Sprintf("unit %d/%d: PASS — %s", i+1, len(units), strings.Join(unit.Files, ", ")))
-			if devRepo != "" {
-				writeDevUnitState(devRepo, branch, i+1, devUnitState{Pass: true})
-			}
-		} else {
-			// FAIL — push fix, then re-queue remaining units
-			log.Printf("dev_from_theorems: %s unit %d/%d review FAIL: %s, pushing fix",
-				repo, i+1, len(units), reviewVerdict)
-			if lastStatus == nil {
-				lastStatus = map[string]string{}
-			}
-			lastStatus["review"] = reviewVerdict
-			// the reviewer's reason must reach the next child (it did not before)
-			PRFeedbackAdd(pid, fmt.Sprintf("- review[%s] unit %d/%d: %s", repo, i+1, len(units), reviewVerdict))
-			if strings.Contains(reviewVerdict, "proof_failed:") {
-				// a proof problem is not a code problem: re-queueing re-runs the
-				// preflight, which repairs the proof or blocks with its name.
-				log.Printf("dev_from_theorems: %s unit %d/%d proof gate FAIL — no code fix, re-running preflight",
-					repo, i+1, len(units))
-			} else {
-				// REAL per-unit fix-attempt count, not the unit's position in the
-				// list — see priorState/devUnitState above. Persisted so the count
-				// survives the restart-from-unit-0 that dev_push_fix/pr_push_step
-				// is about to trigger.
-				fixAttempt := priorState.FixAttempts + 1
-				if devRepo != "" {
-					writeDevUnitState(devRepo, branch, i+1, devUnitState{Pass: false, FixAttempts: fixAttempt})
-				}
-				dev_push_fix(pid, step.Owner, step.Repo, lastStatus, fixAttempt)
-			}
-			pr_push_step(pid, &Step{
-				Kind:  STEP_DEV_FROM_THEOREMS,
-				Owner: step.Owner,
-				Repo:  step.Repo,
-			})
-			if i+1 < len(units) {
-				log.Printf("dev_from_theorems: %s %d units remaining, re-queued after fix",
-					repo, len(units)-i-1)
-			}
-			return lastStdout, nil
-		}
-	}
-
-	// all units passed — pipeline complete.
-	// do NOT push vllm or any benchmark step. the main conversation runs on the
-	// real machine with shadow+writeback: it will checkout the branch, read the
-	// project, probe hardware (ixsmi / nvidia-smi), build, and benchmark itself.
-	// it doesn't need hardcoded commands — it reads the code and figures it out.
-	log.Printf("dev_from_theorems: %s all %d units pass. pipeline complete, branch %s ready for main conv.",
-		repo, len(units), branch)
-	PRFeedbackAdd(pid, fmt.Sprintf("- dev_from_theorems: all %d units pass, branch %s ready", len(units), branch))
-
-	// this is the ONE thing in the whole pipeline that should be easy to find on
-	// GitHub: a branch where the theory was (coverage-gated) complete and every
-	// dev unit the planner produced passed review. Before this, baloon only ever
-	// accumulated a PR per THEORY CHUNK (removed — see ref_store_chunk) and the
-	// actual finished dev branch (einsteinOS/dev-{pid}) got no PR at all, so
-	// there was no way to tell which of many dev-N branches, across many runs,
-	// was the complete one without opening each and reading the commit history.
-	dev_open_completion_pr(pid, step.Owner, step.Repo, repo, branch, step.SHA, unitVerdicts)
-
-	// log the conv registry so main conv knows where to find everything
-	log.Printf("dev_from_theorems: conv_registry:\n%s", ConvRegistryStatus())
-
-	return lastStdout, nil
-}
 
 // dev_open_completion_pr opens the ONE PR that marks a dev branch as a complete,
 // reviewed run — the discoverability signal the rest of the pipeline withholds
@@ -1915,12 +1269,18 @@ func dev_review_unit_inner(pid int64, repo, branch string, unitNum, totalUnits i
 
 	prompt.WriteString("[WHAT TO CHECK]\n")
 	prompt.WriteString("1. git clone the dev repo, checkout the branch\n")
-	prompt.WriteString("2. ls .einsteinOS/convs/ — find dev_unit_" + fmt.Sprintf("%d", unitNum) + ".md\n")
-	prompt.WriteString("3. grep -n 'compile=' .einsteinOS/convs/dev_unit_" + fmt.Sprintf("%d", unitNum) + ".md\n")
+	stem := status["unit_id"]
+	if stem == "" {
+		stem = fmt.Sprintf("dev_unit_%d", unitNum)
+	}
+	prompt.WriteString("2. ls .einsteinOS/convs/ — find " + stem + ".md (this unit's work log)\n")
+	prompt.WriteString("3. read its header: compile/smoke there are the kernel's measurements, not the developer's claims\n")
 	prompt.WriteString("4. check: does source code exist for EACH module listed above?\n")
 	prompt.WriteString("   grep for the module names in the source files.\n")
 	prompt.WriteString("   a module with no corresponding source file = incomplete.\n")
-	prompt.WriteString("5. check: does the code actually compile? run make or the project's build command.\n")
+	prompt.WriteString("5. the KERNEL already built this unit and ran its tests on the REAL machine; compile= and smoke= in [DEV UNIT STATUS] are\n")
+	prompt.WriteString("   exit codes. do NOT re-run the build (your sandbox has no real toolchain). READ the unit's tests instead:\n")
+	prompt.WriteString("   do they check the LAYER 1 invariants of this unit's modules, and could they fail? a test that cannot fail is a FAIL.\n")
 	prompt.WriteString("6. compare code structure against theory:\n")
 	prompt.WriteString("   grep -n 'MODULE:' .einsteinOS/theory.md — find sections for THIS unit's modules\n")
 	prompt.WriteString("   read the LAYER 1a spec — does the code match the math?\n\n")
@@ -2035,10 +1395,10 @@ func dev_review_unit_inner(pid int64, repo, branch string, unitNum, totalUnits i
 	return "FAIL: review gave no verdict, compile=" + status["compile"]
 }
 
-func dev_store_conv(convID, repo, branch string, unitNum int, status map[string]string) {
+func dev_store_conv(convID, repo, branch, stem string, status map[string]string) {
 	rawJSON, err := DownloadConvRaw(convID)
 	if err != nil {
-		log.Printf("dev_store_conv: %s unit %d download failed: %v", repo, unitNum, err)
+		log.Printf("dev_store_conv: %s unit %s download failed: %v", repo, stem, err)
 		return
 	}
 	// same reasoning as ref_store_chunk's conv.json redaction: this raw
@@ -2046,9 +1406,9 @@ func dev_store_conv(convID, repo, branch string, unitNum int, status map[string]
 	// Axle cookie/CSRF included, before it becomes part of a git-tracked summary.
 	rawJSON = []byte(redactSecrets(string(rawJSON)))
 
-	summary := dev_conv_summary(rawJSON, convID, unitNum, status)
+	summary := dev_conv_summary(rawJSON, convID, stem, status)
 	if len(summary) < 50 {
-		log.Printf("dev_store_conv: %s unit %d summary too short, skipping", repo, unitNum)
+		log.Printf("dev_store_conv: %s unit %s summary too short, skipping", repo, stem)
 		return
 	}
 
@@ -2060,35 +1420,35 @@ func dev_store_conv(convID, repo, branch string, unitNum int, status map[string]
 	}
 	repoDir, derr := devRepoLocalDir(devRepos[0])
 	if derr != nil {
-		log.Printf("dev_store_conv: %s unit %d: %v", repo, unitNum, derr)
+		log.Printf("dev_store_conv: %s unit %s: %v", repo, stem, derr)
 		return
 	}
-	filePath := fmt.Sprintf(".einsteinOS/convs/dev_unit_%d.md", unitNum)
+	filePath := fmt.Sprintf(".einsteinOS/convs/%s.md", stem)
 	if err := gitUseBranchFromRemote(repoDir, branch, "main"); err != nil {
-		log.Printf("dev_store_conv: %s unit %d checkout %s: %v", repo, unitNum, branch, err)
+		log.Printf("dev_store_conv: %s unit %s checkout %s: %v", repo, stem, branch, err)
 		return
 	}
 	if err := os.MkdirAll(repoDir+"/.einsteinOS/convs", 0o755); err != nil {
-		log.Printf("dev_store_conv: %s unit %d mkdir: %v", repo, unitNum, err)
+		log.Printf("dev_store_conv: %s unit %s mkdir: %v", repo, stem, err)
 		return
 	}
 	if err := os.WriteFile(repoDir+"/"+filePath, []byte(summary), 0o644); err != nil {
-		log.Printf("dev_store_conv: %s unit %d write: %v", repo, unitNum, err)
+		log.Printf("dev_store_conv: %s unit %s write: %v", repo, stem, err)
 		return
 	}
-	GitCommit(repoDir, fmt.Sprintf("conv: unit %d (%s)", unitNum, convID[:8]))
-	if err := GitPushRetry(repoDir, devRepos[0], branch, 20); err != nil {
-		log.Printf("dev_store_conv: %s unit %d NOT stored: %v", repo, unitNum, err)
+	GitCommit(repoDir, fmt.Sprintf("conv: unit %s (%s)", stem, convID[:8]))
+	if err := devGitPush(repoDir, devRepos[0], branch, 20); err != nil {
+		log.Printf("dev_store_conv: %s unit %s NOT stored: %v", repo, stem, err)
 		return
 	}
-	log.Printf("dev_store_conv: %s unit %d stored (%d bytes summary from %d bytes raw): %s",
-		repo, unitNum, len(summary), len(rawJSON), filePath)
+	log.Printf("dev_store_conv: %s unit %s stored (%d bytes summary from %d bytes raw): %s",
+		repo, stem, len(summary), len(rawJSON), filePath)
 }
 
 // dev_conv_summary: parse raw conversation JSON and extract a compact summary.
 // keeps: assistant text, bash commands, compile/test results (truncated).
 // drops: create_file file_text, large tool_result output.
-func dev_conv_summary(rawJSON []byte, convID string, unitNum int, status map[string]string) string {
+func dev_conv_summary(rawJSON []byte, convID, stem string, status map[string]string) string {
 	var conv struct {
 		ChatMessages []struct {
 			Sender  string            `json:"sender"`
@@ -2096,13 +1456,13 @@ func dev_conv_summary(rawJSON []byte, convID string, unitNum int, status map[str
 		} `json:"chat_messages"`
 	}
 	if err := json.Unmarshal(rawJSON, &conv); err != nil {
-		return fmt.Sprintf("# unit %d — parse error\n", unitNum)
+		return fmt.Sprintf("# %s — parse error\n", stem)
 	}
 
 	var out strings.Builder
 
 	// header
-	out.WriteString(fmt.Sprintf("# dev_unit_%d — conv %s\n", unitNum, convID[:8]))
+	out.WriteString(fmt.Sprintf("# %s — conv %s\n", stem, convID[:8]))
 	if status != nil {
 		out.WriteString(fmt.Sprintf("# compile: %s  smoke: %s\n", status["compile"], status["smoke"]))
 		if files, ok := status["files_written"]; ok {
@@ -2743,100 +2103,6 @@ VERIFICATION STEPS:
 3. compile — if fail after 2 tries, set needs_source=true with the files you need
 4. if compile passes, test GPU P2P on all pairs
 5. smoke test end to end
-`
-
-// devUnitGitAuthInstruction: the git-auth block injected into
-// dev_incremental_instruction's %[7]s. A real run (log 2026/11/01) showed every
-// dev_unit child's own code dying right here — review FAIL: "source files ...
-// absent from einsteinOS/dev-7 (commit ... was never pushed)" twice, then the
-// child's own status block saying "push blocked (no GitHub token)" outright.
-// The child was being told to push itself via HTTPS with a token
-// (/tmp/.gh_token), the exact path that failed 0/180 times for the KERNEL's
-// OWN pushes earlier this session before SSH fixed it (9cc14c58) — but that
-// fix only ever touched the kernel's own git_ops.go calls, never the text
-// instructing the CHILD to push. The child's bash_tool runs on the SAME local
-// machine as the kernel (ForkExec is a plain local exec.Command, confirmed
-// earlier this session — there is no separate "child machine"), so the SAME
-// deploy key the kernel itself uses is just as reachable from here. Mirrors
-// GitPushRetry's own preference: SSH if the key is configured, HTTPS+token
-// (unchanged from before) if it is not, so an environment that has not set up
-// the deploy key does not regress.
-// branch is substituted directly here, NOT via the outer Sprintf's %[1]s — this
-// function's return value becomes the VALUE of dev_incremental_instruction's
-// %[7]s, which is substituted exactly once; any literal "%[1]s" left inside
-// that value would never get a second pass and would show up verbatim in the
-// child's prompt instead of the real branch name.
-func devUnitGitAuthInstruction(branch string) string {
-	if gitSSHAvailable() {
-		// gitSSHCommand()'s value uses only double quotes internally (the key
-		// path, via Go's %q) and never a single quote, so wrapping it in single
-		// quotes for this shell export is safe without a general-purpose quoter.
-		return fmt.Sprintf("for git auth, use SSH (not a token):\n"+
-			"  export GIT_SSH_COMMAND='%s'\n"+
-			"  git clone git@github.com:OWNER/REPO.git\n"+
-			"  git push git@github.com:OWNER/REPO.git %s",
-			gitSSHCommand(), branch)
-	}
-	return fmt.Sprintf("for git auth: TOKEN=$(cat /tmp/.gh_token 2>/dev/null)\n"+
-		"  git push https://${TOKEN}@github.com/OWNER/REPO.git %s", branch)
-}
-
-const dev_incremental_instruction = `
-
-[INCREMENTAL BUILD — unit %[5]d of %[6]d]
-you are building ONE unit of a multi-unit project. each unit is a NEW conversation.
-the shared branch is: %[1]s
-
-[GPU CONFIGURATION]
-all GPUs on this machine: %[2]s
-usable GPUs: %[3]s
-CUDA_VISIBLE_DEVICES=%[4]s
-
-[WHAT YOU HAVE]
-- the THEORY for your unit above (LAYER 1 math + LAYER 2 form templates)
-- if unit > 1: prior code already on the branch — git checkout and READ it first
-- you do NOT have the original source code. this is intentional.
-
-[CRITICAL — DO NOT]
-- do NOT clone, fetch, or read ANY repository other than the dev repo
-- do NOT search for or access the reference source code in any way
-- do NOT use the reference project's namespace, directory structure, or file names
-- the theory is ABSTRACT — it describes WHAT to build, not HOW the reference did it
-- if the theory mentions paths from the reference, IGNORE those paths
-- create YOUR OWN project layout appropriate for YOUR dev repo
-
-[YOUR PROJECT LAYOUT]
-use the dev repo's existing structure. look at what prior units created:
-  include/<project>/  — headers
-  src/<project>/      — implementations
-  tests/              — test files
-if unit 1 and no structure exists yet, create one that fits YOUR project name.
-
-[RULES]
-1. if this is unit 1: clone the dev repo, create branch %[1]s, start coding
-2. if this is unit > 1: git fetch && git checkout %[1]s, read existing code, then ADD your unit
-3. do NOT rewrite code from prior units unless your theory REQUIRES changing it
-4. compile the WHOLE project after adding your code
-5. push to branch %[1]s (NOT main)
-
-%[7]s
-
-[THEORY → CODE]
-LAYER 2 form templates use placeholder identifiers:
-  prjname, adj, Obj, typenameType, objtype, argname
-fill them with YOUR project's names. you are creating NEW code, not copying.
-the math in LAYER 1 defines WHAT the code must do. HOW you implement it
-(data structures, control flow, error handling) is YOUR choice for YOUR hardware.
-
-[OUTPUT FORMAT]
-write code, compile, test. then output:
-
-compile=pass|fail
-compile_error=<one line if fail>
-smoke=pass|fail
-smoke_error=<one line if fail>
-files_written=<comma-separated paths you added or changed>
-unit=%[5]d
 `
 
 const dev_verify_instruction = `

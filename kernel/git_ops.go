@@ -144,7 +144,14 @@ func GitCloneOrReuse(ownerRepo, dir string) error {
 // stored on the branch, the dev child found no .einsteinOS/theory.md and built
 // nothing (Strata run, 01:23:41). Use that path only if a real clone is there;
 // otherwise use the kernel's own clone (the one ref_store_chunk maintains).
+// devRepoLocalDirHook lets a test point the dev repo at a local clone instead of
+// cloning from GitHub.
+var devRepoLocalDirHook func(ownerRepo string) (string, error)
+
 func devRepoLocalDir(ownerRepo string) (string, error) {
+	if devRepoLocalDirHook != nil {
+		return devRepoLocalDirHook(ownerRepo)
+	}
 	name := ownerRepo
 	if i := strings.LastIndex(ownerRepo, "/"); i >= 0 {
 		name = ownerRepo[i+1:]

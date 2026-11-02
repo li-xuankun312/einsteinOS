@@ -1,0 +1,514 @@
+package kernel
+
+// dev_verify.go — the dev unit's objective verdict, produced by the KERNEL on
+// the REAL machine, and the kernel (not the child) putting the code on the
+// branch.
+//
+// What the Strata run (2026/11/01) showed, per round:
+//
+//   - every "compile=pass" came from dev_collect_child's text fallback — the
+//     child's own claim, not a return code. CompileResult{BuildCmd:"make"} never
+//     fired because the children build with their own scripts, and even when it
+//     matches it only looks for the word "make" and the absence of "error:".
+//   - the child's git ran in the REMOTE sandbox, which has no deploy key and no
+//     /tmp/.gh_token (those live on this machine). Three times the code existed
+//     only as an unpushed commit there; three times the reviewer saw an empty
+//     branch.
+//
+// So: the child writes code (in its sandbox; shadow mirrors every file write to
+// the local mirror dir) plus two scripts, and STOPS — it does not push. The
+// kernel then
+//
+//  1. computes the child's delta against the tree the mirror was primed from,
+//  2. assembles a clean workspace = branch tip + delta,
+//  3. runs the unit's build.sh then test.sh on this machine (real corex), the
+//     exit codes being compile= / smoke=,
+//  4. pushes the delta itself — to the dev branch if verification passed, to a
+//     per-unit wip branch if not (the next conversation's sandbox has to be able
+//     to clone the failing code to fix it).
+//
+// Whether the tests actually test the theory's invariants is NOT decided here:
+// an exit code proves the child's tests passed. That is the reviewer's job.
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"io"
+	"io/fs"
+	"log"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+)
+
+// ---- file trees -------------------------------------------------------------------
+
+// fileDigest maps a slash-separated relative path to a content digest.
+type fileDigest map[string]string
+
+const devMaxFileBytes = 2 << 20 // build outputs and blobs, not source
+
+var devSkipDirs = map[string]bool{
+	".git": true, "__pycache__": true, "node_modules": true, ".cache": true,
+}
+
+var devSkipExts = map[string]bool{
+	".o": true, ".obj": true, ".a": true, ".so": true, ".dylib": true,
+	".exe": true, ".out": true, ".pyc": true, ".ptx": true, ".cubin": true,
+}
+
+// skipTreeEntry says whether a path is kept out of the mirror/delta: git
+// metadata, caches, and build outputs. Source never matches these.
+func skipTreeEntry(rel string, isDir bool, size int64) bool {
+	base := filepath.Base(rel)
+	if isDir {
+		return devSkipDirs[base]
+	}
+	if devSkipExts[strings.ToLower(filepath.Ext(base))] {
+		return true
+	}
+	return size > devMaxFileBytes
+}
+
+func digestFile(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// snapshotTree digests every kept regular file under dir.
+func snapshotTree(dir string) (fileDigest, error) {
+	out := fileDigest{}
+	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(dir, p)
+		if rel == "." {
+			return nil
+		}
+		rel = filepath.ToSlash(rel)
+		info, ierr := d.Info()
+		if ierr != nil {
+			return ierr
+		}
+		if d.IsDir() {
+			if skipTreeEntry(rel, true, 0) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !info.Mode().IsRegular() || skipTreeEntry(rel, false, info.Size()) {
+			return nil
+		}
+		dg, derr := digestFile(p)
+		if derr != nil {
+			return derr
+		}
+		out[rel] = dg
+		return nil
+	})
+	return out, err
+}
+
+func copyOne(src, dst string, mode fs.FileMode) error {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode.Perm()|0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
+}
+
+// copyTree copies every kept file of src into dst (existing files overwritten).
+func copyTree(src, dst string) error {
+	return filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(src, p)
+		if rel == "." {
+			return nil
+		}
+		rel = filepath.ToSlash(rel)
+		info, ierr := d.Info()
+		if ierr != nil {
+			return ierr
+		}
+		if d.IsDir() {
+			if skipTreeEntry(rel, true, 0) {
+				return filepath.SkipDir
+			}
+			return os.MkdirAll(filepath.Join(dst, rel), 0o755)
+		}
+		if !info.Mode().IsRegular() || skipTreeEntry(rel, false, info.Size()) {
+			return nil
+		}
+		return copyOne(p, filepath.Join(dst, rel), info.Mode())
+	})
+}
+
+// wipeDirContents empties dir but keeps dir itself.
+func wipeDirContents(dir string) error {
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return os.MkdirAll(dir, 0o755)
+		}
+		return err
+	}
+	for _, e := range ents {
+		if err := os.RemoveAll(filepath.Join(dir, e.Name())); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// devMirrorDir is where shadow replays the child's file writes: the path the
+// child is told its repo lives at (/home/claude/<repo>) — on THIS machine.
+func devMirrorDir(devRepo string) string {
+	name := devRepo
+	if i := strings.LastIndex(devRepo, "/"); i >= 0 {
+		name = devRepo[i+1:]
+	}
+	return "/home/claude/" + name
+}
+
+// primeMirror makes the mirror an exact copy of the branch tip (no .git — a
+// .git there would make devRepoLocalDir mistake the mirror for the kernel's
+// clone) and returns the manifest the child's delta is measured against.
+// Shadow skips every git command, so without this the mirror never contains the
+// units that already passed.
+func primeMirror(tipDir, mirrorDir string) (fileDigest, error) {
+	if err := wipeDirContents(mirrorDir); err != nil {
+		return nil, fmt.Errorf("prime mirror %s: %w", mirrorDir, err)
+	}
+	if err := copyTree(tipDir, mirrorDir); err != nil {
+		return nil, fmt.Errorf("prime mirror %s: %w", mirrorDir, err)
+	}
+	return snapshotTree(mirrorDir)
+}
+
+// treeDelta compares the mirror now with the manifest it was primed with.
+func treeDelta(mirrorDir string, base fileDigest) (changed, removed []string, err error) {
+	now, err := snapshotTree(mirrorDir)
+	if err != nil {
+		return nil, nil, err
+	}
+	for p, d := range now {
+		if bd, ok := base[p]; !ok || bd != d {
+			changed = append(changed, p)
+		}
+	}
+	for p := range base {
+		if _, ok := now[p]; !ok {
+			removed = append(removed, p)
+		}
+	}
+	sort.Strings(changed)
+	sort.Strings(removed)
+	return changed, removed, nil
+}
+
+// applyDelta puts the child's changes onto dst (a branch-tip tree).
+func applyDelta(mirrorDir, dst string, changed, removed []string) error {
+	for _, rel := range changed {
+		src := filepath.Join(mirrorDir, filepath.FromSlash(rel))
+		info, err := os.Stat(src)
+		if err != nil {
+			return err
+		}
+		if err := copyOne(src, filepath.Join(dst, filepath.FromSlash(rel)), info.Mode()); err != nil {
+			return err
+		}
+	}
+	for _, rel := range removed {
+		if err := os.Remove(filepath.Join(dst, filepath.FromSlash(rel))); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
+}
+
+// ---- running the unit's scripts on the real machine ------------------------------------
+
+// VerifyResult is the kernel's own measurement of a unit.
+type VerifyResult struct {
+	Compile   string // pass | fail | missing
+	Smoke     string // pass | fail | skipped | missing
+	BuildExit int
+	TestExit  int
+	BuildOut  string // tail
+	TestOut   string // tail
+	Elapsed   time.Duration
+}
+
+// Status renders the result as the status map the rest of dev_* reads.
+func (v VerifyResult) Status() map[string]string {
+	st := map[string]string{
+		"compile":        v.Compile,
+		"smoke":          v.Smoke,
+		"compile_source": "kernel build.sh exit code on the real machine",
+	}
+	switch {
+	case v.Compile == "fail":
+		st["compile_error"] = fmt.Sprintf("build.sh exit=%d: %s", v.BuildExit, v.BuildOut)
+	case v.Compile == "missing":
+		st["compile_error"] = "no build.sh was written; the unit cannot be verified"
+	case v.Smoke == "fail":
+		st["smoke_error"] = fmt.Sprintf("test.sh exit=%d: %s", v.TestExit, v.TestOut)
+	case v.Smoke == "missing":
+		st["smoke_error"] = "no test.sh was written; the unit has no tests"
+	}
+	return st
+}
+
+// Passed: both stages ran and exited 0.
+func (v VerifyResult) Passed() bool { return v.Compile == "pass" && v.Smoke == "pass" }
+
+// devVerifyRunner runs one shell command line and returns its exit code and
+// combined output. The default uses the kernel's own process facility, so the
+// run is a real process on this machine (visible like any other pid). A variable
+// so the logic can be tested without a booted kernel.
+var devVerifyRunner = func(command, dir string, timeout time.Duration) (int, string, error) {
+	pid, err := ForkExec(command, dir)
+	if err != nil {
+		return -1, "", err
+	}
+	childPid, code, err := WaitTimeout(pid, timeout)
+	if err != nil {
+		return -1, "", err
+	}
+	return code, GetResult(childPid) + GetStderr(childPid), nil
+}
+
+// devVerifyScripts: where the unit's scripts live, relative to the repo root.
+func devVerifyScripts(unitID string) (build, test string) {
+	d := ".einsteinOS/verify/" + unitID
+	return d + "/build.sh", d + "/test.sh"
+}
+
+func tailText(s string, n int) string {
+	s = strings.TrimSpace(s)
+	if len(s) <= n {
+		return s
+	}
+	return "…" + s[len(s)-n:]
+}
+
+// devVerifyEnv is the shell prelude that makes the real toolchain and the
+// usable devices visible to the scripts: corex lives outside the default PATH.
+func devVerifyEnv(gpuUsable string) string {
+	env := "export PATH=/usr/local/corex/bin:$PATH; "
+	if gpuUsable != "" {
+		env += fmt.Sprintf("export EINSTEINOS_GPUS=%q CUDA_VISIBLE_DEVICES=%q; ", gpuUsable, gpuUsable)
+	}
+	return env
+}
+
+// runUnitVerify runs build.sh, then (only if it exited 0) test.sh, inside ws.
+func runUnitVerify(ws, unitID, gpuUsable string, buildTimeout, testTimeout time.Duration) VerifyResult {
+	start := time.Now()
+	build, test := devVerifyScripts(unitID)
+	res := VerifyResult{Compile: "missing", Smoke: "missing", BuildExit: -1, TestExit: -1}
+	finish := func() VerifyResult { res.Elapsed = time.Since(start); return res }
+
+	if _, err := os.Stat(filepath.Join(ws, filepath.FromSlash(build))); err != nil {
+		return finish()
+	}
+	env := devVerifyEnv(gpuUsable)
+	code, out, err := devVerifyRunner(env+"bash "+build+" 2>&1", ws, buildTimeout)
+	res.BuildExit, res.BuildOut = code, tailText(out, 3000)
+	if err != nil {
+		res.Compile, res.BuildOut = "fail", "could not run build.sh: "+err.Error()
+		res.Smoke = "skipped"
+		return finish()
+	}
+	if code != 0 {
+		res.Compile, res.Smoke = "fail", "skipped"
+		return finish()
+	}
+	res.Compile = "pass"
+
+	if _, err := os.Stat(filepath.Join(ws, filepath.FromSlash(test))); err != nil {
+		return finish() // Smoke stays "missing"
+	}
+	code, out, err = devVerifyRunner(env+"bash "+test+" 2>&1", ws, testTimeout)
+	res.TestExit, res.TestOut = code, tailText(out, 3000)
+	switch {
+	case err != nil:
+		res.Smoke, res.TestOut = "fail", "could not run test.sh: "+err.Error()
+	case code != 0:
+		res.Smoke = "fail"
+	default:
+		res.Smoke = "pass"
+	}
+	return finish()
+}
+
+// ---- assembling and committing ------------------------------------------------------------
+
+// assembleWorkspace builds a clean directory = branch tip + the child's delta.
+// A fresh directory (not the mirror) so a stale object file from an earlier
+// attempt cannot make a build pass that would not pass from the branch.
+func assembleWorkspace(tipDir, mirrorDir string, changed, removed []string) (string, error) {
+	ws, err := os.MkdirTemp("", "einsteinos_verify_")
+	if err != nil {
+		return "", err
+	}
+	if err := copyTree(tipDir, ws); err != nil {
+		os.RemoveAll(ws)
+		return "", err
+	}
+	if err := applyDelta(mirrorDir, ws, changed, removed); err != nil {
+		os.RemoveAll(ws)
+		return "", err
+	}
+	return ws, nil
+}
+
+// devGitPush is a variable so commit/push flow can be tested against a local
+// bare repository.
+var devGitPush = GitPushRetry
+
+// commitDelta checks out `onto` in the kernel clone (the remote tip when the
+// remote has it, else forked from `from`), applies the delta, commits and pushes
+// it. Returns whether anything was committed.
+func commitDelta(cloneDir, devRepo, from, onto, mirrorDir string, changed, removed []string, msg string) error {
+	if err := gitUseBranchFromRemote(cloneDir, onto, from); err != nil {
+		return fmt.Errorf("checkout %s: %w", onto, err)
+	}
+	if err := applyDelta(mirrorDir, cloneDir, changed, removed); err != nil {
+		return fmt.Errorf("apply delta: %w", err)
+	}
+	GitCommit(cloneDir, msg)
+	if err := devGitPush(cloneDir, devRepo, onto, 20); err != nil {
+		return fmt.Errorf("push %s: %w", onto, err)
+	}
+	return nil
+}
+
+// promoteBranch brings the verified code on `from` (a unit's wip branch) into
+// `to` (the dev branch) and pushes it. A merge, not a fast-forward: while the
+// unit was failing and being fixed, the kernel kept committing to the dev branch
+// (plan.json after every attempt), so the wip branch no longer descends from the
+// dev tip. The two sides touch different files, so the merge is clean; if it is
+// not, the error is returned and nothing is pushed.
+func promoteBranch(cloneDir, devRepo, from, to string) error {
+	if err := gitUseBranchFromRemote(cloneDir, to, "main"); err != nil {
+		return err
+	}
+	if err := GitMerge(cloneDir, from, fmt.Sprintf("merge verified %s into %s", from, to)); err != nil {
+		return err
+	}
+	return devGitPush(cloneDir, devRepo, to, 20)
+}
+
+// devWipBranch is the per-unit branch failing code is parked on, so the next
+// conversation's sandbox can clone it. Not nested under the dev branch name:
+// git cannot hold refs/heads/a and refs/heads/a/b at once.
+func devWipBranch(branch, unitID string) string { return branch + "-wip-" + unitID }
+
+// ---- the whole step ---------------------------------------------------------------------------
+
+// UnitVerifyOutcome is what dev_from_theorems needs back.
+type UnitVerifyOutcome struct {
+	Result  VerifyResult
+	Status  map[string]string
+	Pushed  string   // branch the code ended up on ("" if nothing was written)
+	Changed []string // files the child added/changed
+	Removed []string
+	Err     error
+}
+
+// devVerifyAndPush runs steps 1-4 for one unit after its conversation ended.
+//
+//	cloneDir  the kernel clone of the dev repo
+//	mirror    the dir shadow replays the child's file writes into (devMirrorDir)
+//	baseRef   the branch whose tip the mirror was primed from (dev branch, or the
+//	          unit's wip branch when this is a fix attempt)
+func devVerifyAndPush(cloneDir, mirror, devRepo, branch, baseRef, unitID, unitDesc, gpuUsable string, base fileDigest) UnitVerifyOutcome {
+	out := UnitVerifyOutcome{}
+
+	changed, removed, err := treeDelta(mirror, base)
+	if err != nil {
+		out.Err = fmt.Errorf("delta: %w", err)
+		return out
+	}
+	out.Changed, out.Removed = changed, removed
+	if len(changed) == 0 && len(removed) == 0 {
+		out.Result = VerifyResult{Compile: "missing", Smoke: "missing", BuildExit: -1, TestExit: -1}
+		out.Status = out.Result.Status()
+		out.Status["compile_error"] = "the conversation wrote no file (the mirror is identical to the branch tip)"
+		return out
+	}
+
+	// the tip the delta applies to
+	if err := gitUseBranchFromRemote(cloneDir, baseRef, branch); err != nil {
+		out.Err = fmt.Errorf("checkout base %s: %w", baseRef, err)
+		return out
+	}
+	ws, err := assembleWorkspace(cloneDir, mirror, changed, removed)
+	if err != nil {
+		out.Err = fmt.Errorf("assemble workspace: %w", err)
+		return out
+	}
+	defer os.RemoveAll(ws)
+
+	log.Printf("dev_verify: unit %s: %d file(s) changed, %d removed; verifying %s on the real machine",
+		unitID, len(changed), len(removed), ws)
+	out.Result = runUnitVerify(ws, unitID, gpuUsable, 60*time.Minute, 60*time.Minute)
+	out.Status = out.Result.Status()
+	log.Printf("dev_verify: unit %s: compile=%s (exit %d) smoke=%s (exit %d) in %s",
+		unitID, out.Result.Compile, out.Result.BuildExit, out.Result.Smoke, out.Result.TestExit, out.Result.Elapsed.Round(time.Second))
+
+	msg := fmt.Sprintf("unit %s: %s [compile=%s smoke=%s, verified by the kernel]", unitID, truncStr(unitDesc, 120), out.Result.Compile, out.Result.Smoke)
+	wip := devWipBranch(branch, unitID)
+	if out.Result.Passed() {
+		// onto the base ref first (it may be the wip branch of a fix attempt), then the dev branch
+		if baseRef != branch {
+			if err := commitDelta(cloneDir, devRepo, baseRef, baseRef, mirror, changed, removed, msg); err != nil {
+				out.Err = err
+				return out
+			}
+			if err := promoteBranch(cloneDir, devRepo, baseRef, branch); err != nil {
+				out.Err = err
+				return out
+			}
+		} else if err := commitDelta(cloneDir, devRepo, branch, branch, mirror, changed, removed, msg); err != nil {
+			out.Err = err
+			return out
+		}
+		out.Pushed = branch
+		return out
+	}
+	// not verified: park it where the next sandbox can read it. NEVER on the dev branch.
+	if err := commitDelta(cloneDir, devRepo, baseRef, wip, mirror, changed, removed, msg); err != nil {
+		out.Err = err
+		return out
+	}
+	out.Pushed = wip
+	return out
+}

@@ -510,6 +510,23 @@ func TerminationForRole(role string) TerminationCondition {
 			&ConsecutiveTextRounds{Threshold: 3},
 			&MaxRounds{Limit: 15},
 		)
+	case strings.HasPrefix(role, "spawn_work"):
+		// a conversation another conversation started (spawn.go). It never pushes
+		// (the kernel does), so BashExitZero("git push") is not a stop signal here.
+		return OrConditions(
+			&ConsecutiveTextRounds{Threshold: 3},
+			&MaxRounds{Limit: 25},
+		)
+	case strings.HasPrefix(role, "spawn_judge"):
+		return OrConditions(
+			&ConsecutiveTextRounds{Threshold: 2},
+			&MaxRounds{Limit: 10},
+		)
+	case strings.HasPrefix(role, "spawn_plan"):
+		return OrConditions(
+			&ConsecutiveTextRounds{Threshold: 2},
+			&MaxRounds{Limit: 5},
+		)
 	case strings.HasPrefix(role, "dev_fix"):
 		// BashExitZero("git push") cannot fire when the child has no push
 		// credentials, so the old default sat in text-only rounds until

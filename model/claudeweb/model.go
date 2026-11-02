@@ -105,6 +105,21 @@ func NewModel(client *Client, modelName string, effort string) *Model {
 
 func (m *Model) Name() string { return m.modelName }
 
+// shadowExecute runs one tool call on the local machine, EXCEPT `einsteinos …`
+// commands: those are not shell commands but requests to the kernel (start a
+// conversation, ask about one — kernel/spawn.go). They are answered here, by the
+// kernel, on behalf of the conversation that issued them, and the answer goes
+// back to the child through the same local-result channel as any other command.
+func (m *Model) shadowExecute(convID, toolName, inputJSON string) string {
+	if cmd, ok := kernel.EinsteinCommandFrom(toolName, inputJSON); ok {
+		out := kernel.HandleEinsteinCommand(convID, cmd)
+		log.Printf("[kernel-cmd] %s: %s → %s", truncate(convID, 8), truncateCmd(cmd, 100), truncate(out, 160))
+		return out
+	}
+	return m.Shadow.Execute(toolName, inputJSON)
+}
+
+
 func (m *Model) ResetConversation() {
 	m.mu.Lock()
 	m.convID = ""
@@ -635,7 +650,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 
 		var toolResults []ToolResult
 		for _, tb := range collectedTools {
-			result := m.Shadow.Execute(tb.name, tb.inputJSON.String())
+			result := m.shadowExecute(convID, tb.name, tb.inputJSON.String())
 			st.ledger.record(tb.id, result) // cached even when "" (shadow skipped it)
 			// shadow returns "" when it intentionally skips execution:
 			// axle verification, git, curl/wget, lean/elan, ssh, unknown tools.
@@ -745,7 +760,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 			} else {
 				log.Printf("claudeweb: SSE recovery downloaded %d tools from conversation", len(tools))
 				rr := recoveredResults(st.ledger, tools, func(name, input string) string {
-					return m.Shadow.Execute(name, input)
+					return m.shadowExecute(convID, name, input)
 				})
 				var localDiff strings.Builder
 				localDiff.WriteString("Continue. Note: the following tools were executed on the LOCAL machine (source of truth). If any results differ from your sandbox, use these:\n\n")
@@ -771,7 +786,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 						continue // the main loop already ran it; re-running only replays
 					}
 					if isCreateFile(tb.name) || isStrReplace(tb.name) {
-						result := m.Shadow.Execute(tb.name, tb.inputJSON.String())
+						result := m.shadowExecute(convID, tb.name, tb.inputJSON.String())
 						if result != "" {
 							log.Printf("[shadow] SSE-break state sync: %s → %s", tb.name, truncate(result, 80))
 						}

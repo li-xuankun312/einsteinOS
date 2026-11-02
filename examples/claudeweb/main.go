@@ -73,6 +73,20 @@ func main() {
 
 	kernel.Init()
 	kernel.SyscallInit()
+
+	// the conversation tree survives a restart: who started whom, what is done
+	regPath := os.Getenv("EINSTEINOS_CONV_REGISTRY")
+	if regPath == "" {
+		if home, herr := os.UserHomeDir(); herr == nil {
+			regPath = home + "/.einsteinos/conv_registry.json"
+		}
+	}
+	if regPath != "" {
+		if lerr := kernel.LoadConvRegistry(regPath); lerr != nil {
+			log.Printf("conv_registry: could not load %s: %v (starting empty)", regPath, lerr)
+		}
+		kernel.SetConvRegistryPath(regPath)
+	}
 	initTask := kernel.GetCurrent()
 	kernel.SetPwd(initTask, cfg.workDir)
 	kernel.SetTokenBudget(0, 500000)

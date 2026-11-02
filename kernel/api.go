@@ -350,7 +350,10 @@ func ForkExec(command string, workDir string) (int64, error) {
 		for i := 1; i < NR_TASKS; i++ {
 			if Task[i] != nil && int64(Task[i].Pid) == int64(pid) {
 				Task[i].State = TASK_ZOMBIE
-				Task[i].ExitCode = exitCode
+				// wait-status convention (SysExit stores code<<8, WaitTimeout reads
+				// >>8). Storing the raw code made every non-zero exit of a local
+				// command read as 0 — a failing build was reported as a pass.
+				Task[i].ExitCode = exitCode << 8
 				TellFather(Task[i].Father)
 				break
 			}
@@ -608,6 +611,14 @@ type ConvRecord struct {
 	Phase     int    // for multi-phase: 1,2,3
 	Status    string // "running", "done", "error", "timeout"
 	Created   time.Time
+
+	// the conversation-to-conversation edge (conv_tree.go): the CONVERSATION that
+	// started this one, not the kernel pid. "" for conversations the kernel
+	// itself forked.
+	ParentConv string
+	// work | judge | plan: judge and plan conversations are leaves — they never
+	// start further conversations. "" is read as work (see convKindOf).
+	Kind string
 }
 
 var (
@@ -715,7 +726,9 @@ func RegisterConv(parentPid int64, convID, repo, role string, phase int) {
 		Phase:     phase,
 		Status:    "running",
 		Created:   time.Now(),
+		Kind:      convKindForRole(role),
 	})
+	persistConvRegistryLocked()
 	convRegistryMu.Unlock()
 	log.Printf("conv_registry: registered %s repo=%s role=%s phase=%d",
 		convID[:8], repo, role, phase)
@@ -739,6 +752,7 @@ func ConvDone(convID string, status string) {
 			convRegistry[i].Status = status
 		}
 	}
+	persistConvRegistryLocked()
 	convRegistryMu.Unlock()
 }
 
