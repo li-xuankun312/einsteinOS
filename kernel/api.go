@@ -1,6 +1,7 @@
 package kernel
 
 import (
+	"io"
 	"context"
 	"fmt"
 	"log"
@@ -289,6 +290,12 @@ func Fork(prompt string, pwd string) (int64, error) {
 }
 
 func ForkExec(command string, workDir string) (int64, error) {
+	return ForkExecLabeled(command, workDir, "")
+}
+
+// ForkExecLabeled is ForkExec with a name for the live window (live_exec.go); an
+// empty label is derived from the command.
+func ForkExecLabeled(command string, workDir string, label string) (int64, error) {
 	nr := FindEmptyProcess()
 	if nr < 0 {
 		return 0, fmt.Errorf("fork: %d tasks full", NR_TASKS)
@@ -316,6 +323,13 @@ func ForkExec(command string, workDir string) (int64, error) {
 	}
 	cmd.Stdout = &meta.stdout
 	cmd.Stderr = &meta.stderr
+	// live view (live_exec.go): the same bytes also go, redacted and line by line, to a
+	// file a window can follow. nil when it is off, and then nothing here changes.
+	live := liveBegin(int64(pid), label, command)
+	if live != nil {
+		cmd.Stdout = io.MultiWriter(&meta.stdout, live.writer())
+		cmd.Stderr = io.MultiWriter(&meta.stderr, live.writer())
+	}
 
 	metaMu.Lock()
 	taskMeta[int64(pid)] = meta
@@ -323,6 +337,9 @@ func ForkExec(command string, workDir string) (int64, error) {
 
 	err := cmd.Start()
 	if err != nil {
+		if live != nil {
+			live.finish(1)
+		}
 		schedMu.Lock()
 		Task[nr] = nil
 		schedMu.Unlock()
@@ -339,6 +356,9 @@ func ForkExec(command string, workDir string) (int64, error) {
 			} else {
 				exitCode = 1
 			}
+		}
+		if live != nil {
+			live.finish(int(exitCode))
 		}
 
 		metaMu.Lock()
