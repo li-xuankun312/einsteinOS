@@ -130,6 +130,22 @@ func shapeToolResults(in []ToolResult) []ToolResult {
 	return out
 }
 
+// bashCommandOf extracts the command line of a bash tool call.
+func bashCommandOf(toolName, inputJSON string) (string, bool) {
+	if !isBashTool(toolName) {
+		return "", false
+	}
+	var in toolInput
+	if json.Unmarshal([]byte(inputJSON), &in) != nil {
+		return "", false
+	}
+	cmd := in.Command
+	if cmd == "" {
+		cmd = in.Code
+	}
+	return cmd, cmd != ""
+}
+
 // terminalText is the text of the round that ended the conversation, as the result
 // should carry it: the done marker line removed, nothing else touched.
 func terminalText(text string) string {
@@ -157,6 +173,12 @@ func settledNow(convID string) bool {
 // kernel, on behalf of the conversation that issued them, and the answer goes
 // back to the child through the same local-result channel as any other command.
 func (m *Model) shadowExecute(convID, toolName, inputJSON string) string {
+	// a dev conversation reaching for git: tell it the truth from this machine, instead of
+	// letting its own sandbox's failure stand (kernel/dev_notice.go)
+	if cmd, ok := bashCommandOf(toolName, inputJSON); ok && isGitCommand(cmd) && kernel.IsDevRole(kernel.ConvRoleOf(convID)) {
+		log.Printf("[kernel-cmd] %s: git in a dev conversation → notice", truncate(convID, 8))
+		return kernel.DevGitNotice()
+	}
 	if cmd, ok := kernel.EinsteinCommandFrom(toolName, inputJSON); ok {
 		out := kernel.HandleEinsteinCommand(convID, cmd)
 		log.Printf("[kernel-cmd] %s: %s → %s", truncate(convID, 8), truncateCmd(cmd, 100), truncate(out, 160))

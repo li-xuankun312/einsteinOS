@@ -29,6 +29,19 @@ import (
 // test does not reach for the GitHub API.
 var devCompletionPR = dev_open_completion_pr
 
+// devBranchFor names the branch a dev run works on. It used to be einsteinOS/dev-<pid>, and
+// a restarted process has a different pid (6, 7, … from the same small range), so the
+// plan and the units that had already passed were on a branch the new process never
+// looked at: a restart began again from unit 1. The branch is now named by what it
+// develops (the reference repo at its commit); the pid is the fallback when the commit
+// is not known.
+func devBranchFor(repo, refSHA string, pid int64) string {
+	if refSHA == "" {
+		return fmt.Sprintf("einsteinOS/dev-%d", pid)
+	}
+	return "einsteinOS/dev-" + shortHash(repo + "@" + refSHA)[:10]
+}
+
 // devRefSHA identifies the reference commit the theory was made from. The dev
 // step does not carry it, so take the last theory stored for the repo.
 func devRefSHA(repo, stepSHA string) string {
@@ -114,7 +127,7 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 		return "", fmt.Errorf("dev_from_theorems: no dev repo registered — the kernel pushes the code itself and has nowhere to push")
 	}
 	devRepo := devRepos[0]
-	branch := fmt.Sprintf("einsteinOS/dev-%d", pid)
+	branch := devBranchFor(repo, devRefSHA(repo, step.SHA), pid)
 
 	// proofs are verified by the KERNEL before any dev child runs
 	patchedTheory, perr := dev_proof_preflight(pid, repo, branch, theory)

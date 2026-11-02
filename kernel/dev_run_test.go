@@ -431,3 +431,45 @@ func TestDevPromptTellsTheChildWhereTheRepoReallyIs(t *testing.T) {
 		}
 	}
 }
+
+func TestDevBranchIsNamedByWhatItDevelopsNotByThePid(t *testing.T) {
+	a := devBranchFor("Niko1221/Strata", "01529aaa82b9", 6)
+	b := devBranchFor("Niko1221/Strata", "01529aaa82b9", 7)
+	if a != b {
+		t.Fatalf("a restart (pid 6 → 7) must find the same branch: %s vs %s", a, b)
+	}
+	if a == devBranchFor("Niko1221/Strata", "ffffffffffff", 6) || a == devBranchFor("Other/Repo", "01529aaa82b9", 6) {
+		t.Fatal("another commit or another reference repo is another branch")
+	}
+	if got := devBranchFor("x/y", "", 9); got != "einsteinOS/dev-9" {
+		t.Fatalf("without a commit the pid is the fallback: %s", got)
+	}
+	if !strings.HasPrefix(a, "einsteinOS/dev-") || strings.ContainsAny(a, " ~^:?*[\\") {
+		t.Fatalf("not a valid ref name: %q", a)
+	}
+}
+
+// the restart the 2026/11/02 run needed: units 1 and 2 had passed on einsteinOS/dev-6
+func TestARestartedProcessResumesFromTheBranchAndRedoesNothing(t *testing.T) {
+	env := newDevEnv(t, theory2("Alpha", "Beta"))
+	env.model.unitWork = func(prompt, unit string, n int) {
+		mustWrite(env.mirror, "src/"+unit+".cu", "// "+unit+"\n")
+		env.model.writeScripts(unit, 0, 0, "built")
+	}
+	step := &Step{Owner: "ref", Repo: "proj"}
+	if _, err := dev_from_theorems(9301, step); err != nil {
+		t.Fatal(err)
+	}
+	conversationsBefore := len(env.model.prompts)
+
+	// the process dies and a new one starts: new pid, empty memory
+	devPlanMu.Lock()
+	devPlanMem = map[string]*DevPlan{}
+	devPlanMu.Unlock()
+	if _, err := dev_from_theorems(9302, step); err != nil {
+		t.Fatal(err)
+	}
+	if len(env.model.prompts) != conversationsBefore {
+		t.Fatalf("the restarted process started %d conversation(s): it did not find the finished work on the branch", len(env.model.prompts)-conversationsBefore)
+	}
+}
