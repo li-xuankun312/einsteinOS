@@ -127,7 +127,11 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 		return "", fmt.Errorf("dev_from_theorems: no dev repo registered — the kernel pushes the code itself and has nowhere to push")
 	}
 	devRepo := devRepos[0]
-	branch := devBranchFor(repo, devRefSHA(repo, step.SHA), pid)
+	refSHA := devRefSHA(repo, step.SHA)
+	branch := devBranchFor(repo, refSHA, pid)
+	// a run started before the branch was named by what it develops left its work on a
+	// pid-named branch: continue from it instead of starting over (dev_adopt.go)
+	adoptLegacyDevBranch(devRepo, repo, refSHA, branch)
 
 	// proofs are verified by the KERNEL before any dev child runs
 	patchedTheory, perr := dev_proof_preflight(pid, repo, branch, theory)
