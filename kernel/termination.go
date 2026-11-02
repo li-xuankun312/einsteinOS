@@ -14,6 +14,12 @@ type ToolEvent struct {
 	Output   string
 	Round    int
 	HasTools bool // this round had tool calls (vs text-only)
+
+	// set on text-only rounds only (done_marker.go): the round's text, and whether
+	// the conversation is settled (turn finished and persisted) — filled in by the
+	// model layer only when the text ends with DoneMarker, because settling costs a GET.
+	Text    string
+	Settled bool
 }
 
 type StopSignal struct {
@@ -456,6 +462,10 @@ func (c *AxleVerifyDone) String() string { return "AxleVerifyDone" }
 // --- preset termination profiles for common roles ---
 
 func TerminationForRole(role string) TerminationCondition {
+	return WithDoneMarker(terminationForRoleBase(role))
+}
+
+func terminationForRoleBase(role string) TerminationCondition {
 	// NO hard timeouts. the system detects completion by behavior, not wall clock:
 	//   - ConsecutiveTextRounds: conv stopped using tools → it's done or stuck
 	//   - MaxRounds: absolute safety ceiling (prevents infinite loops)

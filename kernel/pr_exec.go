@@ -254,18 +254,8 @@ func PRRunNext(pid int64) (string, error) {
 }
 
 func hw_init(pid int64) (string, error) {
-	pr := GetPR(pid)
-	task := ""
-	if pr != nil {
-		task = strip_credentials(pr.Title)
-	}
 
-	prompt := "probe this machine's hardware. " +
-		"run whatever commands you need (lspci, nvidia-smi, ixsmi, " +
-		"cpuinfo, free, topology, etc). " +
-		"report: GPU vendor/model/count, interconnect topology, " +
-		"CPU cores, memory, kernel version.\n\n" +
-		"context: " + task
+	prompt := hwProbePrompt()
 
 	child, err := ForkWithRole(prompt, ".", "hw_probe")
 	if err != nil {
@@ -277,7 +267,14 @@ func hw_init(pid int64) (string, error) {
 	hw_info := GetResult(child)
 	hw_tools := GetStderr(child)
 
-	gpuAll := parseGPUList(hw_info + "\n" + hw_tools)
+	// the GPU indices are MEASURED by the kernel on this machine. They used to be
+	// counted from the child's own words (lines mentioning "iluvatar", "gpu 0"…),
+	// which counted a sentence like "no Iluvatar found" as a GPU, and defaulted to 4
+	// when nothing matched: a CPU-only VM was reported as gpu_all=0,1,2,3,4,5.
+	gpuAll, measured := detectLocalGPUs()
+	if !measured {
+		gpuAll = parseGPUList(hw_info + "\n" + hw_tools)
+	}
 
 	prMu.Lock()
 	if pr := prTable[pid]; pr != nil {
@@ -287,7 +284,7 @@ func hw_init(pid int64) (string, error) {
 	}
 	prMu.Unlock()
 
-	log.Printf("hw_init: pid=%d stdout=%d stderr=%d gpu_all=%s", pid, len(hw_info), len(hw_tools), gpuAll)
+	log.Printf("hw_init: pid=%d stdout=%d stderr=%d gpu_all=%q (measured=%v)", pid, len(hw_info), len(hw_tools), gpuAll, measured)
 	return hw_info, nil
 }
 
@@ -1289,6 +1286,7 @@ func dev_review_unit_inner(pid int64, repo, branch string, unitNum, totalUnits i
 	prompt.WriteString("your LAST line must be exactly one of:\n")
 	prompt.WriteString("  PASS\n")
 	prompt.WriteString("  FAIL: <one line reason>\n")
+	prompt.WriteString(DoneInstruction())
 	prompt.WriteString("nothing else on that line. you may write analysis above it.\n")
 
 	log.Printf("dev_review_unit: %s unit %d/%d forking review_conv (%d bytes prompt)",

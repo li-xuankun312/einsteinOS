@@ -1,11 +1,9 @@
 package kernel
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -33,6 +31,12 @@ const NR_SPLITS = 256
 const SPLIT_CHUNK = 40
 
 func ref_split(parent_pid int64, owner, repo, sha string, files []string, task string, depth int) string {
+	return ref_split_with(parent_pid, owner, repo, sha, files, task, depth, nil)
+}
+
+// ref_split_with is ref_split with the chunking already decided (by the combined
+// survey+plan conversation, ref_survey_plan.go). chunks == nil: ask the planner.
+func ref_split_with(parent_pid int64, owner, repo, sha string, files []string, task string, depth int, planned [][]string) string {
 	if len(files) <= SPLIT_CHUNK {
 		return ref_split_leaf(parent_pid, owner, repo, sha, files, task, depth)
 	}
@@ -40,7 +44,10 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 	// theory_planner decides how to group files — not static round-robin.
 	// planner sees file list with directories, groups related files,
 	// keeps each group ≤ 12 files so theory conv can finish within round limit.
-	chunks := theory_plan(parent_pid, owner, repo, files)
+	chunks := planned
+	if len(chunks) == 0 {
+		chunks = theory_plan(parent_pid, owner, repo, files)
+	}
 
 	log.Printf("ref_split: %s/%s@%s depth=%d %d files -> %d chunks (planner)",
 		owner, repo, short_sha(sha), depth, len(files), len(chunks))
@@ -327,13 +334,23 @@ func ref_split(parent_pid int64, owner, repo, sha string, files []string, task s
 			continue
 		}
 		chunkCovs = append(chunkCovs, cov)
-		results = append(results, result)
-		// push final data to GitHub (after all polling, retries, ContinueConv).
-		// use the best convID: retry conv if it produced more, else original.
+		// the best convID: retry conv if it produced more, else original.
 		storeConvID := convID
 		if lastRetryConvID != "" {
 			storeConvID = lastRetryConvID
 		}
+		// The theory text of this chunk is the files the conversation left in its
+		// sandbox, in their FINAL state (chunk_files.go) — not the transcript, which
+		// holds create_file bodies as first written and everything else the child
+		// ran. Junk detection and coverage above still read the transcript.
+		theory := result
+		if files := chunkFilesFor(storeConvID); len(files) > 0 {
+			theory = renderChunkFiles(files)
+			log.Printf("ref_split: chunk %d/%d theory = %d file(s) from the sandbox, %d bytes (transcript was %d)",
+				i+1, len(chunks), len(files), len(theory), len(result))
+		}
+		results = append(results, theory)
+		// push final data to GitHub (after all polling, retries, ContinueConv).
 		if storeConvID != "" {
 			ref_store_chunk(storeConvID, i+1, owner, repo)
 		}
@@ -413,73 +430,24 @@ func ref_store_chunk(convID string, chunkIdx int, owner, repo string) {
 		return
 	}
 
-	// 2. extract all create_file paths from the conversation JSON
-	var conv struct {
-		ChatMessages []struct {
-			Content []json.RawMessage `json:"content"`
-		} `json:"chat_messages"`
-	}
-	filePaths := []string{}
-	if json.Unmarshal(rawJSON, &conv) == nil {
-		for _, msg := range conv.ChatMessages {
-			for _, raw := range msg.Content {
-				var block struct {
-					Type  string          `json:"type"`
-					Name  string          `json:"name"`
-					Input json.RawMessage `json:"input"`
-				}
-				if json.Unmarshal(raw, &block) != nil {
-					continue
-				}
-				if block.Type == "tool_use" && (block.Name == "create_file" || block.Name == "write_file") {
-					var inp struct {
-						Path string `json:"path"`
-					}
-					if json.Unmarshal(block.Input, &inp) == nil && inp.Path != "" {
-						filePaths = append(filePaths, inp.Path)
-					}
-				}
-			}
-		}
-	}
-
-	// deduplicate (child may rewrite same file)
-	seen := map[string]bool{}
-	uniquePaths := []string{}
-	for _, p := range filePaths {
-		if !seen[p] {
-			seen[p] = true
-			uniquePaths = append(uniquePaths, p)
-		}
-	}
-
-	// 3. download each file from remote sandbox
+	// 2+3. the files the conversation left in its sandbox (chunk_files.go): every
+	// .lean it wrote, by create_file or by bash or python, validated by downloading
 	chunkDir := fmt.Sprintf("/tmp/chunk_%d_files", chunkIdx)
 	os.MkdirAll(chunkDir, 0755)
 
 	downloadedFiles := []string{} // local tmp paths
 	destPaths := []string{}       // paths under .einsteinOS/
-	for _, remotePath := range uniquePaths {
-		fileBytes, err := DownloadFile(convID, remotePath)
-		if err != nil {
-			log.Printf("ref_store_chunk: %s download-file %s failed: %v", chunkName, remotePath, err)
-			continue
-		}
-		if len(fileBytes) == 0 {
-			continue
-		}
-		// local temp path
-		baseName := filepath.Base(remotePath)
-		localTmp := fmt.Sprintf("%s/%s", chunkDir, baseName)
-		fileBytes = []byte(redactSecrets(string(fileBytes))) // see the conv.json redaction above
-		if err := os.WriteFile(localTmp, fileBytes, 0644); err != nil {
-			log.Printf("ref_store_chunk: %s write file %s failed: %v", chunkName, baseName, err)
+	for _, f := range chunkFilesFor(convID) {
+		localTmp := fmt.Sprintf("%s/%s", chunkDir, f.Name)
+		if err := os.WriteFile(localTmp, f.Content, 0644); err != nil {
+			log.Printf("ref_store_chunk: %s write file %s failed: %v", chunkName, f.Name, err)
 			continue
 		}
 		downloadedFiles = append(downloadedFiles, localTmp)
-		destPaths = append(destPaths, fmt.Sprintf(".einsteinOS/chunks/%s/%s", chunkName, baseName))
-		log.Printf("ref_store_chunk: %s downloaded %s (%d bytes)", chunkName, baseName, len(fileBytes))
+		destPaths = append(destPaths, fmt.Sprintf(".einsteinOS/chunks/%s/%s", chunkName, f.Name))
+		log.Printf("ref_store_chunk: %s downloaded %s (%d bytes)", chunkName, f.Name, len(f.Content))
 	}
+	forgetChunkFiles(convID)
 
 	// 4. push to conv/<convID> branch (one branch per chunk)
 	if len(downloadedFiles) == 0 {
@@ -616,8 +584,8 @@ func theory_plan(parent_pid int64, owner, repo string, files []string) [][]strin
 			"output ONLY lines like:\n"+
 			"chunk: path/to/file1.hpp, path/to/file2.cpp, path/to/file3.cu\n"+
 			"chunk: path/to/file4.hpp, path/to/file5.cpp\n"+
-			"use EXACT paths from the list. one line per chunk. nothing else.\n",
-		len(files), fileList.String())
+			"use EXACT paths from the list. one line per chunk. nothing else.\n%s",
+		len(files), fileList.String(), DoneInstruction())
 
 	child, err := ForkWithRole(prompt, ".", "theory_planner")
 	if err != nil {
@@ -636,53 +604,9 @@ func theory_plan(parent_pid int64, owner, repo string, files []string) [][]strin
 	output := GetResult(child)
 	log.Printf("theory_plan: %s/%s planner returned %d bytes", owner, repo, len(output))
 
-	// parse "chunk: file1, file2, ..." lines
-	fileSet := make(map[string]bool, len(files))
-	for _, f := range files {
-		fileSet[f] = true
-	}
-
-	var chunks [][]string
-	for _, line := range strings.Split(output, "\n") {
-		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(strings.ToLower(line), "chunk:") {
-			continue
-		}
-		rest := strings.TrimSpace(line[6:])
-		if rest == "" {
-			continue
-		}
-		var chunk []string
-		for _, f := range strings.Split(rest, ",") {
-			f = strings.TrimSpace(f)
-			if f != "" && fileSet[f] {
-				chunk = append(chunk, f)
-				delete(fileSet, f)
-			}
-		}
-		if len(chunk) > 0 {
-			chunks = append(chunks, chunk)
-		}
-	}
-
-	// any unclaimed files — append to last chunk or make new one
-	if len(fileSet) > 0 {
-		var unclaimed []string
-		for f := range fileSet {
-			unclaimed = append(unclaimed, f)
-		}
-		if len(chunks) > 0 && len(chunks[len(chunks)-1])+len(unclaimed) <= 15 {
-			chunks[len(chunks)-1] = append(chunks[len(chunks)-1], unclaimed...)
-		} else {
-			// split unclaimed into groups of 12
-			for i := 0; i < len(unclaimed); i += 12 {
-				end := i + 12
-				if end > len(unclaimed) {
-					end = len(unclaimed)
-				}
-				chunks = append(chunks, unclaimed[i:end])
-			}
-		}
+	chunks, unclaimed := parsePlanLines(output, files)
+	if len(unclaimed) > 0 && len(chunks) > 0 {
+		chunks = redistributeUnclaimed(chunks, unclaimed)
 		log.Printf("theory_plan: %d unclaimed files redistributed", len(unclaimed))
 	}
 
@@ -694,6 +618,59 @@ func theory_plan(parent_pid int64, owner, repo string, files []string) [][]strin
 	log.Printf("theory_plan: %s/%s %d files → %d chunks", owner, repo, len(files), len(chunks))
 	for i, c := range chunks {
 		log.Printf("theory_plan:   chunk %d: %d files", i+1, len(c))
+	}
+	return chunks
+}
+
+// parsePlanLines reads "chunk: a, b, c" lines. Only paths in files count, each file
+// once (first claim wins); a line that matches nothing is dropped. unclaimed lists
+// the files nobody placed, in the order of files (not map order: the old code
+// iterated a map, so which chunk an unclaimed file landed in changed run to run).
+func parsePlanLines(output string, files []string) (chunks [][]string, unclaimed []string) {
+	claimed := make(map[string]bool, len(files))
+	known := make(map[string]bool, len(files))
+	for _, f := range files {
+		known[f] = true
+	}
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(strings.ToLower(line), "chunk:") {
+			continue
+		}
+		rest := strings.TrimSpace(line[6:])
+		var chunk []string
+		for _, f := range strings.Split(rest, ",") {
+			f = strings.TrimSpace(f)
+			if f != "" && known[f] && !claimed[f] {
+				claimed[f] = true
+				chunk = append(chunk, f)
+			}
+		}
+		if len(chunk) > 0 {
+			chunks = append(chunks, chunk)
+		}
+	}
+	for _, f := range files {
+		if !claimed[f] {
+			unclaimed = append(unclaimed, f)
+		}
+	}
+	return chunks, unclaimed
+}
+
+// redistributeUnclaimed puts files the planner did not place into the last chunk
+// when it stays small, else into new chunks of 12.
+func redistributeUnclaimed(chunks [][]string, unclaimed []string) [][]string {
+	if len(chunks) > 0 && len(chunks[len(chunks)-1])+len(unclaimed) <= 15 {
+		chunks[len(chunks)-1] = append(chunks[len(chunks)-1], unclaimed...)
+		return chunks
+	}
+	for i := 0; i < len(unclaimed); i += 12 {
+		end := i + 12
+		if end > len(unclaimed) {
+			end = len(unclaimed)
+		}
+		chunks = append(chunks, unclaimed[i:end])
 	}
 	return chunks
 }

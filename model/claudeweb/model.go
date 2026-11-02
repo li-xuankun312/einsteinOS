@@ -105,6 +105,21 @@ func NewModel(client *Client, modelName string, effort string) *Model {
 
 func (m *Model) Name() string { return m.modelName }
 
+// settledNow reports whether the server says convID's last turn has finished and
+// been persisted (a GET — see kernel/conv_tail.go). The turn can take a moment to
+// become visible after the stream ends, so look a few times before saying no.
+func settledNow(convID string) bool {
+	for i := 0; i < 4; i++ {
+		if ok, _, err := kernel.ConvSettled(convID); err == nil && ok {
+			return true
+		}
+		if i < 3 {
+			time.Sleep(3 * time.Second)
+		}
+	}
+	return false
+}
+
 // shadowExecute runs one tool call on the local machine, EXCEPT `einsteinos …`
 // commands: those are not shell commands but requests to the kernel (start a
 // conversation, ask about one — kernel/spawn.go). They are answered here, by the
@@ -715,6 +730,15 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 				event.ToolName = ""
 				event.InputRaw = ""
 				event.Output = ""
+				// the done marker (kernel/done_marker.go): only worth a GET when the
+				// text actually ends with it, and only believed once the server says
+				// the turn is finished and persisted.
+				event.Text = textBuf.String()
+				event.Settled = false
+				if kernel.HasDoneMarker(event.Text) {
+					event.Settled = settledNow(convID)
+					log.Printf("claudeweb: done marker seen in round %d, settled=%v", st.rounds, event.Settled)
+				}
 				if sig := termCond.Check(event); sig != nil {
 					log.Printf("claudeweb: termination fired (text round): %s", sig.Reason)
 					kernel.StoreSignal(kernel.GetLastForkedPid(), sig)

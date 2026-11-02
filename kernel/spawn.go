@@ -209,6 +209,7 @@ func BuildJudgePrompt(context string, items []JudgeItem) string {
 	}
 	b.WriteString("\n[OUTPUT FORMAT]\none line per question, in order, exactly:\n<number>: <VERDICT>: <one-line reason>\n")
 	b.WriteString("VERDICT is one word in capitals (PASS, FAIL, YES, NO, or a label the question asked for).\nnothing else after the last answer.\n")
+	b.WriteString(DoneInstruction())
 	return b.String()
 }
 
@@ -453,6 +454,7 @@ func spawnPreamble(parent, kind, scope string) string {
 	if kind == "plan" {
 		b.WriteString("you decide how to split, you write no code and you start no conversations.\n")
 	}
+	b.WriteString(DoneInstruction())
 	b.WriteString("\n")
 	return b.String()
 }

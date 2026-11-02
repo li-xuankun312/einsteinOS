@@ -240,10 +240,10 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 	log.Printf("dev_from_theorems: %s unit %d/%d id=%s attempt %d forking %s (prompt %d bytes, base %s, modules: %s)",
 		r.repo, idx+1, total, unit.ID, attempt, role, len(prompt), baseRef, nodeDesc(unit))
 
-	cond := OrConditions(
+	cond := WithDoneMarker(OrConditions(
 		&ConsecutiveTextRounds{Threshold: 4},
 		&MaxRounds{Limit: 30},
-	)
+	))
 	var child int64
 	var convID string
 	var status map[string]string
@@ -442,7 +442,7 @@ func (r *devRun) unitPrompt(unit DevPlanNode, idx, total, attempt int, fail DevF
 	p.WriteString("\n")
 
 	build, test := devVerifyScripts(unit.ID)
-	p.WriteString(fmt.Sprintf(dev_unit_instruction, idx+1, total, unit.ID, r.gpuAll, r.gpuUsable(), r.gpuUsable(), build, test, einsteinHelp))
+	p.WriteString(fmt.Sprintf(dev_unit_instruction, idx+1, total, unit.ID, r.gpuAll, r.gpuUsable(), r.gpuUsable(), build, test, einsteinHelp, DoneInstruction()))
 
 	if fb := pr_feedback(r.pid); fb != "" {
 		p.WriteString(fmt.Sprintf("\n\n[PRIOR FEEDBACK]\n%s", fb))
@@ -504,7 +504,7 @@ the math in LAYER 1 defines WHAT the code must do. HOW you implement it
 
 [WHEN YOU ARE DONE]
 write a short summary (what you built, which files). do NOT git push. do NOT claim compile or test results — the kernel measures them.
-`
+%[10]s`
 
 // devSettleSleep: how long to wait between looks at a conversation the remote
 // may still be running. A variable so a test does not sleep.

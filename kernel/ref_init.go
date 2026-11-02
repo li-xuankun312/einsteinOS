@@ -6,7 +6,6 @@ import (
 	"log"
 	"os"
 	"os/exec"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -22,8 +21,13 @@ type theorem_entry struct {
 // theorize_instruction pieces — assembled by formatTheorizeInstruction.
 // kept as separate consts so each is readable and grep-able.
 
+// TheoryOutputsDir is where theory children write their .lean files (the sandbox
+// prompts and the local mirror both use it).
+const TheoryOutputsDir = "/mnt/user-data/outputs"
+
+// thi_output takes TheoryOutputsDir.
 const thi_output = `output one .lean file per module via create_file.
-file: /mnt/user-data/outputs/<CamelCaseName>.lean — name by what the code DOES, not the source path.
+file: %[1]s/<CamelCaseName>.lean — name by what the code DOES, not the source path.
 `
 
 const thi_structure = `each .lean file:
@@ -55,12 +59,22 @@ do NOT use native_decide (Axle bans it).
 if you cannot prove something, write sorry. do NOT change the theorem statement.
 `
 
-const thi_axle = `VERIFICATION — after each .lean file, verify theorems through Axle:
+// thi_axle takes the Axle session cookie and CSRF token.
+//
+// Axle cannot be reached from the sandbox: every call is answered by the machine
+// that runs the conversation, and each batch of calls is one round trip (one
+// completion in the 9-per-10-minutes window). "verify after each .lean file" made
+// a round trip per file; the batch protocol makes it a round trip per attempt.
+const thi_axle = `VERIFICATION — through Axle. every Axle call is answered by the machine that runs you,
+so each round of calls costs one round trip. work in batches:
+  1. write ALL your .lean files first — do not verify between files
+  2. verify them ALL with ONE command (a loop over the files)
+  3. fix every failure in ONE script, then verify them all again
 
 curl -s https://axle.axiommath.ai/api/v1/verify_proof \
   -H 'content-type: application/json' \
-  -b 'provertools_session=%s' \
-  -H 'x-browser-api-csrf: %s' \
+  -b 'provertools_session=%[1]s' \
+  -H 'x-browser-api-csrf: %[2]s' \
   -H 'x-request-source: web' \
   -H 'origin: https://axle.axiommath.ai' \
   --data-raw '{"formal_statement":"<with sorry>","content":"<with proof>","ignore_imports":true,"environment":"lean-4.35.0","timeout_seconds":120}'
@@ -68,9 +82,10 @@ curl -s https://axle.axiommath.ai/api/v1/verify_proof \
 if okay:false, fix the proof and re-verify. if timeout/network error, move on.
 `
 
+// thi_scope takes TheoryOutputsDir and DoneInstruction().
 const thi_scope = `produce theory ONLY for your assigned files. do not write .md, .cpp, .py.
-do not push to git. when your files are done, write a brief summary and stop.
-`
+do not push to git. before you finish, run ls %[1]s once so the list of your files is in the conversation, then write a brief summary.
+%[2]s`
 
 // axleCredentials returns the session cookie and CSRF token for Axle API calls.
 func axleCredentials() (session, csrf string) {
@@ -88,8 +103,9 @@ func axleCredentials() (session, csrf string) {
 // formatTheorizeInstruction assembles the theory prompt from pieces.
 func formatTheorizeInstruction() string {
 	session, csrf := axleCredentials()
-	return thi_output + thi_structure + thi_proofs +
-		fmt.Sprintf(thi_axle, session, csrf) + thi_scope
+	return fmt.Sprintf(thi_output, TheoryOutputsDir) + thi_structure + thi_proofs +
+		fmt.Sprintf(thi_axle, session, csrf) +
+		fmt.Sprintf(thi_scope, TheoryOutputsDir, DoneInstruction())
 }
 
 
@@ -380,37 +396,18 @@ func ref_theorize(parent int64, owner, name, sha, diff string, nfiles int, msg s
 	// step 1: kernel does static survey (wc -l + extensions)
 	heavy, light := fileSurvey(owner, name, sha, files)
 
-	// step 2a: if too many files, fork a dir-level survey child first.
-	// child sees directory tree + file counts per dir, decides which dirs
-	// are core (keep) vs peripheral (skip: tests, benchmarks, examples, tools, docs).
-	// child decides — no hardcoded dir names in kernel.
-	totalFiles := len(heavy) + len(light)
-	if totalFiles > 200 {
-		kept := dirSurveyChild(owner, name, sha, heavy, light, task)
-		if kept != nil {
-			heavy = kept.heavy
-			light = kept.light
-			log.Printf("ref_theorize: dir survey pruned → %d heavy, %d light (from %d total)",
-				len(heavy), len(kept.light), totalFiles)
-		}
-	}
-
-	// step 2b: fork a lightweight survey child to refine file-level classification
-	// child sees file listing + first 10 lines of each, outputs heavy=/light= lines
-	surveyResult := fileSurveyChild(owner, name, sha, heavy, light, task)
-	if surveyResult != nil {
-		heavy = surveyResult.heavy
-		light = surveyResult.light
-		log.Printf("ref_theorize: file survey refined → %d heavy, %d light",
-			len(heavy), len(surveyResult.light))
-	}
+	// step 2: ONE conversation classifies every file (heavy = needs LAYER 1a/1b)
+	// and, when there are enough files to need it, groups the heavy ones into
+	// chunks (ref_survey_plan.go). The directory-level pre-survey is gone: it
+	// only existed to shrink the input of the file survey, and cost a call.
+	heavy, light, planned := surveyAndPlan(parent, owner, name, sha, heavy, light, task)
 
 	// step 3: heavy files get full LAYER 1a+1b+2
 	var result string
 	if len(heavy) > SPLIT_CHUNK {
 		log.Printf("ref_theorize: %s/%s %s: %d heavy files -> split (skipped %d light)",
 			owner, name, sha[:12], len(heavy), len(light))
-		result = ref_split(parent, owner, name, sha, heavy, task, 0)
+		result = ref_split_with(parent, owner, name, sha, heavy, task, 0, planned)
 	} else if len(heavy) > 0 {
 		result = ref_theorize_leaf(parent, owner, name, sha, heavy, task)
 	}
@@ -431,138 +428,13 @@ func ref_theorize(parent int64, owner, name, sha, diff string, nfiles int, msg s
 	return result
 }
 
+// refFileAtFn reads a file of the reference at a commit; a variable so the survey
+// can be tested without the network.
+var refFileAtFn = RefFileAt
+
 type surveyOutput struct {
 	heavy []string
 	light []lightFile
-}
-
-// dirSurveyChild: when a commit has >200 files, fork a child to prune at directory level.
-// child sees: directory tree with file counts and total lines per dir.
-// child outputs: keep=dir1,dir2,dir3 (dirs whose files need theorizing)
-// everything NOT in a keep dir becomes light.
-func dirSurveyChild(owner, name, sha string, heavy []string, light []lightFile, task string) *surveyOutput {
-	// build dir → file count + total lines
-	type dirStat struct {
-		files int
-		lines int
-	}
-	dirs := make(map[string]*dirStat)
-
-	allFiles := make(map[string]int) // path → lines
-	for _, f := range heavy {
-		content, err := RefFileAt(owner, name, sha, f)
-		lines := 0
-		if err == nil {
-			lines = strings.Count(content, "\n") + 1
-		}
-		allFiles[f] = lines
-
-		dir := f
-		if idx := strings.LastIndex(f, "/"); idx >= 0 {
-			dir = f[:idx]
-		} else {
-			dir = "."
-		}
-		if dirs[dir] == nil {
-			dirs[dir] = &dirStat{}
-		}
-		dirs[dir].files++
-		dirs[dir].lines += lines
-	}
-	for _, lf := range light {
-		allFiles[lf.path] = lf.lines
-		dir := lf.path
-		if idx := strings.LastIndex(lf.path, "/"); idx >= 0 {
-			dir = lf.path[:idx]
-		} else {
-			dir = "."
-		}
-		if dirs[dir] == nil {
-			dirs[dir] = &dirStat{}
-		}
-		dirs[dir].files++
-		dirs[dir].lines += lf.lines
-	}
-
-	// build a VERY short prompt — child must output exactly "keep=..." and nothing else
-	var prompt strings.Builder
-	prompt.WriteString(fmt.Sprintf("%d directories in %s/%s. which have core algorithms?\n\n",
-		len(dirs), owner, name))
-
-	var sortedDirs []string
-	for d := range dirs {
-		sortedDirs = append(sortedDirs, d)
-	}
-	sort.Strings(sortedDirs)
-
-	for _, d := range sortedDirs {
-		s := dirs[d]
-		prompt.WriteString(fmt.Sprintf("%s  %d files %d lines\n", d, s.files, s.lines))
-	}
-
-	prompt.WriteString("\nreply ONLY: keep=dir1,dir2,dir3\nskip tests, benchmarks, examples, docs, CI, vendored, build scripts.\n")
-
-	var keepDirs []string
-	for attempt := 1; attempt <= 5; attempt++ {
-		child, err := Fork(prompt.String(), ".")
-		if err != nil {
-			log.Printf("dirSurveyChild: fork failed (attempt %d/5): %v", attempt, err)
-			continue
-		}
-		Wait(child)
-
-		stdout := GetResult(child)
-		log.Printf("dirSurveyChild: child returned %d bytes (attempt %d/5)", len(stdout), attempt)
-
-		for _, line := range strings.Split(stdout, "\n") {
-			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, "keep=") {
-				for _, d := range strings.Split(line[5:], ",") {
-					d = strings.TrimSpace(d)
-					if d != "" {
-						keepDirs = append(keepDirs, d)
-					}
-				}
-			}
-		}
-
-		if len(keepDirs) > 0 {
-			break
-		}
-		log.Printf("dirSurveyChild: no keep dirs parsed (attempt %d/5), retrying", attempt)
-	}
-
-	if len(keepDirs) == 0 {
-		log.Printf("dirSurveyChild: all attempts failed, skipping prune")
-		return nil
-	}
-
-	log.Printf("dirSurveyChild: keeping %d dirs: %v", len(keepDirs), keepDirs)
-
-	// filter: files in keep dirs stay heavy, rest become light
-	isKept := func(path string) bool {
-		for _, d := range keepDirs {
-			if strings.HasPrefix(path, d+"/") || path == d || d == "." {
-				return true
-			}
-		}
-		return false
-	}
-
-	var newHeavy []string
-	var newLight []lightFile
-	for _, f := range heavy {
-		if isKept(f) {
-			newHeavy = append(newHeavy, f)
-		} else {
-			newLight = append(newLight, lightFile{f, allFiles[f]})
-		}
-	}
-	for _, lf := range light {
-		newLight = append(newLight, lf) // already light, stays light
-	}
-
-	return &surveyOutput{heavy: newHeavy, light: newLight}
 }
 
 // fileSurveyChild: fork a child that sees the file listing + first 10 lines
@@ -580,7 +452,7 @@ func fileSurveyChild(owner, name, sha string, initHeavy []string, initLight []li
 
 	allFiles := make(map[string]int) // path → lines
 	for _, f := range initHeavy {
-		content, err := RefFileAt(owner, name, sha, f)
+		content, err := refFileAtFn(owner, name, sha, f)
 		if err != nil {
 			continue
 		}
@@ -591,7 +463,7 @@ func fileSurveyChild(owner, name, sha string, initHeavy []string, initLight []li
 	}
 	for _, lf := range initLight {
 		allFiles[lf.path] = lf.lines
-		content, err := RefFileAt(owner, name, sha, lf.path)
+		content, err := refFileAtFn(owner, name, sha, lf.path)
 		if err != nil {
 			continue
 		}
@@ -601,6 +473,7 @@ func fileSurveyChild(owner, name, sha string, initHeavy []string, initLight []li
 	prompt.WriteString("output ONLY two lines, nothing else:\n")
 	prompt.WriteString("heavy=comma,separated,paths\n")
 	prompt.WriteString("light=comma,separated,paths\n")
+	prompt.WriteString(DoneInstruction())
 
 	var heavyPaths, lightPaths []string
 	for attempt := 1; attempt <= 5; attempt++ {
@@ -645,33 +518,7 @@ func fileSurveyChild(owner, name, sha string, initHeavy []string, initLight []li
 		return nil
 	}
 
-	// build output, defaulting unmentioned files to kernel's classification
-	mentioned := make(map[string]bool)
-	for _, p := range heavyPaths {
-		mentioned[p] = true
-	}
-	for _, p := range lightPaths {
-		mentioned[p] = true
-	}
-
-	// unmentioned heavy files stay heavy
-	for _, f := range initHeavy {
-		if !mentioned[f] {
-			heavyPaths = append(heavyPaths, f)
-		}
-	}
-	// unmentioned light files stay light
-	var lightOut []lightFile
-	for _, p := range lightPaths {
-		lightOut = append(lightOut, lightFile{p, allFiles[p]})
-	}
-	for _, lf := range initLight {
-		if !mentioned[lf.path] {
-			lightOut = append(lightOut, lf)
-		}
-	}
-
-	return &surveyOutput{heavy: heavyPaths, light: lightOut}
+	return applySurvey(heavyPaths, lightPaths, initHeavy, initLight, allFiles)
 }
 
 type lightFile struct {

@@ -220,8 +220,8 @@ func dev_run_planner(pid int64, repo string, mods []DevModule, branch string) []
 			"output ONLY lines like:\n"+
 			"unit: module_name_1, module_name_2\n"+
 			"unit: module_name_3\n"+
-			"copy the module names EXACTLY from the list. one line per unit. nothing else.\n",
-		len(mods), len(mods), list.String(), maxBytes, maxModules)
+			"copy the module names EXACTLY from the list. one line per unit. nothing else.\n%s",
+		len(mods), len(mods), list.String(), maxBytes, maxModules, DoneInstruction())
 
 	out := devPlannerRunner(pid, repo, prompt)
 	log.Printf("dev_plan: %s planner returned %d bytes", repo, len(out))
@@ -311,7 +311,7 @@ func dev_split_node(pid int64, p *DevPlan, nodeID, repo, devRepo, branch, theory
 		for _, m := range mods {
 			prompt += fmt.Sprintf("  %s (%d bytes)\n", m.Name, m.Bytes)
 		}
-		prompt += "\n[OUTPUT FORMAT]\nonly lines like `unit: a, b`. copy names exactly. every module exactly once.\n"
+		prompt += "\n[OUTPUT FORMAT]\nonly lines like `unit: a, b`. copy names exactly. every module exactly once.\n" + DoneInstruction()
 		out := devPlannerRunner(pid, repo, prompt)
 		g, _, unclaimed := parseDevPlanOutput(out, mods)
 		if len(unclaimed) > 0 && len(g) > 0 {
@@ -336,7 +336,7 @@ func dev_split_node(pid int64, p *DevPlan, nodeID, repo, devRepo, branch, theory
 		for _, id := range idents {
 			prompt += "  " + id + "\n"
 		}
-		prompt += "\n[OUTPUT FORMAT]\nonly lines like `group: item_a, item_b, item_c`. copy item names exactly. every item exactly once.\n"
+		prompt += "\n[OUTPUT FORMAT]\nonly lines like `group: item_a, item_b, item_c`. copy item names exactly. every item exactly once.\n" + DoneInstruction()
 		out := devPlannerRunner(pid, repo, prompt)
 		gs := parseItemGroups(out, idents)
 		if len(gs) < 2 {

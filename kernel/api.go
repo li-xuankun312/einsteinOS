@@ -263,7 +263,7 @@ func Fork(prompt string, pwd string) (int64, error) {
 			forkConvMu.Unlock()
 
 			metaMu.Lock()
-			meta.Result = stdout
+			meta.Result = StripDoneMarker(stdout)
 			meta.StdErr = stderr
 			if childConvID != "" {
 				meta.ConvID = childConvID
