@@ -40,6 +40,13 @@ func (d *PRDriver) Execute(name string, inputJSON string, workDir string) string
 }
 
 func pr_driver_setup(task string) string {
+	// refuse BEFORE anything is forked: the pipeline starts with hw_probe and then
+	// runs the theory phase, which verifies every proof through Axle. Failing later,
+	// at ref_bind, would first spend the hardware probe's calls (axle_creds.go).
+	if !AxleConfigured() {
+		return "pr_setup refused: Axle credentials are not configured. Set AXLE_COOKIE and AXLE_CSRF " +
+			"in the environment of the einsteinOS process and start it again; nothing was started."
+	}
 	refs := PRSetup(task)
 	if len(refs) == 0 {
 		return "0 reference repos found"

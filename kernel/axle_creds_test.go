@@ -97,3 +97,15 @@ func TestNoCredentialShapedStringsInSource(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestPRSetupRefusesBeforeForkingAnything(t *testing.T) {
+	clearAxle(t)
+	before := len(prTable)
+	out := pr_driver_setup("build something from github.com/o/r")
+	if !strings.Contains(out, "refused") || !strings.Contains(out, "AXLE_COOKIE") {
+		t.Fatalf("refusal must name what to set: %q", out)
+	}
+	if len(prTable) != before {
+		t.Fatal("a PR process was created although the setup was refused")
+	}
+}
