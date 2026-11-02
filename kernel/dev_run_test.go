@@ -152,7 +152,7 @@ func TestDevFromTheorems_HappyPath_KernelVerifiesAndPushes(t *testing.T) {
 		env.model.writeScripts(unit, 0, 0, "built")
 	}
 	const pid = 9001
-	branch := fmt.Sprintf("einsteinOS/dev-%d", pid)
+	branch := devBranchFor("ref/proj", "refsha1", pid)
 
 	out, err := dev_from_theorems(pid, &Step{Owner: "ref", Repo: "proj"})
 	if err != nil {
@@ -220,7 +220,7 @@ func TestDevFromTheorems_FailThenFix_RealErrorReachesTheFixConversation(t *testi
 		env.model.writeScripts(unit, 0, 0, "built")
 	}
 	const pid = 9002
-	branch := fmt.Sprintf("einsteinOS/dev-%d", pid)
+	branch := devBranchFor("ref/proj", "refsha1", pid)
 
 	if _, err := dev_from_theorems(pid, &Step{Owner: "ref", Repo: "proj"}); err != nil {
 		t.Fatal(err)
@@ -280,7 +280,7 @@ func TestDevFromTheorems_ReentryResumesAndNeverReplans(t *testing.T) {
 	if plannerCalls != 1 {
 		t.Fatalf("the planner ran %d times: a failure inside the run must never trigger a re-plan", plannerCalls)
 	}
-	branch := fmt.Sprintf("einsteinOS/dev-%d", pid)
+	branch := devBranchFor("ref/proj", "refsha1", pid)
 	for _, u := range []string{"M00", "M04", "M08"} {
 		if !strings.Contains(bareShow(env.bare, branch+":"+devPlanFile), u+".lean") {
 			t.Fatalf("plan.json lost %s", u)
@@ -359,7 +359,7 @@ func TestTheoryPhaseOutputRunsThroughTheDevLoopToAFinishedBranch(t *testing.T) {
 		env.model.writeScripts(unit, 0, 0, "built")
 	}
 	const pid = 9101
-	branch := fmt.Sprintf("einsteinOS/dev-%d", pid)
+	branch := devBranchFor("ref/proj", "refsha1", pid)
 
 	if _, err := dev_from_theorems(pid, &Step{Owner: "ref", Repo: "proj"}); err != nil {
 		t.Fatalf("the loop did not close: %v", err)
