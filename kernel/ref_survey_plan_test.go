@@ -337,3 +337,80 @@ func TestNoDirectoryPartForSmallRepositories(t *testing.T) {
 		t.Fatal("60 files: no directory step (the old threshold was 200)")
 	}
 }
+
+// ---- chunk sizes ------------------------------------------------------------------------------
+
+func mkChunks(sizes ...int) [][]string {
+	var out [][]string
+	n := 0
+	for _, sz := range sizes {
+		var c []string
+		for i := 0; i < sz; i++ {
+			c = append(c, fmt.Sprintf("f%03d.cpp", n))
+			n++
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+func flat(chunks [][]string) string {
+	var all []string
+	for _, c := range chunks {
+		all = append(all, c...)
+	}
+	return strings.Join(all, ",")
+}
+
+func TestCoalesceChunksMergesTheTinyChunksOfTheFifteenChunkRun(t *testing.T) {
+	// what the 2026/11/02 run produced: 15 chunks of 2-3 files for ~40 files
+	in := mkChunks(2, 3, 2, 3, 2, 3, 3, 2, 3, 2, 3, 3, 2, 3, 3)
+	out := coalesceChunks(in)
+	if flat(out) != flat(in) {
+		t.Fatal("files lost, duplicated or reordered")
+	}
+	if len(out) > 7 || len(out) < 4 {
+		t.Fatalf("%d chunks (sizes %v): 15 tiny chunks should come down to about 5", len(out), chunkSizes(out))
+	}
+	for i, c := range out {
+		if len(c) > chunkHardMax {
+			t.Fatalf("chunk %d has %d files, over the hard max", i, len(c))
+		}
+	}
+	for i, c := range out[:len(out)-1] {
+		if len(c) < chunkSmall {
+			t.Fatalf("chunk %d still has %d files (sizes %v)", i, len(c), chunkSizes(out))
+		}
+	}
+}
+
+func TestCoalesceChunksLeavesAGoodPlanAlone(t *testing.T) {
+	for _, sizes := range [][]int{{9, 10, 10, 10, 4}, {10, 10, 10}, {12, 12}, {8}, {}} {
+		in := mkChunks(sizes...)
+		out := coalesceChunks(in)
+		if fmt.Sprint(chunkSizes(out)) != fmt.Sprint(sizes) && len(sizes) > 0 {
+			t.Errorf("a plan of %v must not change, got %v", sizes, chunkSizes(out))
+		}
+	}
+}
+
+func TestCoalesceChunksNeverBuildsAChunkPastTheLimits(t *testing.T) {
+	// a small chunk next to a big one cannot join it
+	out := coalesceChunks(mkChunks(5, 12, 2))
+	if fmt.Sprint(chunkSizes(out)) != "[5 12 2]" && fmt.Sprint(chunkSizes(out)) != "[5 14]" {
+		t.Fatalf("%v", chunkSizes(out))
+	}
+	for _, c := range out {
+		if len(c) > chunkHardMax {
+			t.Fatalf("%v", chunkSizes(out))
+		}
+	}
+	// a last chunk of 1-3 files joins the previous one when it fits
+	if got := chunkSizes(coalesceChunks(mkChunks(10, 10, 2))); fmt.Sprint(got) != "[10 12]" {
+		t.Fatalf("%v", got)
+	}
+	// but not past the hard max
+	if got := chunkSizes(coalesceChunks(mkChunks(10, 15, 3))); fmt.Sprint(got) != "[10 15 3]" {
+		t.Fatalf("%v", got)
+	}
+}

@@ -48,6 +48,11 @@ func ref_split_with(parent_pid int64, owner, repo, sha string, files []string, t
 	if len(chunks) == 0 {
 		chunks = theory_plan(parent_pid, owner, repo, files)
 	}
+	if merged := coalesceChunks(chunks); len(merged) != len(chunks) {
+		log.Printf("ref_split: %s/%s the plan had %d chunks (sizes %v); chunks below %d files were merged → %d chunks",
+			owner, repo, len(chunks), chunkSizes(chunks), chunkSmall, len(merged))
+		chunks = merged
+	}
 
 	log.Printf("ref_split: %s/%s@%s depth=%d %d files -> %d chunks (planner)",
 		owner, repo, short_sha(sha), depth, len(files), len(chunks))
@@ -163,8 +168,8 @@ func ref_split_with(parent_pid int64, owner, repo, sha string, files []string, t
 			prevSize := len(result)
 			maxSeen := len(result)
 			stableCount := 0
-			staleCount := 0     // consecutive polls with no growth (including errors)
-			continueWaste := 0  // consecutive ContinueConv with tiny pure-text response (child says "done")
+			staleCount := 0    // consecutive polls with no growth (including errors)
+			continueWaste := 0 // consecutive ContinueConv with tiny pure-text response (child says "done")
 			for poll := 0; staleCount < 5; poll++ {
 				time.Sleep(3 * time.Minute)
 				if time.Now().After(pollDeadline) {
@@ -524,7 +529,6 @@ func ref_store_chunk(convID string, chunkIdx int, owner, repo string) {
 	log.Printf("ref_store_chunk: %s merged into %s and pushed — later chunks can now read it", chunkName, baseBranch)
 }
 
-
 func copyFile(src, dst string) error {
 	// ensure parent dir exists
 	if idx := strings.LastIndex(dst, "/"); idx > 0 {
@@ -656,6 +660,56 @@ func parsePlanLines(output string, files []string) (chunks [][]string, unclaimed
 		}
 	}
 	return chunks, unclaimed
+}
+
+// The sizes the planner is told to aim for (theory_plan's rules: ~50 tool calls per
+// conversation, ~4 per file, so 8-12 files; "1-3 files wastes a conversation").
+// A planner that cuts finer than that is not obeyed by the model alone, so the
+// kernel enforces the same numbers: coalesceChunks.
+const (
+	chunkSmall   = 6  // a chunk below this is merged into its neighbour
+	chunkTarget  = 12 // merging stops once a chunk would pass this
+	chunkWaste   = 4  // a LAST chunk below this goes into the previous one
+	chunkHardMax = 15 // and never past this
+)
+
+// coalesceChunks merges neighbouring chunks that are too small. It keeps every file
+// exactly once and keeps the planner's order (it puts related files next to each
+// other, so adjacent chunks are the natural ones to join). A plan whose chunks are
+// already the right size is returned unchanged.
+func coalesceChunks(chunks [][]string) [][]string {
+	if len(chunks) < 2 {
+		return chunks
+	}
+	var out [][]string
+	var cur []string
+	for _, c := range chunks {
+		switch {
+		case cur == nil:
+			cur = append([]string(nil), c...)
+		case len(cur) < chunkSmall && len(cur)+len(c) <= chunkTarget:
+			cur = append(cur, c...)
+		default:
+			out = append(out, cur)
+			cur = append([]string(nil), c...)
+		}
+	}
+	if cur != nil {
+		out = append(out, cur)
+	}
+	if n := len(out); n >= 2 && len(out[n-1]) < chunkWaste && len(out[n-2])+len(out[n-1]) <= chunkHardMax {
+		out[n-2] = append(out[n-2], out[n-1]...)
+		out = out[:n-1]
+	}
+	return out
+}
+
+func chunkSizes(chunks [][]string) []int {
+	out := make([]int, len(chunks))
+	for i, c := range chunks {
+		out[i] = len(c)
+	}
+	return out
 }
 
 // redistributeUnclaimed puts files the planner did not place into the last chunk
@@ -898,7 +952,6 @@ func SplitStatus() string {
 	}
 	return out
 }
-
 
 // chunk_fill_missing asks the SAME conversation to cover the files still missing,
 // at most twice, and only when the conversation has settled. Sending into a
