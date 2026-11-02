@@ -157,6 +157,10 @@ func (s *ShadowExecutor) Execute(toolName string, inputJSON string) string {
 	// the same file 10+ times in a loop trying to get untruncated content.
 	// git state is shared via GitHub — no local side-effects needed.
 	if isGitCommand(command) {
+		// the sandbox's output stands, but the local machine keeps up with what the
+		// child cloned (kernel/git_twin.go): a clone is mirrored once, shallow, with
+		// the kernel's own credentials; the child's token is never used.
+		kernel.GitTwinSync(command, s.WorkDir)
 		log.Printf("[shadow] skip git (remote has full output)")
 		return ""
 	}
@@ -180,6 +184,13 @@ func (s *ShadowExecutor) Execute(toolName string, inputJSON string) string {
 	if strings.Contains(command, "elan") || strings.Contains(command, "leanprover") ||
 		strings.Contains(command, "lean4") || strings.Contains(command, "lean --version") {
 		log.Printf("[shadow] skip lean/elan install (Axle verifies remotely)")
+		return ""
+	}
+
+	// a command that reads inside a git twin: the sandbox has the full output, the
+	// local result would be cut at kernel.LocalOutputCap and overwrite it.
+	if kernel.GitTwinTouches(command) {
+		log.Printf("[shadow] skip: reads inside a git twin (remote has full output)")
 		return ""
 	}
 
