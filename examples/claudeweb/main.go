@@ -86,6 +86,16 @@ func main() {
 	kernel.Init()
 	kernel.SyscallInit()
 
+	// the request window survives a restart: the proxy still remembers what the last
+	// process sent, so a new process must not start with a full budget
+	apiWindowPath := os.Getenv("EINSTEINOS_API_WINDOW")
+	if apiWindowPath == "" {
+		if home, herr := os.UserHomeDir(); herr == nil {
+			apiWindowPath = home + "/.einsteinos/api_window.json"
+		}
+	}
+	claudeweb.SetAPIWindowPath(apiWindowPath)
+
 	// the conversation tree survives a restart: who started whom, what is done
 	regPath := os.Getenv("EINSTEINOS_CONV_REGISTRY")
 	if regPath == "" {

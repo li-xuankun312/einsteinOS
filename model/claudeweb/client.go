@@ -9,7 +9,6 @@ import (
 	"log"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -53,41 +52,9 @@ func NewClient(cfg ClientConfig) *Client {
 	}
 }
 
-const (
-	apiWindowSize = 9
-	apiWindowDur  = 10 * time.Minute
-)
-
-var (
-	apiCallTimes [apiWindowSize]time.Time
-	apiCallIdx   int
-	apiCallMu    sync.Mutex
-)
-
-func apiThrottle() {
-	apiCallMu.Lock()
-	defer apiCallMu.Unlock()
-
-	oldest := apiCallTimes[apiCallIdx%apiWindowSize]
-	if !oldest.IsZero() {
-		elapsed := time.Since(oldest)
-		if elapsed < apiWindowDur {
-			wait := apiWindowDur - elapsed
-			log.Printf("api_throttle: %d calls in %v, sleeping %v",
-				apiWindowSize, elapsed.Truncate(time.Second), wait.Truncate(time.Second))
-			apiCallMu.Unlock()
-			time.Sleep(wait)
-			apiCallMu.Lock()
-		}
-	}
-	apiCallTimes[apiCallIdx%apiWindowSize] = time.Now()
-	apiCallIdx++
-}
-
 // Completion sends a completion request and returns the raw SSE response body.
 // The caller is responsible for closing the body.
 func (c *Client) Completion(convID string, req *CompletionRequest) (io.ReadCloser, error) {
-	apiThrottle()
 	url := fmt.Sprintf("%s/api/organizations/%s/chat_conversations/%s/completion",
 		c.baseURL, c.orgID, convID)
 
@@ -131,8 +98,13 @@ func (c *Client) Completion(convID string, req *CompletionRequest) (io.ReadClose
 			httpReq.Header.Set("Cookie", c.cookie)
 		}
 
+		// every attempt that reaches the proxy is a question to it (api_window.go)
+		slot := apiWin.acquire()
 		resp, err := c.httpClient.Do(httpReq)
 		if err != nil {
+			if requestNeverSent(err) {
+				apiWin.refund(slot)
+			}
 			lastErr = fmt.Errorf("http request: %w", err)
 			log.Printf("claudeweb: attempt %d http error: %v", attempt, err)
 			continue
@@ -192,8 +164,12 @@ func (c *Client) Completion(convID string, req *CompletionRequest) (io.ReadClose
 		httpReq.Header.Set("anthropic-client-platform", "web_claude_ai")
 		httpReq.Header.Set("anthropic-client-version", "1.0.0")
 		httpReq.Header.Set("Cookie", c.cookie)
+		slot := apiWin.acquire()
 		resp, err := c.httpClient.Do(httpReq)
 		if err != nil {
+			if requestNeverSent(err) {
+				apiWin.refund(slot)
+			}
 			lastErr = fmt.Errorf("http request: %w", err)
 			log.Printf("claudeweb: slow retry %d/3 http error: %v", slowAttempt+1, err)
 			continue
