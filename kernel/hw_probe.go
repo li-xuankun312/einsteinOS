@@ -21,9 +21,16 @@ func hwProbePrompt() string {
 		LocalOutputCap(), DoneInstruction())
 }
 
-// gpuIndexCmd lists the GPU device indices on this machine: /dev/iluvatar<N> and
-// /dev/nvidia<N> (not nvidiactl, nvidia-uvm…), numerically sorted, comma separated.
-const gpuIndexCmd = `ls /dev 2>/dev/null | sed -n -e 's/^iluvatar\([0-9][0-9]*\)$/\1/p' -e 's/^nvidia\([0-9][0-9]*\)$/\1/p' | sort -n | uniq | paste -sd, -`
+// gpuIndexCmd lists the GPU device indices under devDir: /dev/iluvatar<N> when any
+// exist, otherwise /dev/nvidia<N> (not nvidiactl, nvidia-uvm…). One vendor, not both:
+// on the Iluvatar machine /dev holds iluvatar0-3 AND nvidia0-7 (corex's compatibility
+// nodes), and merging them reported 8 GPUs for a machine with 4 cards.
+func gpuIndexCmd(devDir string) string {
+	list := func(vendor string) string {
+		return "ls " + shq(devDir) + " 2>/dev/null | sed -n 's/^" + vendor + "\\([0-9][0-9]*\\)$/\\1/p' | sort -n | uniq | paste -sd, -"
+	}
+	return "ids=$(" + list("iluvatar") + "); if [ -z \"$ids\" ]; then ids=$(" + list("nvidia") + "); fi; echo \"$ids\""
+}
 
 // gpuProbeFn runs a command on this machine and returns its stdout; a variable so
 // parsing can be tested without a booted kernel.
@@ -46,7 +53,7 @@ var gpuProbeFn = func(cmd string) (string, error) {
 // the measurement worked. An empty answer with measured=true means: this machine
 // has no GPU device nodes.
 func detectLocalGPUs() (string, bool) {
-	out, err := gpuProbeFn(gpuIndexCmd)
+	out, err := gpuProbeFn(gpuIndexCmd("/dev"))
 	if err != nil {
 		return "", false
 	}
