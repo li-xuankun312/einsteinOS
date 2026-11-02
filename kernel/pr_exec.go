@@ -2262,6 +2262,36 @@ func writeGHToken(text string) {
 	}
 }
 
+// ghTokenFile is where the kernel, and the conversations it starts, read the GitHub
+// token from.
+const ghTokenFile = "/tmp/.gh_token"
+
+// writeTokenFile writes token to path, readable by this user only.
+func writeTokenFile(path, token string) bool {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return false
+	}
+	if err := os.WriteFile(path, []byte(token), 0o600); err != nil {
+		log.Printf("gh_token: could not write %s: %v", path, err)
+		return false
+	}
+	return os.Chmod(path, 0o600) == nil
+}
+
+// WriteGHTokenFromEnv puts GITHUB_TOKEN where the kernel reads it. The token used to
+// reach /tmp/.gh_token only by being typed into the task text, which meant typing it
+// into the terminal (and so into the screen log) and sending it to the main
+// conversation in the prompt. With the variable set, neither is needed; the value is
+// never logged.
+func WriteGHTokenFromEnv() bool {
+	if !writeTokenFile(ghTokenFile, os.Getenv("GITHUB_TOKEN")) {
+		return false
+	}
+	log.Printf("gh_token: wrote the token from GITHUB_TOKEN to %s", ghTokenFile)
+	return true
+}
+
 func strip_credentials(s string) string {
 	var lines []string
 	for _, line := range strings.Split(s, "\n") {

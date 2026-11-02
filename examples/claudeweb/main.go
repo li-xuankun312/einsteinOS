@@ -75,6 +75,10 @@ func main() {
 		log.Printf("WARNING: AXLE_COOKIE is not set — proofs cannot be verified, and the theory phase will refuse to start")
 	}
 
+	// a GitHub token from the environment goes where the kernel reads it, so it never
+	// has to be typed into the terminal (and the screen log) or sent in the task text
+	kernel.WriteGHTokenFromEnv()
+
 	claudeweb.BuildSystemPrompt(cfg.axleCookie, cfg.axleCSRF)
 
 	fmt.Println("einsteinOS v0.11-go booting...")
