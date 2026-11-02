@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -597,6 +598,70 @@ func axleCurlRounds(total int, preferDirect bool) []axleCurlRound {
 	return rounds
 }
 
+// axleIdleGuard: how long a multi-request command may print nothing before it counts
+// as stalled. Longer than Axle's own per-proof limit (the requests ask for 120 s).
+func axleIdleGuard() time.Duration {
+	if d, err := time.ParseDuration(strings.TrimSpace(os.Getenv("EINSTEIN_AXLE_IDLE"))); err == nil && d > 0 {
+		return d
+	}
+	return 150 * time.Second
+}
+
+var (
+	loopWordRe = regexp.MustCompile(`(?m)(^|[;&|({]|\s)(for|while|until)\s|\bxargs\b|\bparallel\b`)
+)
+
+// isMultiRequestCommand: a command that makes more than one request — a shell loop, a
+// parallel runner, or several curl invocations.
+func isMultiRequestCommand(command string) bool {
+	return loopWordRe.MatchString(command) || len(curlWordRe.FindAllString(command, -1)) > 1
+}
+
+// axleExecMulti runs a multi-request command once, on the path that last worked.
+//   - it finishes: its whole output goes back;
+//   - it stalls after printing something: what it printed goes back, with a note, and
+//     the child redoes only what is missing (re-running the whole loop is what stalled);
+//   - it stalls before printing anything: the network is the suspect, so it is tried
+//     again, on the other path first, up to three times in all.
+func axleExecMulti(command string, workDir string) string {
+	prefer := axleDirectPreferred.Load()
+	order := []bool{prefer, !prefer, prefer}
+	idle := axleIdleGuard()
+	timeouts := 0
+	for i, unset := range order {
+		path := "proxy"
+		if unset {
+			path = "direct"
+		}
+		run := axleRunGuarded(command, workDir, unset, axleScriptGuard, idle)
+		trimmed := strings.TrimSpace(run.Stdout)
+		switch {
+		case run.TimedOut && trimmed != "":
+			log.Printf("[shadow] axle-multi %s: stalled after %s with output (%d bytes) — returning what it printed",
+				path, run.Elapsed.Round(time.Second), len(run.Stdout))
+			return fmt.Sprintf("[pid 0 exit=124] axle: this command printed nothing for %s and was stopped. "+
+				"Output so far (redo only what is missing, in smaller batches):\n%s%s", idle, run.Stdout, run.Stderr)
+		case run.TimedOut:
+			timeouts++
+			log.Printf("[shadow] axle-multi %s %d/%d: no output at all for %s", path, i+1, len(order), idle)
+			continue
+		case trimmed == "" && !retryableFailure(run):
+			log.Printf("[shadow] axle-multi %s: command failed in %s (exit %d) — not retrying: %s",
+				path, run.Elapsed.Round(time.Millisecond), run.ExitCode, truncateCmd(redactAxle(run.Stderr), 200))
+			return formatAxleRun(run)
+		case trimmed == "":
+			log.Printf("[shadow] axle-multi %s %d/%d: network-looking failure (exit %d)", path, i+1, len(order), run.ExitCode)
+			continue
+		}
+		log.Printf("[shadow] axle-multi %s: finished in %s, %d bytes", path, run.Elapsed.Round(time.Second), len(run.Stdout))
+		axleDirectPreferred.Store(unset)
+		return fmt.Sprintf("[pid 0 exit=0] %s", run.Stdout)
+	}
+	log.Printf("[shadow] axle-multi: %d attempts, none produced output (%d stalled)", len(order), timeouts)
+	return fmt.Sprintf(axleCurlExhaustedPrefix+"[pid 0 exit=28] axle: no response from the local machine after %d attempts (%d stalled). "+
+		"This is a network problem, not a proof failure — retry later.", len(order), timeouts)
+}
+
 func axleExecWithRetryCurl(command string, workDir string) string {
 	// a script, not a curl: one run, long guard, report everything it printed
 	if !curlWordRe.MatchString(command) {
@@ -610,6 +675,16 @@ func axleExecWithRetryCurl(command string, workDir string) string {
 				axleScriptGuard, run.Stdout, run.Stderr)
 		}
 		return formatAxleRun(run)
+	}
+
+	// A loop, or more than one curl: many requests in one command. The schedule below
+	// is for ONE request (15 s per whole command, up to 30 attempts): a loop over a
+	// dozen files needs longer than 15 s as soon as Axle is a little slow, and then every
+	// attempt kills it and runs it again from the start — six minutes and more of
+	// nothing (2026/11/02 09:25-09:31). Such a command runs once and is judged by
+	// whether it is still producing output.
+	if isMultiRequestCommand(command) {
+		return axleExecMulti(command, workDir)
 	}
 
 	// How many independent connection attempts this gets, total, across both
@@ -658,6 +733,29 @@ func axleExecWithRetryCurl(command string, workDir string) string {
 // axleRunOnce runs command under bash with a hard timeout and captures stdout,
 // stderr, the exit code and whether the timeout fired.
 func axleRunOnce(command string, workDir string, unsetProxy bool, timeout time.Duration) axleRun {
+	return axleRunGuarded(command, workDir, unsetProxy, timeout, 0)
+}
+
+// activityWriter counts as progress every byte the command prints.
+type activityWriter struct {
+	buf  *bytes.Buffer
+	mu   *sync.Mutex
+	last *time.Time
+}
+
+func (w activityWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	*w.last = time.Now()
+	return w.buf.Write(p)
+}
+
+// axleRunGuarded is axleRunOnce with a second guard: if idle > 0, the command is also
+// killed when it prints NOTHING for idle (TimedOut is then true, and Stdout holds what
+// it had printed). A fixed total time is the wrong measure for a command that makes
+// many requests: it fails exactly when each request is slow, and re-running it from
+// the start fails the same way.
+func axleRunGuarded(command string, workDir string, unsetProxy bool, timeout, idle time.Duration) axleRun {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
@@ -681,7 +779,10 @@ func axleRunOnce(command string, workDir string, unsetProxy bool, timeout time.D
 	}
 	cmd.Env = env
 	var stdout, stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	var mu sync.Mutex
+	last := time.Now()
+	cmd.Stdout = activityWriter{&stdout, &mu, &last}
+	cmd.Stderr = activityWriter{&stderr, &mu, &last}
 
 	t0 := time.Now()
 	if startErr := cmd.Start(); startErr != nil {
@@ -692,10 +793,45 @@ func axleRunOnce(command string, workDir string, unsetProxy bool, timeout time.D
 	// same isolation means a Ctrl-C to the program would otherwise never reach it. Track it
 	// so the program's own signal handler can still kill it (see kernel/proc_registry.go).
 	kernel.TrackProcessGroup(cmd.Process.Pid)
+
+	stalled := make(chan struct{})
+	var stalledOnce sync.Once
+	finished := make(chan struct{})
+	if idle > 0 {
+		go func() {
+			tick := time.NewTicker(250 * time.Millisecond)
+			defer tick.Stop()
+			for {
+				select {
+				case <-finished:
+					return
+				case <-tick.C:
+					mu.Lock()
+					quiet := time.Since(last)
+					mu.Unlock()
+					if quiet >= idle {
+						stalledOnce.Do(func() { close(stalled) })
+						cancel()
+						return
+					}
+				}
+			}
+		}()
+	}
 	err := cmd.Wait()
+	close(finished)
 	kernel.UntrackProcessGroup(cmd.Process.Pid)
+	mu.Lock()
 	run := axleRun{Stdout: stdout.String(), Stderr: stderr.String(), Elapsed: time.Since(t0)}
-	run.TimedOut = ctx.Err() == context.DeadlineExceeded
+	mu.Unlock()
+	select {
+	case <-stalled:
+		run.TimedOut = true
+	default:
+	}
+	if ctx.Err() == context.DeadlineExceeded {
+		run.TimedOut = true
+	}
 	if err != nil {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {
