@@ -270,6 +270,11 @@ func Fork(prompt string, pwd string) (int64, error) {
 				meta.ConvID = childConvID
 			}
 			metaMu.Unlock()
+			// every forked conversation is done when its fork returns — reviews, the planner and
+			// the probe used to stay "running" in the registry because only some callers said so
+			if childConvID != "" {
+				ConvDone(childConvID, "done")
+			}
 
 			schedMu.Lock()
 			for i := 1; i < NR_TASKS; i++ {
@@ -736,8 +741,34 @@ func DownloadFile(convID, path string) ([]byte, error) {
 	return downloadFileFn(convID, path)
 }
 
+// RegisterConv records a conversation, one row per conversation: registering it again (the
+// fork registers it as "child" before its role is known; the caller then registers its role)
+// fills in what the first registration did not know instead of adding a row. The 11/03
+// registry listed every conversation twice, once with an empty repo.
 func RegisterConv(parentPid int64, convID, repo, role string, phase int) {
 	convRegistryMu.Lock()
+	for i := range convRegistry {
+		r := &convRegistry[i]
+		if r.ConvID != convID {
+			continue
+		}
+		if repo != "" {
+			r.Repo = repo
+		}
+		if role != "" && role != "child" {
+			r.Role, r.Kind = role, convKindForRole(role)
+		}
+		if phase != 0 {
+			r.Phase = phase
+		}
+		if parentPid != 0 && r.ParentPid == 0 {
+			r.ParentPid = parentPid
+		}
+		persistConvRegistryLocked()
+		convRegistryMu.Unlock()
+		log.Printf("conv_registry: updated %s repo=%s role=%s phase=%d", shortID(convID), r.Repo, r.Role, r.Phase)
+		return
+	}
 	convRegistry = append(convRegistry, ConvRecord{
 		ConvID:    convID,
 		ParentPid: parentPid,
@@ -751,7 +782,7 @@ func RegisterConv(parentPid int64, convID, repo, role string, phase int) {
 	persistConvRegistryLocked()
 	convRegistryMu.Unlock()
 	log.Printf("conv_registry: registered %s repo=%s role=%s phase=%d",
-		convID[:8], repo, role, phase)
+		shortID(convID), repo, role, phase)
 }
 
 // ConvDone marks every registry row for convID as no longer running.
