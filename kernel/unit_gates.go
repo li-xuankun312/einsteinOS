@@ -28,6 +28,7 @@ type GateInput struct {
 const (
 	gateGPUCodeMissingFmt = "gpu_code_missing: the unit's modules come from CUDA sources in the reference (%[1]s) but it wrote no .cu/.cuh file"
 	gateGPUNotCompiledFmt = "gpu_not_compiled: build.sh ran no CUDA compile of %[1]s (CUDA compiles seen: %[2]s)"
+	gateGPUUnusedFmt      = "gpu_unused: test.sh exited 0 but none of its %[1]d process(es) opened a GPU device (%[2]s); executables that ran: %[3]s"
 )
 
 // unitGates returns the first failed gate's kind and the text of every failed gate.
@@ -45,6 +46,11 @@ func unitGates(in GateInput) (kind, text string) {
 		if missing := notCudaCompiled(gpuFiles, in.Build.Cmdlines); len(missing) > 0 {
 			fail("gpu_not_compiled", fmt.Sprintf(gateGPUNotCompiledFmt, strings.Join(missing, ", "), cudaCompilesSeen(in.Build.Cmdlines)))
 		}
+	}
+
+	// a GPU unit's tests must run on the GPU: some process of test.sh had a device open
+	if in.Req.GPU() && len(in.Test.Devices) == 0 {
+		fail("gpu_unused", fmt.Sprintf(gateGPUUnusedFmt, in.Test.Procs, gpuDeviceRe().String(), shortList(in.Test.Exes, 8)))
 	}
 
 	if len(kinds) == 0 {
@@ -114,4 +120,14 @@ func cudaCompilesSeen(cmdlines []string) string {
 		return "none"
 	}
 	return strings.Join(files, " ")
+}
+
+func shortList(xs []string, n int) string {
+	if len(xs) == 0 {
+		return "none seen"
+	}
+	if len(xs) > n {
+		return strings.Join(xs[:n], " ") + fmt.Sprintf(" (+%d more)", len(xs)-n)
+	}
+	return strings.Join(xs, " ")
 }

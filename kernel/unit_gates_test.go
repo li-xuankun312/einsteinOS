@@ -1,7 +1,9 @@
 package kernel
 
 import (
+	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -78,6 +80,7 @@ func TestTheUnitsOwnCUDAMustBeCompiled(t *testing.T) {
 		"/usr/local/corex/bin/nvcc -c /tmp/ws/src/baloon/fused_gdn.cu",
 	} {
 		in.Build.Cmdlines = append(existing, c)
+		in.Test.Devices = []string{"/dev/iluvatar0"}
 		if k, txt := unitGates(in); k != "" {
 			t.Fatalf("%s: %q %q", c, k, txt)
 		}
@@ -88,12 +91,57 @@ func TestTheUnitsOwnCUDAMustBeCompiled(t *testing.T) {
 		t.Fatalf("g++ counted as a CUDA compile: %q", k)
 	}
 	// only a .cuh changed: some CUDA compile must have run
-	in = GateInput{Req: gpuReq, Changed: []string{"include/baloon/x.cuh"}}
+	in = GateInput{Req: gpuReq, Changed: []string{"include/baloon/x.cuh"}, Test: ProcTrace{Devices: []string{"/dev/iluvatar1"}}}
 	if k, _ := unitGates(in); k != "gpu_not_compiled" {
 		t.Fatalf("header only, nothing compiled: %q", k)
 	}
 	in.Build.Cmdlines = existing
 	if k, _ := unitGates(in); k != "" {
 		t.Fatalf("header only, compiled through a .cu: %q", k)
+	}
+}
+
+// 2026/11/03: every test ran on the CPU and exited 0. A GPU unit's test must open a device.
+func TestAGPUUnitsTestMustRunOnTheGPU(t *testing.T) {
+	compiled := ProcTrace{Cmdlines: []string{"clang++ -x cuda --cuda-gpu-arch=ivcore10 -c src/baloon/fused_gdn.cu"}}
+	in := GateInput{Req: gpuReq, Changed: []string{"src/baloon/fused_gdn.cu"}, Build: compiled,
+		Test: ProcTrace{Procs: 3, Exes: []string{"/bin/bash", "/tmp/baloon_unit6_build/test_unit6"}}}
+	k, txt := unitGates(in)
+	if k != "gpu_unused" || !strings.Contains(txt, "3 process(es)") || !strings.Contains(txt, "test_unit6") {
+		t.Fatalf("%q %q", k, txt)
+	}
+	in.Test.Devices = []string{"/dev/iluvatar2"}
+	if k, _ := unitGates(in); k != "" {
+		t.Fatalf("opened a device: %q", k)
+	}
+	// a CPU unit need not touch a GPU
+	if k, _ := unitGates(GateInput{Req: UnitRequirements{Sources: []string{"src/a.cpp"}}, Test: ProcTrace{Procs: 2}}); k != "" {
+		t.Fatalf("cpu unit: %q", k)
+	}
+}
+
+// end to end with real processes: the test script's child holds a device node open
+func TestGPUUseIsMeasuredFromTheTestProcesses(t *testing.T) {
+	realRunner(t)
+	ws := t.TempDir()
+	dev := ws + "/fakedev/iluvatar0"
+	write(t, ws, "fakedev/iluvatar0", "")
+	old := gpuDeviceRe
+	t.Cleanup(func() { gpuDeviceRe = old })
+	gpuDeviceRe = func() *regexp.Regexp { return regexp.MustCompile(regexp.QuoteMeta(ws) + `/fakedev/iluvatar[0-9]+$`) }
+
+	build, test := devVerifyScripts("u6")
+	write(t, ws, "bin/clang++", "#!/bin/bash\nsleep 0.3\n") // a compiler that takes as long as one
+	os.Chmod(ws+"/bin/clang++", 0o755)
+	write(t, ws, build, "bin/clang++ -x cuda --cuda-gpu-arch=ivcore10 -c src/baloon/k.cu")
+	write(t, ws, test, "( exec 3<"+dev+"; sleep 0.3 )")
+	r := runUnitVerifyWith(ws, "u6", "0", gpuReq, []string{"src/baloon/k.cu"}, time.Minute, time.Minute)
+	if !r.Passed() || len(r.Test.Devices) != 1 || r.Status()["gpu_devices_opened"] != dev {
+		t.Fatalf("%+v", r)
+	}
+	write(t, ws, test, "sleep 0.3")
+	r = runUnitVerifyWith(ws, "u6", "0", gpuReq, []string{"src/baloon/k.cu"}, time.Minute, time.Minute)
+	if r.Passed() || r.Gate != "gpu_unused" {
+		t.Fatalf("no device opened: %q %q", r.Gate, r.GateText)
 	}
 }
