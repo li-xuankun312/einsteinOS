@@ -192,3 +192,91 @@ func TestAGPUUnitWithoutTheToolchainDoesNotPass(t *testing.T) {
 		t.Fatalf("%v", got)
 	}
 }
+
+// compile builds a tiny program with g++ and the given flags; skips without g++/objdump.
+func compileProbe(t *testing.T, dir, name, src string, flags ...string) string {
+	t.Helper()
+	for _, tool := range []string{"g++", "objdump"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skip("no " + tool)
+		}
+	}
+	os.WriteFile(dir+"/"+name+".cpp", []byte(src), 0o644)
+	out := dir + "/" + name
+	args := append([]string{"-O2", "-o", out, dir + "/" + name + ".cpp"}, flags...)
+	if b, err := exec.Command("g++", args...).CombinedOutput(); err != nil {
+		t.Skipf("g++ %v: %v %s", flags, err, b)
+	}
+	return out
+}
+
+const avx2Src = `#include <immintrin.h>
+#include <cstdio>
+__attribute__((noinline)) int add8(const int* a, const int* b) {
+#if defined(__AVX2__)
+  __m256i v = _mm256_add_epi32(_mm256_loadu_si256((const __m256i*)a), _mm256_loadu_si256((const __m256i*)b));
+  int o[8]; _mm256_storeu_si256((__m256i*)o, v); return o[0] + o[7];
+#else
+  return a[0] + b[0] + a[7] + b[7];
+#endif
+}
+int main(int c, char**) { int a[8] = {c}, b[8] = {c}; std::printf("%d\n", add8(a, b)); }
+`
+
+const vnniSrc = `#include <immintrin.h>
+#include <cstdio>
+__attribute__((noinline)) int dot(const unsigned char* a, const signed char* b) {
+  __m256i acc = _mm256_dpbusd_epi32(_mm256_setzero_si256(), _mm256_loadu_si256((const __m256i*)a), _mm256_loadu_si256((const __m256i*)b));
+  int o[8]; _mm256_storeu_si256((__m256i*)o, acc); return o[0];
+}
+int main(int c, char**) { unsigned char a[32] = {(unsigned char)c}; signed char b[32] = {1}; std::printf("%d\n", dot(a, b)); }
+`
+
+// 2026/11/03 unit 4: built with -std=c++17 -O2 only — the AVX2 path compiled out, the
+// "VNNI kernel" an integer emulation. The reference builds these files with -mavx2…/-mavx512vnni.
+func TestTheReferencesISAPathMustBeInWhatWasBuilt(t *testing.T) {
+	dir := t.TempDir()
+	req := UnitRequirements{Sources: []string{"src/kernels/cpu/q2_avx2.cpp"}, ISAFlags: []string{"-mavx2", "-mf16c", "-mfma"},
+		FlagFiles: map[string][]string{"src/kernels/cpu/q2_avx2.cpp": {"-mavx2", "-mf16c", "-mfma"}}}
+	scalar := compileProbe(t, dir, "test_unit4", avx2Src, "-std=c++17")
+	in := GateInput{Req: UnitRequirements{Sources: req.Sources, ISAFlags: []string{"-mavx2"}, FlagFiles: map[string][]string{"src/kernels/cpu/q2_avx2.cpp": {"-mavx2"}}},
+		Build: ProcTrace{Cmdlines: []string{"/usr/local/corex/bin/clang++ -std=c++17 -O2 -Wall -Iinclude tests/unit4/a.cpp -o " + scalar}}}
+	k, txt := unitGates(in)
+	if k != "isa_path_missing" || !strings.Contains(txt, "q2_avx2.cpp") || !strings.Contains(txt, "test_unit4") {
+		t.Fatalf("%q %q", k, txt)
+	}
+	avx2 := compileProbe(t, dir, "test_unit4_avx2", avx2Src, "-std=c++17", "-mavx2")
+	in.Build.Cmdlines = []string{"g++ -O2 -mavx2 x.cpp -o " + avx2}
+	if k, txt := unitGates(in); k != "" {
+		t.Fatalf("built with -mavx2: %q %q", k, txt)
+	}
+	// VNNI: an integer emulation has no vpdpbusd; the intrinsic does
+	vreq := UnitRequirements{Sources: []string{"src/kernels/cpu/expert.cpp"}, ISAFlags: []string{"-mavx512vnni"},
+		FlagFiles: map[string][]string{"src/kernels/cpu/expert.cpp": {"-mavx512vnni"}}}
+	in = GateInput{Req: vreq, Build: ProcTrace{Cmdlines: []string{"g++ -O2 x.cpp -o " + scalar}}}
+	if k, _ := unitGates(in); k != "isa_path_missing" {
+		t.Fatalf("emulation passed: %q", k)
+	}
+	vnni := compileProbe(t, dir, "test_vnni", vnniSrc, "-std=c++17", "-mavx512vnni", "-mavx512vl", "-mavx2")
+	in.Build.Cmdlines = []string{"g++ -O2 -mavx512vnni x.cpp -o " + vnni}
+	if k, txt := unitGates(in); k != "" {
+		t.Fatalf("vpdpbusd present: %q %q", k, txt)
+	}
+	// a binary the test ran counts too, a system one does not
+	in.Build.Cmdlines = nil
+	in.Test.Exes = []string{"/usr/bin/bash", vnni}
+	if k, _ := unitGates(in); k != "" {
+		t.Fatalf("executed binary: %q", k)
+	}
+	// nothing could be disassembled: said so, not passed
+	old := objdumpFn
+	t.Cleanup(func() { objdumpFn = old })
+	objdumpFn = func(string) (string, error) { return "", exec.ErrNotFound }
+	if k, txt := unitGates(in); k != "isa_unmeasured" || !strings.Contains(txt, "objdump") {
+		t.Fatalf("%q %q", k, txt)
+	}
+	// flags the kernel cannot attest by an instruction are not held against the unit
+	if got := attestableISA([]string{"-mavx512bw", "-mavx2", "-march=native"}); len(got) != 1 || got[0] != "-mavx2" {
+		t.Fatalf("%v", got)
+	}
+}

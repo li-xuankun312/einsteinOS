@@ -10,8 +10,10 @@ package kernel
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -49,6 +51,8 @@ const (
 	gateGPUCodeMissingFmt = "gpu_code_missing: the unit's modules come from CUDA sources in the reference (%[1]s) but it wrote no .cu/.cuh file"
 	gateGPUNotCompiledFmt = "gpu_not_compiled: build.sh ran no CUDA compile of %[1]s (CUDA compiles seen: %[2]s)"
 	gateGPUUnusedFmt      = "gpu_unused: test.sh exited 0 but none of its %[1]d process(es) opened a GPU device (%[2]s); executables that ran: %[3]s"
+	gateISAMissingFmt     = "isa_path_missing: the reference builds %[1]s with %[2]s; no binary the build produced or the test ran contains %[3]s (binaries looked at: %[4]s)"
+	gateISAUnmeasuredFmt  = "isa_unmeasured: the reference builds %[1]s with %[2]s, and the binaries could not be disassembled (%[3]s)"
 	gateToolchainFmt      = "toolchain_missing: the unit's sources are CUDA but none of %[1]s exists in %[2]s on this machine; a build that skips the GPU here proves nothing"
 )
 
@@ -80,6 +84,28 @@ func unitGates(in GateInput) (kind, text string) {
 	// a GPU unit's tests must run on the GPU: some process of test.sh had a device open
 	if in.Req.GPU() && len(in.Test.Devices) == 0 {
 		fail("gpu_unused", fmt.Sprintf(gateGPUUnusedFmt, in.Test.Procs, gpuDeviceRe().String(), shortList(in.Test.Exes, 8)))
+	}
+
+	// the reference's per-source ISA flags: the paths they enable must exist in what was
+	// built and run — 11/03 printed "AVX2 intrinsic path not compiled in this build", and its
+	// "VNNI kernel" was an integer emulation with no VNNI instruction in it
+	if need := attestableISA(in.Req.ISAFlags); len(need) > 0 {
+		bins := isaBinaries(in.Build, in.Test)
+		found, err := isaFound(bins, need)
+		switch {
+		case err != nil:
+			fail("isa_unmeasured", fmt.Sprintf(gateISAUnmeasuredFmt, isaSourceList(in.Req), strings.Join(need, " "), err))
+		default:
+			var missing []string
+			for _, f := range need {
+				if !found[f] {
+					missing = append(missing, f+" ("+isaInsn[f].String()+")")
+				}
+			}
+			if len(missing) > 0 {
+				fail("isa_path_missing", fmt.Sprintf(gateISAMissingFmt, isaSourceList(in.Req), strings.Join(need, " "), strings.Join(missing, ", "), shortList(bins, 6)))
+			}
+		}
 	}
 
 	if len(kinds) == 0 {
@@ -159,4 +185,106 @@ func shortList(xs []string, n int) string {
 		return strings.Join(xs[:n], " ") + fmt.Sprintf(" (+%d more)", len(xs)-n)
 	}
 	return strings.Join(xs, " ")
+}
+
+// isaInsn: for each ISA flag the kernel can attest, an instruction (AT&T, objdump -d) that
+// only exists in code built with it.
+var isaInsn = map[string]*regexp.Regexp{
+	"-mavx2":       regexp.MustCompile(`%ymm[0-9]+`),
+	"-mavx512f":    regexp.MustCompile(`%zmm[0-9]+`),
+	"-mavx512vnni": regexp.MustCompile(`\bvpdpbusds?\b|\bvpdpwssds?\b`),
+	"-mavx512vbmi": regexp.MustCompile(`\bvpermb\b|\bvperm[it]2b\b|\bvpmultishiftqb\b`),
+	"-mfma":        regexp.MustCompile(`\bvf(n?m(add|sub))(132|213|231)[ps][sd]\b`),
+	"-mf16c":       regexp.MustCompile(`\bvcvtph2ps\b|\bvcvtps2ph\b`),
+}
+
+func attestableISA(flags []string) []string {
+	var out []string
+	for _, f := range flags {
+		if isaInsn[f] != nil {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+var (
+	compilerCmdRe = regexp.MustCompile(`(^|/)(g\+\+|c\+\+|clang\+\+|gcc|clang|cc|nvcc)(-[0-9.]+)?(\s|$)`)
+	outputFlagRe  = regexp.MustCompile(`(?:^|\s)-o\s*(\S+)`)
+	systemBinRe   = regexp.MustCompile(`^/(usr|bin|sbin|lib|lib64|opt|etc)/`)
+	objdumpFn     = func(file string) (string, error) {
+		b, err := exec.Command("objdump", "-d", "--no-show-raw-insn", file).Output()
+		return string(b), err
+	}
+	isaObjdumpMax = 24 // binaries disassembled per unit
+)
+
+// isaBinaries: the outputs the build's compiler command lines named (-o …) that exist, and
+// the non-system executables the test ran.
+func isaBinaries(build, test ProcTrace) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(p string) {
+		if p == "" || seen[p] || systemBinRe.MatchString(p) {
+			return
+		}
+		if st, err := os.Stat(p); err == nil && st.Mode().IsRegular() {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	for _, c := range build.Cmdlines {
+		if !compilerCmdRe.MatchString(c) {
+			continue
+		}
+		for _, m := range outputFlagRe.FindAllStringSubmatch(c, -1) {
+			add(m[1])
+		}
+	}
+	for _, e := range test.Exes {
+		add(e)
+	}
+	if len(out) > isaObjdumpMax {
+		out = out[:isaObjdumpMax]
+	}
+	return out
+}
+
+// isaFound disassembles the binaries and reports which flags' instructions appear.
+func isaFound(bins, need []string) (map[string]bool, error) {
+	found := map[string]bool{}
+	if len(bins) == 0 {
+		return found, nil
+	}
+	ok := 0
+	var lastErr error
+	for _, b := range bins {
+		asm, err := objdumpFn(b)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		ok++
+		for _, f := range need {
+			if !found[f] && isaInsn[f].MatchString(asm) {
+				found[f] = true
+			}
+		}
+	}
+	if ok == 0 {
+		return found, fmt.Errorf("objdump on %d binaries: %v", len(bins), lastErr)
+	}
+	return found, nil
+}
+
+func isaSourceList(req UnitRequirements) string {
+	var fs []string
+	for f := range req.FlagFiles {
+		fs = append(fs, f)
+	}
+	if len(fs) == 0 {
+		return "its sources"
+	}
+	sort.Strings(fs)
+	return strings.Join(fs, ", ")
 }
