@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/http/httptrace"
 	"strings"
 	"time"
 )
@@ -26,6 +27,7 @@ type ClientConfig struct {
 
 // Client communicates with the claude.ai web API (or compatible proxy).
 type Client struct {
+	stats      connStats
 	baseURL    string
 	orgID      string
 	cookie     string
@@ -78,6 +80,7 @@ func (c *Client) Completion(convID string, req *CompletionRequest) (io.ReadClose
 	httpReq.Header.Set("anthropic-client-platform", "web_claude_ai")
 	httpReq.Header.Set("anthropic-client-version", "1.0.0")
 	httpReq.Header.Set("Cookie", c.cookie)
+	httpReq = httpReq.WithContext(httptrace.WithClientTrace(httpReq.Context(), c.stats.trace()))
 
 	maxRetries := 6
 	backoffs := []time.Duration{1 * time.Second, 1 * time.Second, 2 * time.Second, 2 * time.Second, 3 * time.Second, 3 * time.Second}
@@ -96,6 +99,7 @@ func (c *Client) Completion(convID string, req *CompletionRequest) (io.ReadClose
 			httpReq.Header.Set("anthropic-client-platform", "web_claude_ai")
 			httpReq.Header.Set("anthropic-client-version", "1.0.0")
 			httpReq.Header.Set("Cookie", c.cookie)
+			httpReq = httpReq.WithContext(httptrace.WithClientTrace(httpReq.Context(), c.stats.trace()))
 		}
 
 		// every attempt that reaches the proxy is a question to it (api_window.go)
@@ -164,6 +168,7 @@ func (c *Client) Completion(convID string, req *CompletionRequest) (io.ReadClose
 		httpReq.Header.Set("anthropic-client-platform", "web_claude_ai")
 		httpReq.Header.Set("anthropic-client-version", "1.0.0")
 		httpReq.Header.Set("Cookie", c.cookie)
+		httpReq = httpReq.WithContext(httptrace.WithClientTrace(httpReq.Context(), c.stats.trace()))
 		slot := apiWin.acquire()
 		resp, err := c.httpClient.Do(httpReq)
 		if err != nil {

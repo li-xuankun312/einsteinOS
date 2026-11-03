@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -617,6 +618,37 @@ func isMultiRequestCommand(command string) bool {
 	return loopWordRe.MatchString(command) || len(curlWordRe.FindAllString(command, -1)) > 1
 }
 
+// envIntOr reads a positive integer from the environment.
+func envIntOr(name string, def int) int {
+	if v, err := strconv.Atoi(strings.TrimSpace(os.Getenv(name))); err == nil && v > 0 {
+		return v
+	}
+	return def
+}
+
+// axleCurlPrelude is put in front of a multi-request command so every curl in it gives up
+// on a connection that does not come up, and tries again — the way git_guard does for git:
+// no sign of life within the start window, kill it and start another, and judge by the
+// outcome, not by how long the whole command took.
+//
+// Measured 2026/11/02 (axle_burst.py, 34 sequential requests from the Iluvatar machine):
+// 14 failed, every one the same way — TCP connected in a millisecond, the TLS handshake
+// never finished (tls=0.000000), 20 s to the timeout — at random, never more than two in a
+// row, healthy requests finished in 1-3 s. The curl in a child's loop has no timeout at all
+// (it waits for ever), so a loop of seven requests had a 1 − 0.59⁷ ≈ 97% chance of a hang
+// and nothing but the idle guard to end it. --connect-timeout covers the handshake (tested
+// against a server that accepts TCP and never answers TLS, on curl 7.68 and 8.5), and
+// --retry retries that timeout. It limits only the connection: once the request is sent,
+// Axle may take its 120 s.
+//
+// The numbers are arguments: EINSTEIN_AXLE_CONNECT_TIMEOUT (8 s: about three times the
+// slowest healthy handshake measured) and EINSTEIN_AXLE_CURL_RETRIES (5). It reaches only
+// curl commands the shell runs itself, not a curl started by a script the child wrote.
+func axleCurlPrelude() string {
+	return fmt.Sprintf("curl() { command curl --connect-timeout %d --retry %d --retry-delay 1 \"$@\"; }\n",
+		envIntOr("EINSTEIN_AXLE_CONNECT_TIMEOUT", 8), envIntOr("EINSTEIN_AXLE_CURL_RETRIES", 5))
+}
+
 // axleExecMulti runs a multi-request command once, on the path that last worked.
 //   - it finishes: its whole output goes back;
 //   - it stalls after printing something: what it printed goes back, with a note, and
@@ -633,7 +665,7 @@ func axleExecMulti(command string, workDir string) string {
 		if unset {
 			path = "direct"
 		}
-		run := axleRunGuarded(command, workDir, unset, axleScriptGuard, idle)
+		run := axleRunGuarded(axleCurlPrelude()+command, workDir, unset, axleScriptGuard, idle)
 		trimmed := strings.TrimSpace(run.Stdout)
 		switch {
 		case run.TimedOut && trimmed != "":
