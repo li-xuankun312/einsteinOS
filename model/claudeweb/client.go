@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptrace"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -28,6 +29,7 @@ type ClientConfig struct {
 // Client communicates with the claude.ai web API (or compatible proxy).
 type Client struct {
 	stats      connStats
+	lastOK     atomic.Int64 // unix nanos of the last request that got a response (conn_warm.go)
 	baseURL    string
 	orgID      string
 	cookie     string
@@ -86,8 +88,18 @@ func (c *Client) Completion(convID string, req *CompletionRequest) (io.ReadClose
 	backoffs := []time.Duration{1 * time.Second, 1 * time.Second, 2 * time.Second, 2 * time.Second, 3 * time.Second, 3 * time.Second}
 	var lastErr error
 
+	// a cold pool: race fresh handshakes first, so this request finds a live connection
+	if c.coldPool() {
+		c.warm("idle pool")
+	}
+
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if attempt > 0 {
+			// the last attempt's handshake did not complete: race several now instead of
+			// trying one more after the backoff
+			if errIsHandshake(lastErr) {
+				c.warm("handshake failed")
+			}
 			wait := backoffs[attempt-1]
 			log.Printf("claudeweb: retry %d/%d after %v", attempt, maxRetries, wait)
 			time.Sleep(wait)
@@ -105,6 +117,9 @@ func (c *Client) Completion(convID string, req *CompletionRequest) (io.ReadClose
 		// every attempt that reaches the proxy is a question to it (api_window.go)
 		slot := apiWin.acquire()
 		resp, err := c.httpClient.Do(httpReq)
+		if err == nil {
+			c.markOK()
+		}
 		if err != nil {
 			if requestNeverSent(err) {
 				apiWin.refund(slot)
@@ -171,6 +186,9 @@ func (c *Client) Completion(convID string, req *CompletionRequest) (io.ReadClose
 		httpReq = httpReq.WithContext(httptrace.WithClientTrace(httpReq.Context(), c.stats.trace()))
 		slot := apiWin.acquire()
 		resp, err := c.httpClient.Do(httpReq)
+		if err == nil {
+			c.markOK()
+		}
 		if err != nil {
 			if requestNeverSent(err) {
 				apiWin.refund(slot)

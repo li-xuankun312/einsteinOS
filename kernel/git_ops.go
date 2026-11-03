@@ -152,13 +152,26 @@ func GitCloneOrReuse(ownerRepo, dir string) error {
 			return nil
 		}
 
-		// .git missing or corrupt — clean residue, clone fresh
+		// .git missing or corrupt — clean residue, clone fresh. Over the deploy key first
+		// (on 2026/11/03 two HTTPS clones failed with exit 128, 7 minutes, before a third
+		// went through), judged by progress like a push: no sign of life → new process,
+		// no new --progress line for gitPushStallTimeout → new process. origin is set to
+		// the HTTPS URL afterwards, as an HTTPS clone leaves it, for the HTTPS fallback.
 		os.RemoveAll(dir)
-		r := gitGuard(fmt.Sprintf("git clone %q %q", CloneURL(ownerRepo), dir), "/tmp", gitStartWindow, gitCloneMaxRun, 0, nil)
+		transport := map[bool]string{true: "SSH", false: "HTTPS"}[useSSH]
+		cloneCmd := fmt.Sprintf("git clone --progress %q %q", CloneURL(ownerRepo), dir)
+		if useSSH {
+			url, env := gitRemoteFn(ownerRepo, true)
+			cloneCmd = fmt.Sprintf("%sgit clone --progress %q %q && git -C %q remote set-url origin %q", env, url, dir, dir, CloneURL(ownerRepo))
+		}
+		r := gitGuardFn(cloneCmd, "/tmp", gitStartWindow, gitPushMaxRun, gitPushStallTimeout, func(el time.Duration, line string) {
+			log.Printf("git_clone_or_reuse: %s attempt %d/%d clone (%s) in progress (%s): %s", ownerRepo, attempt, attempts, transport, el.Round(time.Second), line)
+		})
 		if !r.Started || r.TimedOut || r.Code != 0 {
 			os.RemoveAll(dir)
 			lastErr = fmt.Errorf("clone failed (started=%v timed_out=%v exit=%d)", r.Started, r.TimedOut, r.Code)
-			log.Printf("git_clone_or_reuse: %s attempt %d/%d clone failed (started=%v timed_out=%v exit=%d)", ownerRepo, attempt, attempts, r.Started, r.TimedOut, r.Code)
+			log.Printf("git_clone_or_reuse: %s attempt %d/%d clone (%s) failed (started=%v no_progress=%v exit=%d): %s", ownerRepo, attempt, attempts, transport, r.Started, r.TimedOut, r.Code, truncStr(strings.TrimSpace(r.Out), 120))
+			sshFailed()
 			continue
 		}
 		if _, err := os.Stat(dir + "/.git"); err != nil {
@@ -167,7 +180,7 @@ func GitCloneOrReuse(ownerRepo, dir string) error {
 			log.Printf("git_clone_or_reuse: %s attempt %d/%d clone left no .git", ownerRepo, attempt, attempts)
 			continue
 		}
-		log.Printf("git_clone_or_reuse: %s cloned (attempt %d)", ownerRepo, attempt)
+		log.Printf("git_clone_or_reuse: %s cloned (attempt %d, %s)", ownerRepo, attempt, transport)
 		return nil
 	}
 	return fmt.Errorf("GitCloneOrReuse %s failed after %d attempts: %v", ownerRepo, attempts, lastErr)
@@ -228,19 +241,25 @@ func gitAuthFailure(out string) bool {
 // branch (dev_from_theorems re-runs after a dev_fix) was based on the local reset
 // main, diverged from the remote branch and was rejected.
 func gitUseBranchFromRemote(repoDir, branch, base string) error {
-	// fetch first: without this, "origin/<branch>" is whatever this clone last
-	// saw — possibly stale if another process pushed to the shared branch since
-	// (exactly the case GitMerge's caller in ref_store_chunk needs to handle: one
-	// chunk's clone catching up on another chunk's merge). Fetch both refs
-	// explicitly rather than `git fetch origin` (no refspec) so a repo with many
-	// unrelated branches (conv/<id> per chunk, per run) doesn't pay for all of
-	// them on every call.
-	cmd := fmt.Sprintf("cd %q && "+
-		"git fetch origin %q %q 2>/dev/null; ("+
+	// fetch first: without this, "origin/<branch>" is whatever this clone last saw —
+	// possibly stale if another process pushed to the shared branch since. Only the
+	// two refs, not every conv/<id> branch. For a GitHub origin the fetch is judged by
+	// progress and goes over the deploy key first (git_fetch.go); it used to be a bare
+	// HTTPS `git fetch origin` that waited 2 minutes on a stuck connection.
+	if or := originOwnerRepo(repoDir); or != "" {
+		if missing, err := gitFetchRefs(repoDir, or, branch, base); err != nil {
+			log.Printf("git_use_branch: %s fetch of %s/%s did not finish: %v (using what this clone has)", or, branch, base, err)
+		} else if len(missing) > 0 {
+			log.Printf("git_use_branch: %s has no %v yet", or, missing)
+		}
+	} else {
+		runLocalGit(fmt.Sprintf("cd %q && git fetch origin %q %q 2>/dev/null", repoDir, branch, base), repoDir)
+	}
+	cmd := fmt.Sprintf("cd %q && ("+
 		"if git rev-parse --verify -q origin/%s >/dev/null; then git checkout -q -B %s origin/%s; "+
 		"elif git rev-parse --verify -q origin/%s >/dev/null; then git checkout -q -B %s origin/%s; "+
 		"else git checkout -q -B %s; fi)",
-		repoDir, branch, base, branch, branch, branch, base, branch, base, branch)
+		repoDir, branch, branch, branch, base, branch, base, branch)
 	return runLocalGit(cmd, repoDir)
 }
 

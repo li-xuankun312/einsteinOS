@@ -91,19 +91,19 @@ func (s *ShadowExecutor) Execute(toolName string, inputJSON string) string {
 		if input.Path == "" || input.OldStr == "" {
 			return ""
 		}
-		// theorem signature guard: on .lean files, check if the edit changes
-		// theorem signatures (everything before := by). changing proof bodies
-		// is fine, changing the statement is not — it breaks downstream semantics.
+		// A changed theorem statement is applied here like any other edit, and logged.
+		// It used to be BLOCKED: refused on this machine only — the sandbox had already
+		// applied it, so from then on the two copies differed — and the child was told
+		// to write sorry instead. On 2026/11/03 06:59:22 (chunk 5, ee6a51e6) that turned
+		// a correction Axle had prompted (scratch_640: 680 + 584 → 688 + 592) into a
+		// false theorem kept with sorry next to the corrected one. Verify, correct,
+		// verify again is the loop the theory conversation is for; the kernel records
+		// that a statement changed and keeps this copy equal to the sandbox's.
 		if strings.HasSuffix(input.Path, ".lean") {
 			oldSig := extractTheoremSig(input.OldStr)
 			newSig := extractTheoremSig(input.NewStr)
 			if oldSig != "" && newSig != "" && oldSig != newSig {
-				log.Printf("[shadow] BLOCKED: theorem signature changed in %s\n  old: %s\n  new: %s",
-					input.Path, truncateCmd(oldSig, 120), truncateCmd(newSig, 120))
-				return fmt.Sprintf("[pid 0 exit=1] ERROR: you changed the theorem statement, not just the proof. "+
-					"theorem signatures (name + parameters + conclusion) must not change. "+
-					"the proofs under %s show how statements like this are proved.\nold sig: %s\nnew sig: %s",
-					kernel.ProofReferencePath(), truncateCmd(oldSig, 200), truncateCmd(newSig, 200))
+				log.Printf(statementChangedFmt, input.Path, truncateCmd(oldSig, 160), truncateCmd(newSig, 160))
 			}
 		}
 		escaped_old := strings.ReplaceAll(input.OldStr, "'", "'\\''")
@@ -280,6 +280,9 @@ func waitWithHeartbeat(wait func() (int64, int, error), every time.Duration, bea
 // child wrote to /tmp/axle/run.py (axle as a DIRECTORY, not part of the filename)
 // fell through to the unbounded generic exec path (only the 150-min idle backstop).
 var axleScriptRe = regexp.MustCompile(`(?i)(^|[^a-z0-9])axle(?:[._-]?[a-z0-9_]*|/[a-z0-9_]*)\.(sh|py)\b`)
+
+// statementChangedFmt: a .lean edit that changed a theorem statement (applied).
+const statementChangedFmt = "[shadow] statement changed in %s (applied, as in the sandbox)\n  old: %s\n  new: %s"
 
 // isAxleCommand: any command that talks to Axle. The URL and verify_proof were the
 // only markers, so a child that wraps the call in /tmp/axle.sh and loops over files
