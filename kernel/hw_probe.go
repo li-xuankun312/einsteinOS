@@ -21,15 +21,39 @@ func hwProbePrompt() string {
 		LocalOutputCap(), DoneInstruction())
 }
 
-// gpuIndexCmd lists the GPU device indices under devDir: /dev/iluvatar<N> when any
-// exist, otherwise /dev/nvidia<N> (not nvidiactl, nvidia-uvm…). One vendor, not both:
-// on the Iluvatar machine /dev holds iluvatar0-3 AND nvidia0-7 (corex's compatibility
-// nodes), and merging them reported 8 GPUs for a machine with 4 cards.
-func gpuIndexCmd(devDir string) string {
-	list := func(vendor string) string {
-		return "ls " + shq(devDir) + " 2>/dev/null | sed -n 's/^" + vendor + "\\([0-9][0-9]*\\)$/\\1/p' | sort -n | uniq | paste -sd, -"
+// gpuVendors are the device-node prefixes the kernel looks for under /dev, in order of
+// preference; the first vendor that has nodes is the machine's vendor. One vendor, not
+// all: on the Iluvatar machine /dev holds iluvatar0-3 AND nvidia0-7 (corex's
+// compatibility nodes), and merging them reported 8 GPUs for a machine with 4 cards.
+var gpuVendors = []string{"iluvatar", "nvidia"}
+
+// gpuListCmdFmt lists one vendor's indices: %[1]s the directory, %[2]s the prefix.
+const gpuListCmdFmt = `ls %[1]s 2>/dev/null | sed -n 's/^%[2]s\([0-9][0-9]*\)$/\1/p' | sort -n | uniq | paste -sd, -`
+
+// gpuPickCmd prints, for the first vendor in gpuVendors with device nodes under devDir,
+// what pick(vendor, list-command) produces; nothing when no vendor has nodes.
+func gpuPickCmd(devDir string, pick func(vendor, list string) string) string {
+	var b strings.Builder
+	for i, v := range gpuVendors {
+		if i > 0 {
+			b.WriteString(" el")
+		}
+		b.WriteString(fmt.Sprintf(`if [ -n "$(%[1]s)" ]; then %[2]s;`, fmt.Sprintf(gpuListCmdFmt, shq(devDir), v), pick(v, fmt.Sprintf(gpuListCmdFmt, shq(devDir), v))))
 	}
-	return "ids=$(" + list("iluvatar") + "); if [ -z \"$ids\" ]; then ids=$(" + list("nvidia") + "); fi; echo \"$ids\""
+	if len(gpuVendors) > 0 {
+		b.WriteString(" fi")
+	}
+	return b.String()
+}
+
+// gpuIndexCmd prints the GPU indices ("0,1,2,3") of the machine's vendor under devDir.
+func gpuIndexCmd(devDir string) string {
+	return gpuPickCmd(devDir, func(_, list string) string { return list })
+}
+
+// gpuVendorCmd prints which vendor's device nodes gpuIndexCmd counts.
+func gpuVendorCmd(devDir string) string {
+	return gpuPickCmd(devDir, func(vendor, _ string) string { return "echo " + shq(vendor) })
 }
 
 // gpuProbeFn runs a command on this machine and returns its stdout; a variable so

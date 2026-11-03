@@ -321,7 +321,7 @@ func tailText(s string, n int) string {
 // devVerifyEnv is the shell prelude that makes the real toolchain and the
 // usable devices visible to the scripts: corex lives outside the default PATH.
 func devVerifyEnv(gpuUsable string) string {
-	env := "export PATH=/usr/local/corex/bin:$PATH; "
+	env := fmt.Sprintf("export PATH=%s:$PATH; ", toolchainPATH())
 	if gpuUsable != "" {
 		env += fmt.Sprintf("export EINSTEINOS_GPUS=%q CUDA_VISIBLE_DEVICES=%q; ", gpuUsable, gpuUsable)
 	}

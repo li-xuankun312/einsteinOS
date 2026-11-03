@@ -293,6 +293,10 @@ type loopState struct {
 	convID               string
 	sseRecovery          bool        // set when we sent bare "Continue" after SSE break; cleared after one round
 	ledger               *toolLedger // executed/delivered tool_use ids; see sse_recover.go
+	// localDelivered: results run on THIS machine have been written back to the
+	// conversation at least once; from then on, text of a round without tool calls
+	// describes this machine (kernel.GroundedRound, kernel/conv_grounded.go)
+	localDelivered bool
 }
 
 // mainConvToolBudget: once the MAIN conversation (not a child) has made this many
@@ -352,6 +356,10 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 		if text == "" {
 			text = fmt.Sprintf("[%s]", exitCodeStr(code))
 		}
+		// on its own line: glued to the answer it turned "PASS" into
+		// "PASS[terminated: done_marker]" (no verdict found) and a planner's last unit
+		// line into one naming a module that does not exist
+		text = "\n" + text
 		if code == exitError {
 			m.mu.Lock()
 			m.lastSentPrompt = ""
@@ -791,6 +799,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 					// 25 bytes of "[terminated: done_marker]" and the merged survey+plan call
 					// with it. Keep the text, without the marker line.
 					if t := terminalText(textBuf.String()); t != "" {
+						kernel.NoteRoundText(convID, t, 0, st.localDelivered)
 						yield(&model.LLMResponse{
 							Content: &genai.Content{Role: "model", Parts: []*genai.Part{{Text: t}}},
 							Partial: true,
@@ -846,6 +855,9 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 					localDiff.WriteString(fmt.Sprintf("[%s] %s\n\n", tr.ToolUseID, tr.Content))
 				}
 				log.Printf("claudeweb: SSE recovery writeback %d results", len(rr))
+				if len(rr) > 0 {
+					st.localDelivered = true
+				}
 				for _, t := range tools {
 					st.ledger.markDelivered(t.ID)
 				}
@@ -879,6 +891,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 
 		if textBuf.Len() > 0 {
 			st.consecutiveContinues = 0
+			kernel.NoteRoundText(convID, textBuf.String(), len(collectedTools), st.localDelivered)
 			yield(&model.LLMResponse{
 				Content: &genai.Content{
 					Role:  "model",
@@ -901,6 +914,9 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 			localDiff.WriteString(fmt.Sprintf("[%s] %s\n\n", tr.ToolUseID, tr.Content))
 		}
 		log.Printf("claudeweb: writeback %d results + Continue (silent=%d/%d)", len(toolResults), st.consecutiveContinues, maxContinues)
+		if len(toolResults) > 0 {
+			st.localDelivered = true
+		}
 		kernel.TouchByConv(convID)
 		for _, tb := range collectedTools {
 			st.ledger.markDelivered(tb.id) // sent (or deliberately left to the remote's own result)

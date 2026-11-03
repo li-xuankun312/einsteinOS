@@ -276,7 +276,7 @@ func (pe *ProcEngine) runCommit(cursor int) string {
 	if isRetry && prior.Branch != "" {
 		puppet.Branch = prior.Branch
 		// inject prior HW info so hw_probe can be skipped
-		if prior.HWInfo != "" {
+		if isCurrentHWInfo(prior.HWInfo) { // an older format began with the probe's sandbox report
 			pr := GetPR(pid)
 			if pr != nil {
 				pr.HWInfo = prior.HWInfo

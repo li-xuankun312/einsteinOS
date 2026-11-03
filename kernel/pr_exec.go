@@ -265,50 +265,30 @@ func hw_init(pid int64) (string, error) {
 	Wait(child)
 
 	hw_info := GetResult(child)
-	hw_tools := GetStderr(child)
 
-	// the GPU indices are MEASURED by the kernel on this machine. They used to be
-	// counted from the child's own words (lines mentioning "iluvatar", "gpu 0"…),
-	// which counted a sentence like "no Iluvatar found" as a GPU, and defaulted to 4
-	// when nothing matched: a CPU-only VM was reported as gpu_all=0,1,2,3,4,5.
-	gpuAll, measured := detectLocalGPUs()
-	if !measured {
-		gpuAll = parseGPUList(hw_info + "\n" + hw_tools)
+	// what the kernel measures itself, plus the probe's text from AFTER this machine's
+	// results reached it and those results (hw_facts.go). The text of the turn that ran
+	// the command is the sandbox's report and is not used. A failed /dev listing leaves
+	// the GPUs unknown: they are not guessed from anyone's words.
+	facts := measureHW()
+	if m := getMeta(child); m != nil {
+		facts.ProbeConv = m.ConvID
+		facts.Summary = ConvGrounded(m.ConvID)
 	}
+	facts.Raw = GetStderr(child)
+	info := facts.Render()
 
 	prMu.Lock()
 	if pr := prTable[pid]; pr != nil {
-		pr.HWInfo = hw_info + "\n" + hw_tools
-		pr.GPUAll = gpuAll
-		pr.GPUUsable = gpuAll
+		pr.HWInfo = info
+		pr.GPUAll = facts.GPUs
+		pr.GPUUsable = facts.GPUs
 	}
 	prMu.Unlock()
 
-	log.Printf("hw_init: pid=%d stdout=%d stderr=%d gpu_all=%q (measured=%v)", pid, len(hw_info), len(hw_tools), gpuAll, measured)
-	return hw_info, nil
-}
-
-func parseGPUList(hwText string) string {
-	count := 0
-	for _, line := range strings.Split(hwText, "\n") {
-		lower := strings.ToLower(line)
-		if strings.Contains(lower, "bi-v100") || strings.Contains(lower, "iluvatar") ||
-			strings.Contains(lower, "gpu 0") || strings.Contains(lower, "gpu 1") ||
-			strings.Contains(lower, "/dev/iluvatar") {
-			count++
-		}
-	}
-	if count == 0 {
-		count = 4
-	}
-	if count > 8 {
-		count = 8
-	}
-	var ids []string
-	for i := 0; i < count; i++ {
-		ids = append(ids, fmt.Sprintf("%d", i))
-	}
-	return strings.Join(ids, ",")
+	log.Printf("hw_init: pid=%d gpu_all=%q vendor=%q (measured=%v) toolchain=%v summary=%d bytes (whole text %d) raw=%d bytes",
+		pid, facts.GPUs, facts.GPUVendor, facts.GPUMeasured, facts.Toolchain, len(facts.Summary), len(hw_info), len(facts.Raw))
+	return info, nil
 }
 
 func ref_bind(pid int64, owner, repo string) (string, error) {
@@ -1060,11 +1040,7 @@ func dev_fix(pid int64, step *Step) (string, error) {
 
 	var prompt strings.Builder
 
-	if hw_info != "" {
-		prompt.WriteString("[HARDWARE]\n")
-		prompt.WriteString(hw_info)
-		prompt.WriteString("\n\n")
-	}
+	prompt.WriteString(hardwareSection(hw_info))
 
 	if theory != "" {
 		prompt.WriteString(fmt.Sprintf("[THEORY from %s]\n%s\n\n", repo, theory))

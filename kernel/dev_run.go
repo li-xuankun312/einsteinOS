@@ -421,11 +421,7 @@ func (r *devRun) unitPrompt(unit DevPlanNode, idx, total, attempt int, fail DevF
 	var p strings.Builder
 	plan := r.plan
 
-	if r.hwInfo != "" {
-		p.WriteString("[HARDWARE]\n")
-		p.WriteString(r.hwInfo)
-		p.WriteString("\n\n")
-	}
+	p.WriteString(hardwareSection(r.hwInfo))
 
 	// prior units: addresses and logs, never text
 	var prior []DevPlanNode
@@ -493,7 +489,7 @@ func (r *devRun) unitPrompt(unit DevPlanNode, idx, total, attempt int, fail DevF
 	p.WriteString("\n")
 
 	build, test := devVerifyScripts(unit.ID)
-	p.WriteString(fmt.Sprintf(dev_unit_instruction, idx+1, total, unit.ID, r.gpuAll, r.gpuUsable(), r.gpuUsable(), build, test, einsteinHelp, DoneInstruction()))
+	p.WriteString(fmt.Sprintf(dev_unit_instruction, idx+1, total, unit.ID, r.gpuAll, r.gpuUsable(), r.gpuUsable(), build, test, einsteinHelp, DoneInstruction(), toolchainPATH()))
 
 	if fb := pr_feedback(r.pid); fb != "" {
 		p.WriteString(fmt.Sprintf("\n\n[PRIOR FEEDBACK]\n%s", fb))
@@ -529,7 +525,7 @@ work in the repo directory shown under [DEV REPO]. use the dev repo's existing l
 [THE KERNEL VERIFIES YOU — WRITE THESE TWO SCRIPTS]
 %[7]s
 %[8]s
-- build script: compiles the WHOLE project with the real toolchain (the compilers are in /usr/local/corex/bin on this machine).
+- build script: compiles the WHOLE project with the real toolchain (the compilers are in %[11]s on this machine).
   it must exit 0 only if everything builds.
 - test script: runs the tests for YOUR unit. it must exit 0 only if every test passes; a failing check must make it exit non-zero.
   the tests must check the INVARIANTS of the theory (the LAYER 1 statements), not just that the code runs.
