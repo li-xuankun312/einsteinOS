@@ -77,6 +77,29 @@ func gitSSHCommand() string {
 	return fmt.Sprintf("ssh -i %q -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15", gitSSHKeyPath())
 }
 
+// gitGuardFn is gitGuard; a variable so the fetch/fallback logic can be tested.
+var gitGuardFn = gitGuard
+
+// gitFetchCmd is the command that brings dir's remote-tracking branches up to date.
+//
+// Over SSH with the deploy key when it can: every push in the 2026/11/02 logs used it and
+// succeeded on the first attempt (about 5 s), while the HTTPS `fetch origin` of the same
+// repository from the same machine hung (no output for 10 s) on most calls, one to five
+// times each. The URL is given explicitly instead of changing `origin`: other fetches in
+// this clone (gitUseBranchFromRemote) run without GIT_SSH_COMMAND and would use the
+// account's default ssh identity against an SSH origin, and fail.
+func gitFetchCmd(dir, ownerRepo string, ssh bool) string {
+	if ssh {
+		return fmt.Sprintf("GIT_SSH_COMMAND=%q git -C %q fetch %q '+refs/heads/*:refs/remotes/origin/*'",
+			gitSSHCommand(), dir, sshRemoteURL(ownerRepo))
+	}
+	return fmt.Sprintf("git -C %q fetch origin", dir)
+}
+
+// gitSSHFetchFailuresBeforeHTTPS: consecutive SSH fetch failures before this call goes
+// back to HTTPS for the rest of its attempts.
+const gitSSHFetchFailuresBeforeHTTPS = 2
+
 // GitCloneOrReuse ensures dir is a usable clone of ownerRepo, synced to remote HEAD.
 // If .git exists → fetch + reset. If .git is missing or corrupt → remove residue,
 // clone fresh. Every network step runs under gitGuard: a process with no sign of life
@@ -86,30 +109,46 @@ func gitSSHCommand() string {
 func GitCloneOrReuse(ownerRepo, dir string) error {
 	attempts := gitNetAttempts()
 	var lastErr error
+	useSSH := gitSSHAvailable()
+	sshFails := 0
+	// a failed SSH fetch counts toward going back to HTTPS; an HTTPS one does not
+	sshFailed := func() {
+		if !useSSH {
+			return
+		}
+		if sshFails++; sshFails >= gitSSHFetchFailuresBeforeHTTPS {
+			useSSH = false
+			log.Printf("git_clone_or_reuse: %s %d SSH fetches failed, using HTTPS for the rest", ownerRepo, sshFails)
+		}
+	}
 	for attempt := 1; attempt <= attempts; attempt++ {
 		if _, err := os.Stat(dir + "/.git"); err == nil {
 			// .git exists — fetch, then reset locally.
 			// do NOT rm -rf: the local repo is valid, only the network failed.
-			r := gitGuard(fmt.Sprintf("git -C %q fetch origin", dir), dir, gitStartWindow, gitMaxRun, 0, nil)
+			transport := map[bool]string{true: "SSH", false: "HTTPS"}[useSSH]
+			r := gitGuardFn(gitFetchCmd(dir, ownerRepo, useSSH), dir, gitStartWindow, gitMaxRun, 0, nil)
 			switch {
 			case !r.Started:
-				log.Printf("git_clone_or_reuse: %s attempt %d/%d fetch hung (no output for %s), killed", ownerRepo, attempt, attempts, gitStartWindow)
+				log.Printf("git_clone_or_reuse: %s attempt %d/%d fetch (%s) hung (no output for %s), killed", ownerRepo, attempt, attempts, transport, gitStartWindow)
 				lastErr = fmt.Errorf("fetch hung")
+				sshFailed()
 				continue
 			case r.TimedOut:
-				log.Printf("git_clone_or_reuse: %s attempt %d/%d fetch still running after %s, killed", ownerRepo, attempt, attempts, gitMaxRun)
+				log.Printf("git_clone_or_reuse: %s attempt %d/%d fetch (%s) still running after %s, killed", ownerRepo, attempt, attempts, transport, gitMaxRun)
 				lastErr = fmt.Errorf("fetch timed out")
+				sshFailed()
 				continue
 			case r.Code != 0:
 				lastErr = fmt.Errorf("fetch exit %d: %s", r.Code, truncStr(r.Out, 200))
-				log.Printf("git_clone_or_reuse: %s attempt %d/%d fetch failed (exit %d): %s", ownerRepo, attempt, attempts, r.Code, truncStr(strings.TrimSpace(r.Out), 120))
+				log.Printf("git_clone_or_reuse: %s attempt %d/%d fetch (%s) failed (exit %d): %s", ownerRepo, attempt, attempts, transport, r.Code, truncStr(strings.TrimSpace(r.Out), 120))
+				sshFailed()
 				continue
 			}
 			// fetch ok (exit 0, possibly silent) — reset to remote HEAD (local, no guard needed)
 			if out, rerr := exec.Command("bash", "-c", fmt.Sprintf("cd %q && git reset --hard origin/HEAD 2>&1", dir)).CombinedOutput(); rerr != nil {
 				log.Printf("git_clone_or_reuse: %s reset after fetch: %v: %s", ownerRepo, rerr, truncStr(strings.TrimSpace(string(out)), 120))
 			}
-			log.Printf("git_clone_or_reuse: %s synced (attempt %d)", ownerRepo, attempt)
+			log.Printf("git_clone_or_reuse: %s synced (attempt %d, %s)", ownerRepo, attempt, transport)
 			return nil
 		}
 

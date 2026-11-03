@@ -637,15 +637,23 @@ func ref_theorize_leaf(parent int64, owner, name, sha string, files []string, ta
 	Wait(child)
 
 	theory := GetResult(child)
-	// DownloadConv fallback if GetResult is short
-	if len(theory) < 500 {
-		if m := getMeta(child); m != nil && m.ConvID != "" {
-			downloaded, err := DownloadConv(m.ConvID)
-			if err == nil && len(downloaded) > len(theory) {
-				log.Printf("ref_theorize: GetResult=%d, downloaded=%d, using download",
-					len(theory), len(downloaded))
-				theory = downloaded
-			}
+	convID := ""
+	if m := getMeta(child); m != nil {
+		convID = m.ConvID
+	}
+	// the theory is the files the conversation left in its sandbox, in their final state
+	// (chunk_files.go) — the streamed text is a summary and the transcript is everything it ran
+	if text, ok := theoryFromFiles(convID); ok {
+		log.Printf("ref_theorize: theory = the conversation's files from the sandbox, %d bytes (streamed text was %d)", len(text), len(theory))
+		theory = text
+		forgetChunkFiles(convID)
+	} else if len(theory) < 500 && convID != "" {
+		// DownloadConv fallback if GetResult is short
+		downloaded, err := DownloadConv(convID)
+		if err == nil && len(downloaded) > len(theory) {
+			log.Printf("ref_theorize: GetResult=%d, downloaded=%d, using download",
+				len(theory), len(downloaded))
+			theory = downloaded
 		}
 	}
 

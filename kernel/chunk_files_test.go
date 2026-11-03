@@ -211,3 +211,24 @@ func TestPlaceholdersAndFindOutputAreNotFiles(t *testing.T) {
 		t.Errorf("ls output of the outputs dir: %v", got)
 	}
 }
+
+func TestTheoryFromFilesPrefersTheSandboxAndSaysWhenThereIsNone(t *testing.T) {
+	stubDownloads(t, map[string]string{od + "/ViaHeredoc.lean": "theorem h : True := trivial", od + "/ViaCreateFile.lean": "theorem c : True := trivial"})
+	old := downloadConvRawFn
+	SetDownloadConvRawFn(func(string) ([]byte, error) { return fakeConvJSON(), nil })
+	t.Cleanup(func() { downloadConvRawFn = old })
+	text, ok := theoryFromFiles("conv-leaf")
+	forgetChunkFiles("conv-leaf")
+	if !ok || !strings.Contains(text, "## FILE: "+od+"/ViaHeredoc.lean") || !strings.Contains(text, "## FILE: "+od+"/ViaCreateFile.lean") {
+		t.Fatalf("ok=%v\n%s", ok, text)
+	}
+	// a conversation whose sandbox holds nothing: the caller keeps what it had
+	stubDownloads(t, map[string]string{})
+	if _, ok := theoryFromFiles("conv-empty"); ok {
+		t.Fatal("no files in the sandbox must report ok=false")
+	}
+	forgetChunkFiles("conv-empty")
+	if _, ok := theoryFromFiles(""); ok {
+		t.Fatal("no conversation id, no files")
+	}
+}

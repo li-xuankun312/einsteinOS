@@ -301,3 +301,18 @@ func forgetChunkFiles(convID string) {
 	delete(chunkFilesMemo, convID)
 	chunkFilesMu.Unlock()
 }
+
+// theoryFromFiles is the theory text of a finished theory conversation: the files it left
+// in its sandbox, in their final state (rendered as "## FILE:" sections), when there are
+// any. ok is false when the sandbox has none, and the caller keeps what it had.
+//
+// Both ways of running theory use it: the chunked path (ref_split) and the single
+// conversation for a repository with few heavy files (ref_theorize_leaf, which took the
+// conversation's own streamed text, or the whole transcript when that was short).
+func theoryFromFiles(convID string) (string, bool) {
+	files := chunkFilesFor(convID)
+	if len(files) == 0 {
+		return "", false
+	}
+	return renderChunkFiles(files), true
+}
