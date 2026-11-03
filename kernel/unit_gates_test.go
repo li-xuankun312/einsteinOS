@@ -61,3 +61,39 @@ func TestChangedGPUFiles(t *testing.T) {
 		t.Fatalf("%v", got)
 	}
 }
+
+// 2026/11/03: the builds compiled only the repository's existing src/*.cu for ivcore10.
+// A unit that writes its own .cu must be the one compiled.
+func TestTheUnitsOwnCUDAMustBeCompiled(t *testing.T) {
+	existing := []string{"/usr/local/corex/bin/clang++ -x cuda --cuda-gpu-arch=ivcore10 -c src/ix_gdn.cu -o /tmp/o/ix_gdn.cu.o",
+		"/usr/local/corex/bin/clang++ -x cuda --cuda-gpu-arch=ivcore10 -c tests/test_gdn.cu -o /tmp/o/test_gdn.cu.o"}
+	in := GateInput{Req: gpuReq, Changed: []string{"src/baloon/fused_gdn.cu", "include/baloon/fused_gdn.cuh"}, Build: ProcTrace{Cmdlines: existing}}
+	if k, txt := unitGates(in); k != "gpu_not_compiled" || !strings.Contains(txt, "src/baloon/fused_gdn.cu") || !strings.Contains(txt, "src/ix_gdn.cu") {
+		t.Fatalf("%q %q", k, txt)
+	}
+	// compiled — by relative path, by basename after a cd, or by nvcc
+	for _, c := range []string{
+		"/usr/local/corex/bin/clang++ -x cuda --cuda-gpu-arch=ivcore10 -c src/baloon/fused_gdn.cu -o x.o",
+		"clang++ --cuda-gpu-arch=ivcore10 -c fused_gdn.cu",
+		"/usr/local/corex/bin/nvcc -c /tmp/ws/src/baloon/fused_gdn.cu",
+	} {
+		in.Build.Cmdlines = append(existing, c)
+		if k, txt := unitGates(in); k != "" {
+			t.Fatalf("%s: %q %q", c, k, txt)
+		}
+	}
+	// the host compiler naming the file is not a CUDA compile
+	in.Build.Cmdlines = []string{"g++ -std=c++17 -c src/baloon/fused_gdn.cu"}
+	if k, _ := unitGates(in); k != "gpu_not_compiled" {
+		t.Fatalf("g++ counted as a CUDA compile: %q", k)
+	}
+	// only a .cuh changed: some CUDA compile must have run
+	in = GateInput{Req: gpuReq, Changed: []string{"include/baloon/x.cuh"}}
+	if k, _ := unitGates(in); k != "gpu_not_compiled" {
+		t.Fatalf("header only, nothing compiled: %q", k)
+	}
+	in.Build.Cmdlines = existing
+	if k, _ := unitGates(in); k != "" {
+		t.Fatalf("header only, compiled through a .cu: %q", k)
+	}
+}
