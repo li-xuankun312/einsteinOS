@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"path"
+	"regexp"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -2268,18 +2269,27 @@ func WriteGHTokenFromEnv() bool {
 	return true
 }
 
+// strip_credentials removes credentials from a task while keeping the task. It used to drop
+// every LINE containing ghp_, @stu., token or password — and the 2026/11/02 task was one line
+// ("项目在 zeng-bin3123/baloon … ilu级别的底层代码 … 参考 Niko1221/Strata … api限流就用这个: <email>
+// <user> ghp_…"), so the whole task went, and every theory and dev prompt said "[TASK]" and
+// nothing else. Now the credential itself is replaced where it stands: tokens and secrets the
+// kernel knows (redactSecrets), e-mail addresses, and the value after a password/token/secret
+// key; the rest of the line stays.
 func strip_credentials(s string) string {
-	var lines []string
-	for _, line := range strings.Split(s, "\n") {
-		if strings.Contains(line, "ghp_") ||
-			strings.Contains(line, "@stu.") ||
-			strings.Contains(line, "token") ||
-			strings.Contains(line, "password") {
-			continue
-		}
-		lines = append(lines, line)
+	s = redactSecrets(s)
+	for _, c := range taskCredentialRes {
+		s = c.re.ReplaceAllString(s, c.repl)
 	}
-	return strings.Join(lines, "\n")
+	return s
+}
+
+var taskCredentialRes = []struct {
+	re   *regexp.Regexp
+	repl string
+}{
+	{regexp.MustCompile(`[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}`), "<email>"},
+	{regexp.MustCompile(`(?i)\b(password|passwd|passphrase|token|secret|api[_-]?key|cookie)(\s*[:=：]\s*)[^\s,;，；]+`), "${1}${2}<redacted>"},
 }
 
 func findPrevResult(pid int64, kind StepKind, owner, repo string) string {
