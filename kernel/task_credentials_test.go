@@ -40,3 +40,26 @@ func TestTheTaskSurvivesWithoutItsCredentials(t *testing.T) {
 		t.Fatalf("%q", strip_credentials(s))
 	}
 }
+
+// the theory conversations get the task: from the PR's title when nothing else has it, and
+// never with its credentials
+func TestTheTheoryConversationsGetTheTask(t *testing.T) {
+	pid := int64(987654)
+	prMu.Lock()
+	prTable[pid] = &PRProcess{Title: task1102}
+	prMu.Unlock()
+	t.Cleanup(func() { prMu.Lock(); delete(prTable, pid); prMu.Unlock() })
+	metaMu.Lock()
+	taskMeta[pid] = &TaskMeta{Prompt: "   "}
+	metaMu.Unlock()
+	t.Cleanup(func() { metaMu.Lock(); delete(taskMeta, pid); metaMu.Unlock() })
+
+	got := ref_theorize_task(pid)
+	if !strings.Contains(got, "ilu级别的底层代码") || strings.Contains(got, "ghp_ABCDEF") {
+		t.Fatalf("%q", got)
+	}
+	// and the dev conversations: the same task through the dev run's own path
+	if d := strip_credentials(GetPR(pid).Title); !strings.Contains(d, "Niko1221/Strata") || strings.Contains(d, "@stu.") {
+		t.Fatalf("%q", d)
+	}
+}

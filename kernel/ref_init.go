@@ -570,16 +570,27 @@ func fileSurvey(owner, name, sha string, files []string) (heavy []string, light 
 	return
 }
 
+// ref_theorize_task is the task the theory conversations are given: the first non-empty of
+// the process's context, its prompt, and its PR's title — always without credentials (the
+// context was returned as it stood, and an empty prompt never reached the PR title, so the
+// 11/03 theory prompts said "[TASK]" and nothing else).
 func ref_theorize_task(pid int64) string {
-	ctx := GetCOWContext(pid)
-	if ctx != nil && ctx.Len() > 0 {
-		return ctx.Read(0)
+	var cands []string
+	if ctx := GetCOWContext(pid); ctx != nil && ctx.Len() > 0 {
+		cands = append(cands, ctx.Read(0))
 	}
 	metaMu.Lock()
-	m := taskMeta[pid]
+	if m := taskMeta[pid]; m != nil {
+		cands = append(cands, m.Prompt)
+	}
 	metaMu.Unlock()
-	if m != nil {
-		return strip_credentials(m.Prompt)
+	if pr := GetPR(pid); pr != nil {
+		cands = append(cands, pr.Title)
+	}
+	for _, c := range cands {
+		if t := strings.TrimSpace(strip_credentials(c)); t != "" {
+			return t
+		}
 	}
 	return ""
 }
