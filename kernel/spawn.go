@@ -347,6 +347,8 @@ einsteinos spawn judge <<'EOF'     ONE conversation answers many questions: put 
 einsteinos spawn plan <<'EOF'      a conversation that only decides how to split something.
 einsteinos conv <addr>             state of that conversation and of everything it started.
 einsteinos conv <addr> result      what it returned, once it is done.
+einsteinos conv <addr> files       the files it produced (a theory chunk's .lean files).
+einsteinos conv <addr> file <name> one of those files, in full.
 judge and plan conversations never start conversations. limits: depth, width and tree size are enforced by the kernel.`
 
 // HandleEinsteinCommand runs one `einsteinos …` command for the conversation
@@ -403,9 +405,12 @@ func HandleEinsteinCommand(parentConv, cmd string) string {
 
 	case "conv":
 		if len(args) < 3 {
-			return errOut("usage: einsteinos conv <addr> [result]")
+			return errOut("usage: einsteinos conv <addr> [result|files|file <name>]")
 		}
 		addr := resolveAddr(args[2])
+		if len(args) >= 4 && (args[3] == "files" || args[3] == "file") {
+			return convFilesCommand(addr, args[3:])
+		}
 		if len(args) >= 4 && args[3] == "result" {
 			text, ok := GetConvResult(addr)
 			if !ok {
@@ -419,6 +424,46 @@ func HandleEinsteinCommand(parentConv, cmd string) string {
 		return jsonOut(ConvManifest(addr))
 	}
 	return einsteinHelp
+}
+
+// convFileMax bounds one `einsteinos conv <addr> file` answer; a theory module is a few KB.
+const convFileMax = 64000
+
+// convFilesCommand answers `einsteinos conv <addr> files` and `… file <name>` from the
+// conversation's stored result (a theory chunk's rendered files, theory_store.go).
+func convFilesCommand(addr string, args []string) string {
+	text, ok := GetConvResult(addr)
+	files := convResultFiles(text)
+	if !ok || len(files) == 0 {
+		return jsonOut(map[string]any{"addr": addr, "status": ConvManifest(addr).Status, "files": []any{}})
+	}
+	if args[0] == "files" {
+		type entry struct {
+			Name  string `json:"name"`
+			Bytes int    `json:"bytes"`
+		}
+		list := make([]entry, 0, len(files))
+		for _, f := range files {
+			list = append(list, entry{Name: f.Path, Bytes: len(f.Content)})
+		}
+		return jsonOut(map[string]any{"addr": addr, "files": list})
+	}
+	if len(args) < 2 {
+		return errOut("usage: einsteinos conv <addr> file <name>")
+	}
+	f, found := findConvFile(files, args[1])
+	if !found {
+		names := make([]string, 0, len(files))
+		for _, x := range files {
+			names = append(names, x.Path)
+		}
+		return errOut(fmt.Sprintf("no single file named %q in %s; it has: %s", args[1], shortID(addr), strings.Join(names, ", ")))
+	}
+	content := f.Content
+	if len(content) > convFileMax {
+		content = content[:convFileMax] + "\n…(truncated)"
+	}
+	return jsonOut(map[string]string{"addr": addr, "name": f.Path, "content": content})
 }
 
 // resolveAddr lets a child pass the 8-character prefix it sees in logs.
@@ -435,6 +480,15 @@ func resolveAddr(a string) string {
 				return a // ambiguous: leave it, the lookup will say unknown
 			}
 			match = r.ConvID
+		}
+	}
+	// a conversation the kernel holds a result for (a theory chunk) is an address too
+	for id := range convResults {
+		if strings.HasPrefix(id, a) {
+			if match != "" && match != id {
+				return a
+			}
+			match = id
 		}
 	}
 	if match != "" {

@@ -56,6 +56,10 @@ func ref_split_with(parent_pid int64, owner, repo, sha string, files []string, t
 
 	log.Printf("ref_split: %s/%s@%s depth=%d %d files -> %d chunks (planner)",
 		owner, repo, short_sha(sha), depth, len(files), len(chunks))
+	// the plan's identity names where its chunks are stored (theory_store.go)
+	plan := newTheoryPlanRef(sha, chunks)
+	log.Printf("ref_split: %s/%s@%s plan %s → %s", owner, repo, short_sha(sha), plan.Plan, plan.Dir())
+	var prior []priorChunk // earlier chunks of THIS plan, by conversation address
 
 	node := split_alloc(parent_pid, depth, owner, repo, sha, files)
 
@@ -64,7 +68,7 @@ func ref_split_with(parent_pid int64, owner, repo, sha string, files []string, t
 	var chunkCovs []Coverage // final coverage per chunk (zeroed for junk)
 	var junkChunks []int
 	for i, chunk := range chunks {
-		child_pid := ref_split_fork(parent_pid, owner, repo, sha, chunk, task, depth+1, i, len(chunks), chunks, results)
+		child_pid := ref_split_fork(parent_pid, owner, repo, sha, chunk, task, depth+1, i, len(chunks), chunks, prior)
 		if child_pid <= 0 {
 			continue
 		}
@@ -294,7 +298,7 @@ func ref_split_with(parent_pid int64, owner, repo, sha string, files []string, t
 		lastRetryConvID := ""
 		for attempt := 1; attempt <= 5 && needsRetry; attempt++ {
 			log.Printf("ref_split: chunk %d/%d retry %d/5 with fresh conversation", i+1, len(chunks), attempt)
-			retryPid := ref_split_fork(parent_pid, owner, repo, sha, chunk, task, depth+1, i, len(chunks), chunks, results)
+			retryPid := ref_split_fork(parent_pid, owner, repo, sha, chunk, task, depth+1, i, len(chunks), chunks, prior)
 			if retryPid <= 0 {
 				break
 			}
@@ -349,15 +353,23 @@ func ref_split_with(parent_pid int64, owner, repo, sha string, files []string, t
 		// holds create_file bodies as first written and everything else the child
 		// ran. Junk detection and coverage above still read the transcript.
 		theory := result
+		nfiles := 0
 		if files := chunkFilesFor(storeConvID); len(files) > 0 {
 			theory = renderChunkFiles(files)
+			nfiles = len(files)
 			log.Printf("ref_split: chunk %d/%d theory = %d file(s) from the sandbox, %d bytes (transcript was %d)",
 				i+1, len(chunks), len(files), len(theory), len(result))
 		}
 		results = append(results, theory)
-		// push final data to GitHub (after all polling, retries, ContinueConv).
 		if storeConvID != "" {
-			ref_store_chunk(storeConvID, i+1, owner, repo)
+			// the kernel answers `einsteinos conv <addr> files|file` from this (spawn.go):
+			// later chunks read this one by address, not from a branch
+			if nfiles > 0 {
+				SetConvResult(storeConvID, theory)
+				prior = append(prior, priorChunk{Idx: i + 1, Conv: storeConvID, Files: nfiles})
+			}
+			// push final data to GitHub (after all polling, retries, ContinueConv).
+			ref_store_chunk(storeConvID, i+1, owner, repo, plan)
 		}
 
 		log.Printf("ref_split: %s/%s@%s chunk %d/%d done (%d bytes)",
@@ -403,14 +415,19 @@ func ref_split_with(parent_pid int64, owner, repo, sha string, files []string, t
 // no kernel prompt injection of convIDs, no .md-only filter.
 // ---------------------------------------------------------------------------
 
-func ref_store_chunk(convID string, chunkIdx int, owner, repo string) {
+func ref_store_chunk(convID string, chunkIdx int, owner, repo string, plan theoryPlanRef) {
 	devRepos := GetDevRepos()
 	if len(devRepos) == 0 || convID == "" {
 		return
 	}
 	parts := strings.Split(devRepos[0], "/")
 	repoName := parts[len(parts)-1]
-	chunkName := fmt.Sprintf("theorize_chunk_%d", chunkIdx)
+	chunkName := fmt.Sprintf("theorize_chunk_%d", chunkIdx) // for the log only
+	if !plan.Valid() {
+		log.Printf("ref_store_chunk: %s has no plan identity (no reference commit), not stored", chunkName)
+		return
+	}
+	chunkRel := plan.ChunkDir(chunkIdx, convID) // .einsteinOS/theory/<ref12>/<plan>/<NN>-<conv12>
 
 	// 1. download raw conversation JSON
 	rawJSON, err := DownloadConvRaw(convID)
@@ -429,7 +446,7 @@ func ref_store_chunk(convID string, chunkIdx int, owner, repo string) {
 	// tracked file in the first place, not to react after GitHub catches it.
 	rawJSON = []byte(redactSecrets(string(rawJSON)))
 
-	convTmp := fmt.Sprintf("/tmp/chunk_%d_conv.json", chunkIdx)
+	convTmp := fmt.Sprintf("/tmp/chunk_%s_conv.json", convShort(convID))
 	if err := os.WriteFile(convTmp, rawJSON, 0644); err != nil {
 		log.Printf("ref_store_chunk: %s write conv tmp failed: %v", chunkName, err)
 		return
@@ -437,7 +454,7 @@ func ref_store_chunk(convID string, chunkIdx int, owner, repo string) {
 
 	// 2+3. the files the conversation left in its sandbox (chunk_files.go): every
 	// .lean it wrote, by create_file or by bash or python, validated by downloading
-	chunkDir := fmt.Sprintf("/tmp/chunk_%d_files", chunkIdx)
+	chunkDir := fmt.Sprintf("/tmp/chunk_%s_files", convShort(convID))
 	os.MkdirAll(chunkDir, 0755)
 
 	downloadedFiles := []string{} // local tmp paths
@@ -449,7 +466,7 @@ func ref_store_chunk(convID string, chunkIdx int, owner, repo string) {
 			continue
 		}
 		downloadedFiles = append(downloadedFiles, localTmp)
-		destPaths = append(destPaths, fmt.Sprintf(".einsteinOS/chunks/%s/%s", chunkName, f.Name))
+		destPaths = append(destPaths, chunkRel+"/"+f.Name)
 		log.Printf("ref_store_chunk: %s downloaded %s (%d bytes)", chunkName, f.Name, len(f.Content))
 	}
 	forgetChunkFiles(convID)
@@ -474,16 +491,20 @@ func ref_store_chunk(convID string, chunkIdx int, owner, repo string) {
 	}
 
 	// copy conv JSON + downloaded files into the work tree
-	gitChunkDir := fmt.Sprintf("%s/.einsteinOS/chunks/%s", repoDir, chunkName)
-	os.MkdirAll(chunkDir, 0755)
+	gitChunkDir := repoDir + "/" + chunkRel
+	os.MkdirAll(gitChunkDir, 0755)
 
 	convDest := fmt.Sprintf("%s/conv.json", gitChunkDir)
 	copyFile(convTmp, convDest)
+	// the same bytes from every chunk of the plan: git merges identical additions cleanly
+	if err := os.WriteFile(repoDir+"/"+plan.PlanFile(), plan.Manifest(), 0644); err != nil {
+		log.Printf("ref_store_chunk: %s write %s failed: %v", chunkName, plan.PlanFile(), err)
+	}
 	for i, localTmp := range downloadedFiles {
 		copyFile(localTmp, fmt.Sprintf("%s/%s", repoDir, destPaths[i]))
 	}
 
-	commitMsg := fmt.Sprintf("theory: %s — conv %s, %d files", chunkName, convID[:8], len(downloadedFiles))
+	commitMsg := fmt.Sprintf("theory: %s — conv %s, %d files → %s", chunkName, convID[:8], len(downloadedFiles), chunkRel)
 	GitCommit(repoDir, commitMsg)
 
 	// push with retry (Go-native, not bash)
@@ -514,11 +535,11 @@ func ref_store_chunk(convID string, chunkIdx int, owner, repo string) {
 	}
 	mergeMsg := fmt.Sprintf("theory: merge %s — conv %s, %d files", chunkName, convID[:8], len(downloadedFiles))
 	if err := GitMerge(repoDir, convBranch, mergeMsg); err != nil {
-		// each chunk writes only under its own .einsteinOS/chunks/<chunkName>/, so a
-		// real conflict should not happen in normal operation; if it does, the
-		// chunk's content is still safe on convBranch and nothing has been pushed
-		// broken — this just means later chunks won't see THIS one via the shared
-		// branch until it's investigated.
+		// each chunk writes only under its own identity directory (theory_store.go) plus
+		// its plan's plan.json, which every chunk of the plan writes with the same bytes,
+		// so a conflict means something else touched those paths. The chunk's content is
+		// still safe on convBranch, and later chunks of this plan read it through the
+		// kernel by address, not from this branch.
 		log.Printf("ref_store_chunk: %s merge into %s failed: %v — chunk work stays on %s only", chunkName, baseBranch, err, convBranch)
 		return
 	}
@@ -526,7 +547,7 @@ func ref_store_chunk(convID string, chunkIdx int, owner, repo string) {
 		log.Printf("ref_store_chunk: %s push of merged %s failed: %v", chunkName, baseBranch, err)
 		return
 	}
-	log.Printf("ref_store_chunk: %s merged into %s and pushed — later chunks can now read it", chunkName, baseBranch)
+	log.Printf("ref_store_chunk: %s merged into %s and pushed at %s", chunkName, baseBranch, chunkRel)
 }
 
 func copyFile(src, dst string) error {
@@ -764,7 +785,7 @@ func theory_static_split(files []string) [][]string {
 	return chunks
 }
 
-func ref_split_fork(parent_pid int64, owner, repo, sha string, files []string, task string, depth int, chunk_idx int, chunk_total int, allChunks [][]string, priorResults []string) int64 {
+func ref_split_fork(parent_pid int64, owner, repo, sha string, files []string, task string, depth int, chunk_idx int, chunk_total int, allChunks [][]string, prior []priorChunk) int64 {
 	dir := fmt.Sprintf("/tmp/ref_%s_%s.git", owner, repo)
 
 	var src strings.Builder
@@ -775,13 +796,8 @@ func ref_split_fork(parent_pid int64, owner, repo, sha string, files []string, t
 	src.WriteString("other files in this repo are handled by OTHER conversations — not your concern.\n")
 	src.WriteString("do NOT explore the repo to find more files to theorize. YOUR scope is FIXED.\n\n")
 
-	// prior chunks: dynamically constructed from GetDevRepos()
-	if len(priorResults) > 0 {
-		devRepos := GetDevRepos()
-		if len(devRepos) > 0 {
-			src.WriteString(PriorChunksContext(len(priorResults), devRepos[0]))
-		}
-	}
+	// earlier chunks of THIS plan, by address: the kernel hands their files over
+	src.WriteString(PriorChunksContext(prior))
 
 	for _, f := range files {
 		if isBinaryFile(f) {

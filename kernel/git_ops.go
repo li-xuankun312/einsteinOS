@@ -482,24 +482,6 @@ func CreateGitHubPR(owner, repo, head, base, title, body string) (string, error)
 	return "", fmt.Errorf("PR creation failed after %d attempts", maxAttempts)
 }
 
-// PriorChunksContext builds the [PRIOR WORK] section for a theory chunk prompt.
-// Returns empty string if no prior results.
-func PriorChunksContext(priorCount int, devRepo string) string {
-	if priorCount == 0 || devRepo == "" {
-		return ""
-	}
-	return fmt.Sprintf(
-		"[PRIOR WORK — %d earlier chunks already produced theory for other files]\n"+
-			"you can READ prior theory for context:\n"+
-			"  git clone %s /tmp/devrepo 2>/dev/null\n"+
-			"  cd /tmp/devrepo && git checkout einsteinOS/theory 2>/dev/null\n"+
-			"  ls .einsteinOS/chunks/\n"+
-			"this is READ-ONLY context. do NOT git push, git commit, or store anything there.\n"+
-			"the kernel stores your output automatically after you finish.\n"+
-			"produce theory for YOUR assigned files, then stop.\n\n",
-		priorCount, CloneURL(devRepo))
-}
-
 func truncStr(s string, n int) string {
 	s = redactSecrets(s)
 	if len(s) <= n {
