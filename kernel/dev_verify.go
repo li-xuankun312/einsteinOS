@@ -439,6 +439,9 @@ func assembleWorkspace(tipDir, mirrorDir string, changed, removed []string) (str
 // bare repository.
 var devGitPush = GitPushRetry
 
+// devGitDeleteBranch deletes a branch on the dev repo's remote (a variable for tests).
+var devGitDeleteBranch = gitDeleteRemoteBranch
+
 // commitDelta checks out `onto` in the kernel clone (the remote tip when the
 // remote has it, else forked from `from`), applies the delta, commits and pushes
 // it. Returns whether anything was committed.
@@ -543,6 +546,15 @@ func devVerifyAndPush(cloneDir, mirror, devRepo, branch, baseRef, unitID, unitDe
 			if err := promoteBranch(cloneDir, devRepo, baseRef, branch); err != nil {
 				out.Err = err
 				return out
+			}
+			// the wip branch is merged into the dev branch: it has nothing left to hold.
+			// 11/03 left einsteinOS/dev-…-wip-u89be81de0b and -wip-ueac0e4654d behind.
+			if baseRef == devWipBranch(branch, unitID) {
+				if err := devGitDeleteBranch(cloneDir, devRepo, baseRef); err != nil {
+					log.Printf("dev_verify: unit %s: %s merged but not deleted: %v", unitID, baseRef, err)
+				} else {
+					log.Printf("dev_verify: unit %s: %s merged into %s and deleted", unitID, baseRef, branch)
+				}
 			}
 		} else if err := commitDelta(cloneDir, devRepo, branch, branch, mirror, changed, removed, msg); err != nil {
 			out.Err = err

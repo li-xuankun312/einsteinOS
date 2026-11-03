@@ -193,6 +193,14 @@ func setupRemote(t *testing.T) (bare, clone string) {
 		return nil
 	}
 	t.Cleanup(func() { devGitPush = old })
+	oldDel := devGitDeleteBranch
+	devGitDeleteBranch = func(dir, repo, branch string) error {
+		c := exec.Command("git", "push", "-q", "origin", "--delete", branch)
+		c.Dir = dir
+		_, err := c.CombinedOutput()
+		return err
+	}
+	t.Cleanup(func() { devGitDeleteBranch = oldDel })
 	return bare, clone
 }
 
@@ -256,6 +264,9 @@ func TestVerifyAndPush_PassGoesToDevBranch_FailGoesToWip_FixPromotes(t *testing.
 	}
 	if !remoteHas(t, bare, branch, "src/impl.cu") || !remoteHas(t, bare, branch, "src/base.cu") {
 		t.Fatal("verified fix must be on the dev branch together with the earlier tree")
+	}
+	if remoteHasBranch(bare, wip) {
+		t.Fatal("the wip branch was merged into the dev branch and must be deleted (11/03 left two behind)")
 	}
 	if got := git(t, clone, "--no-pager", "show", "origin/"+branch+":src/impl.cu"); !strings.Contains(got, "fixed") {
 		// origin ref may be stale in this clone; read the bare repo directly

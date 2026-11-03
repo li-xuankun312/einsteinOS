@@ -232,10 +232,15 @@ func TestDevFromTheorems_FailThenFix_RealErrorReachesTheFixConversation(t *testi
 	if got := bareShow(env.bare, branch+":src/impl.cu"); !strings.Contains(got, "fixed") || strings.Contains(got, "broken") {
 		t.Fatalf("dev branch should hold the FIXED code, got %q", got)
 	}
-	// the broken code was parked on the unit's wip branch, never on the dev branch
+	// the broken code was parked on the unit's wip branch, never on the dev branch: the fix
+	// was merged from it — and once merged, the wip branch is deleted (11/03 left two behind)
+	hist, _ := exec.Command("git", "--git-dir", env.bare, "log", "--format=%s", branch).Output()
+	if !strings.Contains(string(hist), "merge verified "+branch+"-wip-") {
+		t.Fatalf("the fix should have been merged from the unit's wip branch; history:\n%s", hist)
+	}
 	out, _ := exec.Command("git", "--git-dir", env.bare, "branch", "--list", "*wip*").Output()
-	if !strings.Contains(string(out), "-wip-") {
-		t.Fatalf("failing code should have been parked on a wip branch; branches: %s", out)
+	if strings.TrimSpace(string(out)) != "" {
+		t.Fatalf("merged wip branch left on the remote: %s", out)
 	}
 	works := 0
 	for _, p := range env.model.prompts {

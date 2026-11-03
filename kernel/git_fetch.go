@@ -122,3 +122,22 @@ func originOwnerRepo(repoDir string) string {
 	}
 	return ""
 }
+
+// gitDeleteRemoteBranch deletes ownerRepo's branch, over the deploy key first, judged like a
+// fetch: no sign of life → new process, no progress → new process. A branch already gone is
+// done.
+func gitDeleteRemoteBranch(repoDir, ownerRepo, branch string) error {
+	useSSH := gitSSHFn()
+	var last string
+	for attempt := 1; attempt <= 3; attempt++ {
+		url, env := gitRemoteFn(ownerRepo, useSSH)
+		cmd := fmt.Sprintf("%sgit -C %q push %q --delete %s", env, repoDir, url, shq("refs/heads/"+branch))
+		r := gitGuardFn(cmd, repoDir, gitStartWindow, gitPushMaxRun, gitPushStallTimeout, nil)
+		if r.Code == 0 || strings.Contains(r.Out, "remote ref does not exist") {
+			return nil
+		}
+		last = truncStr(strings.TrimSpace(r.Out), 160)
+		useSSH = false
+	}
+	return fmt.Errorf("delete %s: %s", branch, last)
+}
