@@ -28,8 +28,13 @@ var (
 	proofRefSub = "lean/OAI"
 )
 
-// chunkSorryRounds bounds the continues for one chunk.
-var chunkSorryRounds = 2
+// chunkSorryRounds bounds extra continues for one chunk after it ended. 0: none — the
+// sorry count reaches the chunk during its own rounds, with every Axle answer
+// (OutputsSorryNote, turn_budget.go); here it is only measured and logged.
+var chunkSorryRounds = 0
+
+// theoryBudgetRole is the role whose budget the theory prompt states.
+const theoryBudgetRole = "theorize_chunk"
 
 // ProofReferencePath is where the reference proofs are read from.
 func ProofReferencePath() string {

@@ -308,7 +308,7 @@ const mainConvToolBudget = 10
 
 func (m *Model) completionLoop(ctx context.Context, convID string, webReq *CompletionRequest, stream bool, yield func(*model.LLMResponse, error) bool, opts ...bool) {
 	const maxContinues = 8
-	const maxRounds = 20
+	maxRounds := kernel.ConvRoundCeiling // kernel/turn_budget.go: prompts state the same number
 
 	isChild := len(opts) > 0 && opts[0]
 	st := &loopState{convID: convID, isChild: isChild, ledger: newToolLedger()}
@@ -854,6 +854,9 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 				for _, tr := range shapeToolResults(rr) {
 					localDiff.WriteString(fmt.Sprintf("[%s] %s\n\n", tr.ToolUseID, tr.Content))
 				}
+				if len(rr) > 0 {
+					localDiff.WriteString(kernel.WritebackNote(childRole, convID))
+				}
 				log.Printf("claudeweb: SSE recovery writeback %d results", len(rr))
 				if len(rr) > 0 {
 					st.localDelivered = true
@@ -912,6 +915,14 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 		localDiff.WriteString("Continue. Note: the following tools were executed on the LOCAL machine (source of truth). If any results differ from your sandbox, use these:\n\n")
 		for _, tr := range toolResults {
 			localDiff.WriteString(fmt.Sprintf("[%s] %s\n\n", tr.ToolUseID, tr.Content))
+		}
+		// measured facts the kernel adds to this writeback (theory: the sorry state of
+		// the files, so a chunk learns it with the Axle answer, not in an extra round)
+		if len(toolResults) > 0 {
+			if note := kernel.WritebackNote(childRole, convID); note != "" {
+				localDiff.WriteString(note)
+				log.Printf("claudeweb: writeback note: %s", strings.SplitN(note, "\n", 2)[0])
+			}
 		}
 		log.Printf("claudeweb: writeback %d results + Continue (silent=%d/%d)", len(toolResults), st.consecutiveContinues, maxContinues)
 		if len(toolResults) > 0 {

@@ -57,6 +57,8 @@ and 'obtain', main theorems cite helper lemmas, tactics only close
 small leaf goals. model your proofs after what you see there.
 
 do NOT use native_decide (Axle bans it). do NOT change a theorem statement to make it easier to prove.
+a theorem that uses sorry is not proved yet: the proofs under %[3]s show how. every Axle answer
+comes back with the sorry count measured on the machine that runs you.
 `
 
 // thi_axle takes the Axle session cookie and CSRF token.
@@ -90,7 +92,8 @@ do not push to git. before you finish, run ls %[1]s once so the list of your fil
 // formatTheorizeInstruction assembles the theory prompt from pieces.
 func formatTheorizeInstruction() string {
 	session, csrf := axleCredentials()
-	return fmt.Sprintf(thi_output, TheoryOutputsDir) + thi_structure +
+	return BudgetBlock(theoryBudgetRole) + "\n" +
+		fmt.Sprintf(thi_output, TheoryOutputsDir) + thi_structure +
 		fmt.Sprintf(thi_proofs, proofRefURL, proofRefDir, ProofReferencePath()) +
 		fmt.Sprintf(thi_axle, session, csrf) +
 		fmt.Sprintf(thi_scope, TheoryOutputsDir, DoneInstruction())
