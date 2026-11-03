@@ -67,15 +67,13 @@ func (c *Client) Completion(convID string, req *CompletionRequest) (io.ReadClose
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	// alive while bytes arrive, cancelled after streamIdleMax without any (stream_progress.go)
+	ctx, watch := newProgressContext()
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
-		cancel()
+		watch.stop()
 		return nil, fmt.Errorf("create request: %w", err)
 	}
-	// cancel is NOT deferred here — caller reads resp.Body which needs the context alive.
-	// context auto-cancels after 10min, killing a stuck SSE stream.
-	_ = cancel
 
 	httpReq.Header.Set("Accept", "text/event-stream")
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -103,8 +101,8 @@ func (c *Client) Completion(convID string, req *CompletionRequest) (io.ReadClose
 			wait := backoffs[attempt-1]
 			log.Printf("claudeweb: retry %d/%d after %v", attempt, maxRetries, wait)
 			time.Sleep(wait)
-			ctx, cancel = context.WithTimeout(context.Background(), 10*time.Minute)
-			_ = cancel
+			watch.stop()
+			ctx, watch = newProgressContext()
 			httpReq, _ = http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 			httpReq.Header.Set("Accept", "text/event-stream")
 			httpReq.Header.Set("Content-Type", "application/json")
@@ -148,6 +146,7 @@ func (c *Client) Completion(convID string, req *CompletionRequest) (io.ReadClose
 					continue
 				}
 				lastErr = &RateLimitError{Body: errStr}
+				watch.stop()
 				return nil, lastErr
 			}
 
@@ -166,7 +165,7 @@ func (c *Client) Completion(convID string, req *CompletionRequest) (io.ReadClose
 			return nil, fmt.Errorf("API %d: %s", resp.StatusCode, truncBody(errBody))
 		}
 
-		return resp.Body, nil
+		return &progressBody{ReadCloser: resp.Body, w: watch}, nil
 	}
 
 	// slow retry phase: network may recover in a few minutes.
@@ -175,8 +174,8 @@ func (c *Client) Completion(convID string, req *CompletionRequest) (io.ReadClose
 	for slowAttempt := 0; slowAttempt < 3; slowAttempt++ {
 		sleepWithHeartbeat(3 * time.Minute)
 		log.Printf("claudeweb: slow retry %d/3", slowAttempt+1)
-		ctx, cancel = context.WithTimeout(context.Background(), 10*time.Minute)
-		_ = cancel
+		watch.stop()
+		ctx, watch = newProgressContext()
 		httpReq, _ = http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 		httpReq.Header.Set("Accept", "text/event-stream")
 		httpReq.Header.Set("Content-Type", "application/json")
@@ -204,9 +203,10 @@ func (c *Client) Completion(convID string, req *CompletionRequest) (io.ReadClose
 			log.Printf("claudeweb: slow retry %d/3 status %d", slowAttempt+1, resp.StatusCode)
 			continue
 		}
-		return resp.Body, nil
+		return &progressBody{ReadCloser: resp.Body, w: watch}, nil
 	}
 
+	watch.stop()
 	return nil, lastErr
 }
 
