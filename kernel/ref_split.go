@@ -352,6 +352,11 @@ func ref_split_with(parent_pid int64, owner, repo, sha string, files []string, t
 		// sandbox, in their FINAL state (chunk_files.go) — not the transcript, which
 		// holds create_file bodies as first written and everything else the child
 		// ran. Junk detection and coverage above still read the transcript.
+		// a chunk does not end on sorry while the reference has more to show it
+		// (proof_reference.go): measured on its files, continued with the sites
+		if storeConvID != "" {
+			chunk_fill_sorry(storeConvID, fmt.Sprintf("chunk %d/%d", i+1, len(chunks)))
+		}
 		theory := result
 		nfiles := 0
 		if files := chunkFilesFor(storeConvID); len(files) > 0 {

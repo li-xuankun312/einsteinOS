@@ -102,8 +102,8 @@ func (s *ShadowExecutor) Execute(toolName string, inputJSON string) string {
 					input.Path, truncateCmd(oldSig, 120), truncateCmd(newSig, 120))
 				return fmt.Sprintf("[pid 0 exit=1] ERROR: you changed the theorem statement, not just the proof. "+
 					"theorem signatures (name + parameters + conclusion) must not change. "+
-					"if you cannot prove it, use sorry instead.\nold sig: %s\nnew sig: %s",
-					truncateCmd(oldSig, 200), truncateCmd(newSig, 200))
+					"the proofs under %s show how statements like this are proved.\nold sig: %s\nnew sig: %s",
+					kernel.ProofReferencePath(), truncateCmd(oldSig, 200), truncateCmd(newSig, 200))
 			}
 		}
 		escaped_old := strings.ReplaceAll(input.OldStr, "'", "'\\''")

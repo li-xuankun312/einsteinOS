@@ -46,17 +46,17 @@ const thi_structure = `each .lean file:
 then sections (-- § name) with theorems. every theorem gets a /-- docstring -/.
 `
 
+// thi_proofs takes proofRefURL, proofRefDir and ProofReferencePath().
 const thi_proofs = `PROOF STYLE — BEFORE writing any .lean file, run this:
 
-  git clone https://github.com/openai/math.git /tmp/openai_math
+  git clone %[1]s %[2]s
 
-then read 3-5 files under /tmp/openai_math/lean/OAI/ to see how real
+then read 3-5 files under %[3]s to see how real
 Lean 4 proofs are structured. notice: they decompose goals with 'have'
 and 'obtain', main theorems cite helper lemmas, tactics only close
 small leaf goals. model your proofs after what you see there.
 
-do NOT use native_decide (Axle bans it).
-if you cannot prove something, write sorry. do NOT change the theorem statement.
+do NOT use native_decide (Axle bans it). do NOT change a theorem statement to make it easier to prove.
 `
 
 // thi_axle takes the Axle session cookie and CSRF token.
@@ -90,7 +90,8 @@ do not push to git. before you finish, run ls %[1]s once so the list of your fil
 // formatTheorizeInstruction assembles the theory prompt from pieces.
 func formatTheorizeInstruction() string {
 	session, csrf := axleCredentials()
-	return fmt.Sprintf(thi_output, TheoryOutputsDir) + thi_structure + thi_proofs +
+	return fmt.Sprintf(thi_output, TheoryOutputsDir) + thi_structure +
+		fmt.Sprintf(thi_proofs, proofRefURL, proofRefDir, ProofReferencePath()) +
 		fmt.Sprintf(thi_axle, session, csrf) +
 		fmt.Sprintf(thi_scope, TheoryOutputsDir, DoneInstruction())
 }
