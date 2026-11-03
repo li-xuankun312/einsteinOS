@@ -90,8 +90,12 @@ type DevPlan struct {
 	Nodes       []DevPlanNode             `json:"nodes"` // creation order; Leaves() gives execution order
 	State       map[string]DevModuleState `json:"state"`
 	FixAttempts map[string]int            `json:"fix_attempts"` // unit id -> attempts
-	LastFailure map[string]DevFailure     `json:"last_failure"` // unit id -> why the last attempt failed
-	InfraFails  int                       `json:"infra_fails"`  // consecutive git/push failures (not the child's fault)
+	// FailHistory: every failed attempt's kind, per unit, kept after the unit passes —
+	// FixAttempts is cleared on a pass, so the 11/03 summary said fix=0 for all ten units
+	// while units 3, 4 and 5 had each needed a second attempt.
+	FailHistory map[string][]string   `json:"fail_history,omitempty"`
+	LastFailure map[string]DevFailure `json:"last_failure"` // unit id -> why the last attempt failed
+	InfraFails  int                   `json:"infra_fails"`  // consecutive git/push failures (not the child's fault)
 
 	// silent counts, per unit, the conversations IN A ROW that wrote no file. In memory
 	// only: a restart is a person deciding to try again, and starts the count over.
@@ -426,6 +430,10 @@ func (p *DevPlan) Fail(id string, f DevFailure) int {
 		p.LastFailure = map[string]DevFailure{}
 	}
 	p.LastFailure[id] = f
+	if p.FailHistory == nil {
+		p.FailHistory = map[string][]string{}
+	}
+	p.FailHistory[id] = append(p.FailHistory[id], f.Kind)
 	return p.BumpFix(id)
 }
 
@@ -610,8 +618,13 @@ func (p *DevPlan) Summary() string {
 		if l.Scope != "" {
 			scope = " scope=" + truncStr(l.Scope, 40)
 		}
-		fmt.Fprintf(&b, "  unit %d id=%s %s modules=%d bytes=%d%s fix=%d\n",
-			i+1, l.ID, st, len(l.Modules), p.UnitTheoryBytes(l), scope, p.FixAttempts[l.ID])
+		hist := p.FailHistory[l.ID]
+		fails := ""
+		if len(hist) > 0 {
+			fails = " failed: " + strings.Join(hist, ",")
+		}
+		fmt.Fprintf(&b, "  unit %d id=%s %s modules=%d bytes=%d%s fix=%d attempts=%d%s\n",
+			i+1, l.ID, st, len(l.Modules), p.UnitTheoryBytes(l), scope, p.FixAttempts[l.ID], len(hist)+1, fails)
 	}
 	return b.String()
 }
