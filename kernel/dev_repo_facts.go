@@ -21,9 +21,11 @@ package kernel
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -70,11 +72,49 @@ var devRepoProbe = func(url, branch string) bool {
 // anonymousURL is the public form of a repository's clone URL (no credentials).
 func anonymousURL(ownerRepo string) string { return "https://github.com/" + ownerRepo + ".git" }
 
-// newDevRepoFacts measures what can be said about devRepo at branch now.
+// newDevRepoFacts measures what can be said about devRepo at branch now. The branch's
+// existence is first the kernel's own fact: it fetched that branch over the deploy key just
+// before forking (gitFetchRefs records what it fetched). Only without such a record is an
+// anonymous ls-remote tried — on 11/03 that single 30 s HTTPS probe failed once, silently, and
+// unit 3's prompt had no clone line: 20 rounds and 23 requests spent looking for the repo.
+// Either way the decision and its source are logged.
 func newDevRepoFacts(devRepo, branch string) DevRepoFacts {
 	f := DevRepoFacts{Repo: devRepo, Dir: devMirrorDir(devRepo), Branch: branch}
-	if u := anonymousURL(devRepo); devRepoProbe(u, branch) {
+	u := anonymousURL(devRepo)
+	switch at, ok := fetchedAt(devRepo, branch); {
+	case ok:
 		f.URL = u
+		log.Printf(devRepoFactLogFmt, devRepo, branch, "clone line", fmt.Sprintf("the kernel fetched the branch %s ago", time.Since(at).Round(time.Second)))
+	case devRepoProbe(u, branch):
+		f.URL = u
+		log.Printf(devRepoFactLogFmt, devRepo, branch, "clone line", "anonymous ls-remote answered")
+	default:
+		log.Printf(devRepoFactLogFmt, devRepo, branch, "NO clone line", "the kernel has not fetched the branch and anonymous ls-remote failed")
 	}
 	return f
+}
+
+const devRepoFactLogFmt = "dev_repo_facts: %[1]s %[2]s: %[3]s (%[4]s)"
+
+// ---- what the kernel fetched (gitFetchRefs records it) ---------------------------------------
+
+var (
+	fetchedMu   sync.Mutex
+	fetchedRefs = map[string]time.Time{}
+)
+
+func recordFetched(ownerRepo string, branches []string) {
+	fetchedMu.Lock()
+	defer fetchedMu.Unlock()
+	for _, b := range branches {
+		fetchedRefs[ownerRepo+"|"+b] = time.Now()
+	}
+}
+
+// fetchedAt: when the kernel last fetched ownerRepo's branch (it existed then).
+func fetchedAt(ownerRepo, branch string) (time.Time, bool) {
+	fetchedMu.Lock()
+	defer fetchedMu.Unlock()
+	t, ok := fetchedRefs[ownerRepo+"|"+branch]
+	return t, ok
 }

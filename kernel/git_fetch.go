@@ -70,6 +70,7 @@ func gitFetchRefs(repoDir, ownerRepo string, branches ...string) (missing []stri
 		switch {
 		case r.Code == 0:
 			log.Printf("git_fetch: %s %v (attempt %d, %s, %s)", ownerRepo, want, attempt, transport, time.Since(started).Round(time.Millisecond))
+			recordFetched(ownerRepo, want) // a measured fact: these branches exist (dev_repo_facts.go)
 			return missing, nil
 		case !r.Started:
 			log.Printf("git_fetch: %s attempt %d/%d (%s): no sign of life in %s, new process", ownerRepo, attempt, attempts, transport, gitStartWindow)

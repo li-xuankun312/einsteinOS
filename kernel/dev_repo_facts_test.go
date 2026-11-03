@@ -95,3 +95,45 @@ func TestTheRealProbeAgainstTheRealRepository(t *testing.T) {
 		t.Fatal("a repository that does not exist (or needs credentials) must not read as cloneable")
 	}
 }
+
+// 2026/11/03 unit 3: the kernel had just fetched einsteinOS/dev-c880662efd over SSH, the
+// anonymous HTTPS probe failed, and the prompt lost its clone line. The kernel's own fetch
+// is the fact now; the probe is only asked when there is no such record.
+func TestTheCloneLineRestsOnTheKernelsOwnFetch(t *testing.T) {
+	old := devRepoProbe
+	t.Cleanup(func() { devRepoProbe = old })
+	probes := 0
+	devRepoProbe = func(string, string) bool { probes++; return false } // the HTTPS link is down
+
+	repo, branch := "zeng-bin3123/baloon", "einsteinOS/dev-c880662efd"
+	if f := newDevRepoFacts(repo, branch); f.URL != "" || probes != 1 {
+		t.Fatalf("no fetch, probe failed: url %q probes %d", f.URL, probes)
+	}
+	recordFetched(repo, []string{branch})
+	f := newDevRepoFacts(repo, branch)
+	if f.URL != "https://github.com/zeng-bin3123/baloon.git" || probes != 1 {
+		t.Fatalf("fetched: url %q probes %d (the probe must not decide)", f.URL, probes)
+	}
+	if !strings.Contains(f.Block(), "git clone --branch einsteinOS/dev-c880662efd https://github.com/zeng-bin3123/baloon.git /home/claude/baloon") {
+		t.Fatalf("%s", f.Block())
+	}
+	// another branch was not fetched: back to the probe
+	if f := newDevRepoFacts(repo, "einsteinOS/other"); f.URL != "" || probes != 2 {
+		t.Fatalf("other branch: %q %d", f.URL, probes)
+	}
+}
+
+// gitFetchRefs records what it fetched, and not what the remote did not have
+func TestGitFetchRefsRecordsTheBranchesItFetched(t *testing.T) {
+	remote, clone := fetchFixture(t)
+	withRemotes(t, false, "", remote)
+	if _, err := gitFetchRefs(clone, "o/fetchfacts", "einsteinOS/theory", "einsteinOS/none"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := fetchedAt("o/fetchfacts", "einsteinOS/theory"); !ok {
+		t.Fatal("fetched branch not recorded")
+	}
+	if _, ok := fetchedAt("o/fetchfacts", "einsteinOS/none"); ok {
+		t.Fatal("missing branch recorded")
+	}
+}
