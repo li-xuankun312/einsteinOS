@@ -27,19 +27,50 @@ func TestRoundBudgetIsWhatTheConversationReallyGets(t *testing.T) {
 	}
 }
 
-func TestTheoryPromptStatesTheBudgetAndWhereSorryCountsComeFrom(t *testing.T) {
+func TestTheBudgetSentenceIsComposedFromWhatThePromptHolds(t *testing.T) {
 	oldC, oldT := ConvRoundCeiling, TurnToolBudget
 	t.Cleanup(func() { ConvRoundCeiling, TurnToolBudget = oldC, oldT })
-	ConvRoundCeiling, TurnToolBudget = 17, 33
-	p := formatTheorizeInstruction()
-	for _, want := range []string{"up to 17 rounds, and up to 33 tool calls in each round",
-		"the kernel continues you in the next round", "a theorem that uses sorry is not proved yet: the proofs under " + ProofReferencePath()} {
-		if !strings.Contains(p, want) {
-			t.Errorf("missing %q", want)
-		}
+	ConvRoundCeiling, TurnToolBudget = 20, 40
+
+	// a theory chunk: what it embeds, by extension, most first
+	var tl sourceTally
+	for _, f := range []struct {
+		p string
+		n int
+	}{{"src/a.cu", 100}, {"src/b.cpp", 50}, {"src/c.cu", 30}, {"include/d.hpp", 20}, {"Makefile", 5}} {
+		tl.Add(f.p, f.n)
 	}
-	if !strings.HasPrefix(p, "BUDGET") || strings.Contains(p, "%!") {
-		t.Errorf("budget first, no format damage:\n%s", p[:min(400, len(p))])
+	got := BudgetBlock(tl.Theory(), RoundBudget("theorize_chunk_3"))
+	want := "the information is complete. this time you read a lot of source code: .cu ×2, .cpp ×1, .hpp ×1, Makefile ×1 (5 file(s), 205 lines) " +
+		"and write its .lean theory, one file per module. start.\n" +
+		"using up the tool calls is fine: up to 40 in one round, and the kernel resets you for the next one (up to 20 rounds).\n"
+	if got != want {
+		t.Fatalf("got\n%s\nwant\n%s", got, want)
+	}
+
+	// a dev unit: its modules' theory, its own condition's rounds, at the very end of the prompt
+	r := &devRun{pid: 1, repo: "o/r", devRepo: "o/d", branch: "b", task: "t", gpuAll: "0"}
+	plan := newDevPlan("o/r", "s", []DevModule{{Name: "A.lean", Hash: "h", Bytes: 3000}, {Name: "B.lean", Hash: "g", Bytes: 2200}},
+		[][]string{{"A.lean", "B.lean"}}, "p")
+	r.plan = plan
+	p := r.unitPrompt(plan.Leaves()[0], 0, 1, 1, DevFailure{}, "b")
+	tail := "the information is complete. this time you read a lot of theory: LAYER 1/2 of 2 module(s) (6 KB of theory) " +
+		"and write the code for them, with the build and test scripts. start.\n" +
+		"using up the tool calls is fine: up to 40 in one round, and the kernel resets you for the next one (up to 20 rounds).\n"
+	if !strings.HasSuffix(p, tail) {
+		t.Fatalf("dev prompt does not end with its budget:\n%s", p[max(0, len(p)-500):])
+	}
+	if RoundBudgetOf(devUnitCondition()) != 20 {
+		t.Fatal("dev: MaxRounds(30) under a 20-round ceiling")
+	}
+	// the theory instruction itself states where sorry counts come from
+	if !strings.Contains(formatTheorizeInstruction(), "a theorem that uses sorry is not proved yet: the proofs under "+ProofReferencePath()) {
+		t.Fatal("sorry line")
+	}
+	for _, s := range []string{got, p} {
+		if strings.Contains(s, "%!") {
+			t.Fatal("format damage")
+		}
 	}
 }
 

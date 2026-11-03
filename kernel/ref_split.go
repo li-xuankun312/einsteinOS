@@ -794,6 +794,7 @@ func ref_split_fork(parent_pid int64, owner, repo, sha string, files []string, t
 	dir := fmt.Sprintf("/tmp/ref_%s_%s.git", owner, repo)
 
 	var src strings.Builder
+	var tally sourceTally // what the prompt embeds, for its budget block
 	src.WriteString(fmt.Sprintf("[TASK] %s\n\n", task))
 	src.WriteString(fmt.Sprintf("[REFERENCE] %s/%s commit %s\n", owner, repo, short_sha(sha)))
 	src.WriteString(fmt.Sprintf("[YOUR ASSIGNMENT] %d files (depth %d)\n", len(files), depth))
@@ -815,9 +816,11 @@ func ref_split_fork(parent_pid int64, owner, repo, sha string, files []string, t
 		if len(content) > 300000 {
 			content = content[:300000]
 		}
-		src.WriteString(fmt.Sprintf("=== %s (%d lines) ===\n", f, strings.Count(content, "\n")+1))
+		lines := strings.Count(content, "\n") + 1
+		src.WriteString(fmt.Sprintf("=== %s (%d lines) ===\n", f, lines))
 		src.WriteString(content)
 		src.WriteString("\n\n")
+		tally.Add(f, lines)
 	}
 
 	src_text := src.String()
@@ -836,6 +839,8 @@ func ref_split_fork(parent_pid int64, owner, repo, sha string, files []string, t
 		src_text
 
 	role := fmt.Sprintf("theorize_chunk_%d", chunk_idx+1)
+	// after everything it needs: what it reads, what it writes, the budget (turn_budget.go)
+	prompt += "\n" + BudgetBlock(tally.Theory(), RoundBudget(role))
 	pid, err := ForkWithRole(prompt, ".", role)
 	if err != nil {
 		log.Printf("ref_split_fork: %v", err)
@@ -853,6 +858,7 @@ func ref_split_leaf(parent_pid int64, owner, repo, sha string, files []string, t
 	dir := fmt.Sprintf("/tmp/ref_%s_%s.git", owner, repo)
 
 	var src strings.Builder
+	var tally sourceTally // what the prompt embeds, for its budget block
 	src.WriteString(fmt.Sprintf("[TASK] %s\n\n", task))
 	src.WriteString(fmt.Sprintf("[REFERENCE] %s/%s commit %s\n", owner, repo, short_sha(sha)))
 	src.WriteString(fmt.Sprintf("[LEAF] %d files (depth %d)\n\n", len(files), depth))
@@ -868,15 +874,18 @@ func ref_split_leaf(parent_pid int64, owner, repo, sha string, files []string, t
 		if len(content) > 300000 {
 			content = content[:300000]
 		}
-		src.WriteString(fmt.Sprintf("=== %s (%d lines) ===\n", f, strings.Count(content, "\n")+1))
+		lines := strings.Count(content, "\n") + 1
+		src.WriteString(fmt.Sprintf("=== %s (%d lines) ===\n", f, lines))
 		src.WriteString(content)
 		src.WriteString("\n\n")
+		tally.Add(f, lines)
 	}
 
 	src_text := src.String()
 
 	prompt := src_text + formatTheorizeInstruction() +
-		fmt.Sprintf("the repo is at %s if you need git for context.\n\n", dir)
+		fmt.Sprintf("the repo is at %s if you need git for context.\n\n", dir) +
+		BudgetBlock(tally.Theory(), RoundBudget("theorize_leaf"))
 
 	pid, err := ForkWithRole(prompt, ".", "theorize_leaf")
 	if err != nil {

@@ -92,8 +92,7 @@ do not push to git. before you finish, run ls %[1]s once so the list of your fil
 // formatTheorizeInstruction assembles the theory prompt from pieces.
 func formatTheorizeInstruction() string {
 	session, csrf := axleCredentials()
-	return BudgetBlock(theoryBudgetRole) + "\n" +
-		fmt.Sprintf(thi_output, TheoryOutputsDir) + thi_structure +
+	return fmt.Sprintf(thi_output, TheoryOutputsDir) + thi_structure +
 		fmt.Sprintf(thi_proofs, proofRefURL, proofRefDir, ProofReferencePath()) +
 		fmt.Sprintf(thi_axle, session, csrf) +
 		fmt.Sprintf(thi_scope, TheoryOutputsDir, DoneInstruction())
@@ -597,6 +596,7 @@ func ref_theorize_leaf(parent int64, owner, name, sha string, files []string, ta
 
 	read := 0
 	skipped := 0
+	var tally sourceTally
 	for _, f := range files {
 		if isBinaryFile(f) {
 			skipped++
@@ -611,6 +611,7 @@ func ref_theorize_leaf(parent int64, owner, name, sha string, files []string, ta
 		src.WriteString(content)
 		src.WriteString("\n\n")
 		read += lines
+		tally.Add(f, lines)
 	}
 
 	log.Printf("ref_theorize: %s/%s %s: %d files (%d binary skipped), %d lines fed",
@@ -631,6 +632,7 @@ func ref_theorize_leaf(parent int64, owner, name, sha string, files []string, ta
 			"do NOT clone the repo again.\n"+
 			"produce .lean theory ONLY for the files listed above.\n",
 			dir, dir, sha[:12])
+	prompt += "\n" + BudgetBlock(tally.Theory(), RoundBudget("theorize_full"))
 
 	child, err := ForkWithRole(prompt, ".", "theorize_full")
 	if err != nil {

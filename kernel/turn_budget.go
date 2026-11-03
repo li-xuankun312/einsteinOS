@@ -40,25 +40,92 @@ func roundLimitOf(c TerminationCondition) int {
 	return 0
 }
 
-// RoundBudget is the number of rounds a conversation of this role really gets.
-func RoundBudget(role string) int {
-	n := roundLimitOf(TerminationForRole(role))
+// RoundBudgetOf is the number of rounds a conversation under cond really gets.
+func RoundBudgetOf(cond TerminationCondition) int {
+	n := roundLimitOf(cond)
 	if n == 0 || n > ConvRoundCeiling {
 		return ConvRoundCeiling
 	}
 	return n
 }
 
-// budgetFmt: %[1]d rounds, %[2]d tool calls per round.
-const budgetFmt = `BUDGET — up to %[1]d rounds, and up to %[2]d tool calls in each round.
-everything you need is in this message. this work means reading many files and writing many:
-use the calls, a round that uses all of them is fine — the kernel continues you in the next round.
-every Axle answer reaches you at the start of your next round, so batch your checks.
+// RoundBudget is RoundBudgetOf the role's own condition.
+func RoundBudget(role string) int { return RoundBudgetOf(TerminationForRole(role)) }
+
+// WorkLoad is what one conversation is about to read and write, measured from what its
+// prompt holds.
+type WorkLoad struct {
+	Read   string // what it reads ("source code: .cu ×4, .cpp ×3")
+	Amount string // how much ("9 file(s), 2345 lines")
+	Write  string // what it writes
+}
+
+// budgetFmt: %[1]s read, %[2]s amount, %[3]s write, %[4]d tool calls a round, %[5]d rounds.
+const budgetFmt = `the information is complete. this time you read a lot of %[1]s (%[2]s) and write %[3]s. start.
+using up the tool calls is fine: up to %[4]d in one round, and the kernel resets you for the next one (up to %[5]d rounds).
 `
 
-// BudgetBlock is the budget section of a prompt for role.
-func BudgetBlock(role string) string {
-	return fmt.Sprintf(budgetFmt, RoundBudget(role), TurnToolBudget)
+// BudgetBlock is the first section of a conversation's prompt.
+func BudgetBlock(w WorkLoad, rounds int) string {
+	return fmt.Sprintf(budgetFmt, w.Read, w.Amount, w.Write, TurnToolBudget, rounds)
+}
+
+// what theory and dev conversations read and write, as formats
+const (
+	sourceReadFmt   = "source code: %[1]s"
+	sourceAmountFmt = "%[1]d file(s), %[2]d lines"
+	theoryWrite     = "its .lean theory, one file per module"
+	devReadFmt      = "theory: LAYER 1/2 of %[1]d module(s)"
+	devAmountFmt    = "%[1]d KB of theory"
+	devWrite        = "the code for them, with the build and test scripts"
+)
+
+// sourceTally counts the source files a prompt embeds, by extension.
+type sourceTally struct {
+	byExt map[string]int
+	order []string
+	files int
+	lines int
+}
+
+func (t *sourceTally) Add(path string, lines int) {
+	if t.byExt == nil {
+		t.byExt = map[string]int{}
+	}
+	ext := filepath.Ext(path)
+	if ext == "" {
+		ext = filepath.Base(path)
+	}
+	if t.byExt[ext] == 0 {
+		t.order = append(t.order, ext)
+	}
+	t.byExt[ext]++
+	t.files++
+	t.lines += lines
+}
+
+// Theory is the work of a theory conversation over these sources.
+func (t sourceTally) Theory() WorkLoad {
+	order := append([]string{}, t.order...)
+	sort.SliceStable(order, func(i, j int) bool { return t.byExt[order[i]] > t.byExt[order[j]] })
+	var parts []string
+	for _, e := range order {
+		parts = append(parts, fmt.Sprintf("%s ×%d", e, t.byExt[e]))
+	}
+	return WorkLoad{
+		Read:   fmt.Sprintf(sourceReadFmt, strings.Join(parts, ", ")),
+		Amount: fmt.Sprintf(sourceAmountFmt, t.files, t.lines),
+		Write:  theoryWrite,
+	}
+}
+
+// devWorkLoad is the work of a dev unit over its modules' theory.
+func devWorkLoad(modules int, theoryBytes int) WorkLoad {
+	return WorkLoad{
+		Read:   fmt.Sprintf(devReadFmt, modules),
+		Amount: fmt.Sprintf(devAmountFmt, (theoryBytes+1023)/1024),
+		Write:  devWrite,
+	}
 }
 
 // ---- sorry, measured where the files are mirrored --------------------------------------

@@ -33,9 +33,6 @@ var (
 // (OutputsSorryNote, turn_budget.go); here it is only measured and logged.
 var chunkSorryRounds = 0
 
-// theoryBudgetRole is the role whose budget the theory prompt states.
-const theoryBudgetRole = "theorize_chunk"
-
 // ProofReferencePath is where the reference proofs are read from.
 func ProofReferencePath() string {
 	return strings.TrimRight(proofRefDir, "/") + "/" + strings.Trim(proofRefSub, "/") + "/"

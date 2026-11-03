@@ -279,10 +279,7 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 	log.Printf("dev_from_theorems: %s unit %d/%d id=%s attempt %d forking %s (prompt %d bytes, base %s, modules: %s)",
 		r.repo, idx+1, total, unit.ID, attempt, role, len(prompt), baseRef, nodeDesc(unit))
 
-	cond := WithDoneMarker(OrConditions(
-		&ConsecutiveTextRounds{Threshold: 4},
-		&MaxRounds{Limit: 30},
-	))
+	cond := devUnitCondition()
 	var child int64
 	var convID string
 	var status map[string]string
@@ -494,6 +491,14 @@ func (r *devRun) unitPrompt(unit DevPlanNode, idx, total, attempt int, fail DevF
 	if fb := pr_feedback(r.pid); fb != "" {
 		p.WriteString(fmt.Sprintf("\n\n[PRIOR FEEDBACK]\n%s", fb))
 	}
+	// last, after everything it needs: what it reads, what it writes, the budget
+	bytes := 0
+	for _, m := range unit.Modules {
+		if r.plan != nil {
+			bytes += r.plan.Modules[m].Bytes
+		}
+	}
+	p.WriteString("\n\n" + BudgetBlock(devWorkLoad(len(unit.Modules), bytes), RoundBudgetOf(devUnitCondition())))
 	return p.String()
 }
 
@@ -596,4 +601,13 @@ func devCollectLite(childPid int64, repo string) (string, map[string]string) {
 		status["compile"] = "no_response"
 	}
 	return stdout, status
+}
+
+// devUnitCondition is how a dev unit conversation ends; its prompt states the same
+// round budget (RoundBudgetOf).
+func devUnitCondition() TerminationCondition {
+	return WithDoneMarker(OrConditions(
+		&ConsecutiveTextRounds{Threshold: 4},
+		&MaxRounds{Limit: 30},
+	))
 }
