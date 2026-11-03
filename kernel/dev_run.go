@@ -25,10 +25,20 @@ import (
 	"time"
 )
 
-// devNoProgressRounds: productive attempts in the logs wrote their first file by round 5
-// or 6; the ones that wrote nothing ran 12 to 22 rounds. Ten is past the first and well
-// before the second.
-const devNoProgressRounds = 10
+// devMaxSilentAttempts: conversations in a row that wrote no file before the run stops.
+// One may be a fluke; the second, started fresh with the first one's last words in front
+// of it, is not.
+const devMaxSilentAttempts = 2
+
+func passedLeaves(p *DevPlan) int {
+	n := 0
+	for _, l := range p.Leaves() {
+		if p.UnitPass(l) {
+			n++
+		}
+	}
+	return n
+}
 
 // devCompletionPR opens the PR that marks a finished dev branch; a variable so a
 // test does not reach for the GitHub API.
@@ -92,7 +102,6 @@ type devRun struct {
 	pid                         int64
 	repo, devRepo, branch, task string
 	hwInfo, gpuAll              string
-	devRepoBlock                string
 	plan                        *DevPlan
 	sections                    []devFileSection
 }
@@ -152,15 +161,9 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 
 	plan := dev_get_plan(pid, repo, devRefSHA(repo, step.SHA), theory, branch)
 
-	var drb strings.Builder
-	drb.WriteString("[DEV REPO]\n")
-	for _, dr := range devRepos {
-		parts := strings.Split(dr, "/")
-		drb.WriteString(fmt.Sprintf("  %s → /home/claude/%s/\n", dr, parts[len(parts)-1]))
-	}
 	run := &devRun{
 		pid: pid, repo: repo, devRepo: devRepo, branch: branch, task: task,
-		hwInfo: hwInfo, gpuAll: gpuAll, devRepoBlock: drb.String(),
+		hwInfo: hwInfo, gpuAll: gpuAll,
 		plan: plan, sections: dev_extract_file_sections(theory),
 	}
 
@@ -198,6 +201,20 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 		stdout, passed, requeue := run.runUnit(unit, idx, len(leaves))
 		if stdout != "" {
 			lastStdout = stdout
+		}
+		// A conversation that writes nothing is not a unit that is too big: retrying it, or
+		// splitting the unit, starts the same kind of conversation again. Two in a row means
+		// the cause is outside the unit — stop, say so, keep everything (the plan and the
+		// passed units are on the branch), and leave the decision to a person.
+		if !passed && !requeue && plan.Silent(unit.ID) >= devMaxSilentAttempts {
+			msg := fmt.Sprintf("unit %s (%s): the last %d conversations wrote no file. a conversation that does not start is not "+
+				"cured by retrying or by splitting the unit, so the run stops here. the plan and the %d unit(s) already passed are "+
+				"kept on branch %s; fix the cause and start again to continue. what the last one said:\n%s",
+				unit.ID, nodeDesc(unit), plan.Silent(unit.ID), passedLeaves(plan), branch,
+				truncStr(plan.LastFailure[unit.ID].Text, 1500))
+			log.Printf("dev_from_theorems: %s %s", repo, truncStr(strings.ReplaceAll(msg, "\n", " | "), 700))
+			PRFeedbackAdd(pid, "- dev_from_theorems: "+msg)
+			return lastStdout, fmt.Errorf("dev_from_theorems: %s", msg)
 		}
 		if requeue {
 			plan.InfraFails++
@@ -262,16 +279,9 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 	log.Printf("dev_from_theorems: %s unit %d/%d id=%s attempt %d forking %s (prompt %d bytes, base %s, modules: %s)",
 		r.repo, idx+1, total, unit.ID, attempt, role, len(prompt), baseRef, nodeDesc(unit))
 
-	// a unit conversation that has written nothing after devNoProgressRounds rounds is
-	// stopped: every round is a request, and the account has 40 per 5 hours
-	produced := func() bool {
-		c, rm, err := treeDelta(mirror, base)
-		return err != nil || len(c)+len(rm) > 0 // when unsure, do not stop it
-	}
 	cond := WithDoneMarker(OrConditions(
 		&ConsecutiveTextRounds{Threshold: 4},
 		&MaxRounds{Limit: 30},
-		&NoProgress{Rounds: devNoProgressRounds, Produced: produced},
 	))
 	var child int64
 	var convID string
@@ -361,6 +371,11 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 		if next == "" {
 			next = baseRef
 		}
+		if kind == "nothing_written" {
+			plan.NoteSilent(unit.ID)
+		} else {
+			plan.ClearSilent(unit.ID) // it wrote something: whatever is wrong now is the unit's, not the conversation's
+		}
 		n := plan.Fail(unit.ID, DevFailure{Kind: kind, Text: text, BaseRef: next})
 		log.Printf("dev_from_theorems: %s unit %d/%d id=%s FAILED verification (%s), attempt %d; code on %q",
 			r.repo, idx+1, total, unit.ID, kind, n, out.Pushed)
@@ -393,6 +408,7 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 		log.Printf("dev_from_theorems: %s unit %s proof gate FAIL — re-running preflight", r.repo, unit.ID)
 		return stdout, false, true
 	}
+	plan.ClearSilent(unit.ID)
 	n := plan.Fail(unit.ID, DevFailure{Kind: kind, Text: reason, BaseRef: r.branch})
 	log.Printf("dev_from_theorems: %s unit %d/%d id=%s review FAIL, attempt %d", r.repo, idx+1, total, unit.ID, n)
 	devPlanSave(r.repo, r.devRepo, r.branch, plan, fmt.Sprintf("plan: %s review_fail attempt %d", unit.ID, n))
@@ -431,7 +447,7 @@ func (r *devRun) unitPrompt(unit DevPlanNode, idx, total, attempt int, fail DevF
 			}
 			p.WriteString(fmt.Sprintf("  unit %s: conv=%s modules=[%s]\n    work log: .einsteinOS/convs/%s.md\n", l.ID, shortID(addr), files, l.ID))
 		}
-		p.WriteString("\nthe code of every prior unit is in your repo already. READ it before you write; do NOT rewrite it unless your theory REQUIRES it.\n")
+		p.WriteString("\nthe code of every prior unit is on that branch. READ it before you write; do NOT rewrite it unless your theory REQUIRES it.\n")
 		p.WriteString("work logs hold each unit's decisions; use grep or view with line ranges, never cat the whole file.\n\n")
 	}
 
@@ -465,19 +481,19 @@ func (r *devRun) unitPrompt(unit DevPlanNode, idx, total, attempt int, fail DevF
 			p.WriteString("the REAL output (from the kernel's run on the real machine, or the reviewer's reason):\n")
 			p.WriteString("-----\n" + truncStr(fail.Text, 3500) + "\n-----\n")
 		}
-		p.WriteString(fmt.Sprintf("the code of the previous attempt is already in your repo (branch %s). fix THAT code; do not start over.\n", baseRef))
+		p.WriteString(fmt.Sprintf("the code of the previous attempt is on branch %s. fix THAT code; do not start over.\n", baseRef))
 		p.WriteString("fix the reason above first; do not spend tools on unrelated probing.\n\n")
 	}
 	if len(prior) > 0 || attempt > 1 {
-		p.WriteString(fmt.Sprintf("[EXISTING CODE]\nyour repo already holds the tree of branch %s. add your unit to it and keep the WHOLE project building.\n\n", baseRef))
+		p.WriteString(fmt.Sprintf("[EXISTING CODE]\nbranch %s is the tree to build on. add your unit to it and keep the WHOLE project building.\n\n", baseRef))
 	}
 
 	p.WriteString(fmt.Sprintf("[TASK]\n%s\n\n", r.task))
-	p.WriteString(r.devRepoBlock)
+	p.WriteString(newDevRepoFacts(r.devRepo, baseRef).Block())
 	p.WriteString("\n")
 
 	build, test := devVerifyScripts(unit.ID)
-	p.WriteString(fmt.Sprintf(dev_unit_instruction, idx+1, total, unit.ID, r.gpuAll, r.gpuUsable(), r.gpuUsable(), build, test, einsteinHelp, DoneInstruction(), devMirrorDir(r.devRepo)))
+	p.WriteString(fmt.Sprintf(dev_unit_instruction, idx+1, total, unit.ID, r.gpuAll, r.gpuUsable(), r.gpuUsable(), build, test, einsteinHelp, DoneInstruction()))
 
 	if fb := pr_feedback(r.pid); fb != "" {
 		p.WriteString(fmt.Sprintf("\n\n[PRIOR FEEDBACK]\n%s", fb))
@@ -496,7 +512,7 @@ CUDA_VISIBLE_DEVICES=%[6]s
 
 [WHAT YOU HAVE]
 - the THEORY for your unit (LAYER 1 math + LAYER 2 form templates) in .einsteinOS/theory.md
-- the code of the prior units, already in your repo
+- the code of the prior units, on the dev repo branch
 - you do NOT have the original source code. this is intentional.
 
 [CRITICAL — DO NOT]
@@ -507,14 +523,8 @@ CUDA_VISIBLE_DEVICES=%[6]s
 - if the theory mentions paths from the reference, IGNORE those paths
 
 [WHERE YOUR FILES GO]
-work in the repo directory shown under [DEV REPO]. it already contains the branch. use the dev repo's existing layout
+work in the repo directory shown under [DEV REPO]. use the dev repo's existing layout
 (include/<project>/, src/<project>/, tests/); if it has none yet, create one that fits YOUR project name.
-
-[THE REPO IS ON THE MACHINE THAT RUNS YOUR COMMANDS]
-%[11]s exists on that machine, not necessarily in your own sandbox. every command you run is also run there, and its
-result is written back to you as LOCAL MACHINE RESULT: that is the truth about the repo, the theory and your build.
-if your sandbox says a file is missing and the local result shows it, believe the local result. do not search the whole
-filesystem for the repo and do not clone it: start with ls %[11]s, read the theory, then write the files.
 
 [THE KERNEL VERIFIES YOU — WRITE THESE TWO SCRIPTS]
 %[7]s

@@ -39,7 +39,7 @@ func TestTheoryPromptIsFormattedAndTeachesBatching(t *testing.T) {
 }
 
 func TestDevUnitPromptIsFormattedAndAsksForTheMarker(t *testing.T) {
-	r := &devRun{pid: 1, repo: "o/r", devRepo: "o/d", branch: "b", task: "t", gpuAll: "0,1", devRepoBlock: "[DEV REPO]\n"}
+	r := &devRun{pid: 1, repo: "o/r", devRepo: "o/d", branch: "b", task: "t", gpuAll: "0,1"}
 	plan := newDevPlan("o/r", "s", []DevModule{{Name: "A.lean", Hash: "h", Bytes: 10}}, [][]string{{"A.lean"}}, "p")
 	r.plan = plan
 	p := r.unitPrompt(plan.Leaves()[0], 0, 1, 1, DevFailure{}, "b")

@@ -130,6 +130,10 @@ func newDevEnv(t *testing.T, theory string) *devEnv {
 	devCompletionPR = func(pid int64, a, b, c, branch, sha string, v []string) { pr = append(pr, v...) }
 	t.Cleanup(func() { devCompletionPR = oldPR })
 
+	oldProbe := devRepoProbe
+	devRepoProbe = func(url, branch string) bool { return false }
+	t.Cleanup(func() { devRepoProbe = oldProbe })
+
 	devPlanMu.Lock()
 	devPlanMem = map[string]*DevPlan{}
 	devPlanMu.Unlock()
@@ -420,18 +424,6 @@ func TestAConversationThatWritesNothingHandsItsLastWordsToTheNextAttempt(t *test
 	}
 }
 
-func TestDevPromptTellsTheChildWhereTheRepoReallyIs(t *testing.T) {
-	r := &devRun{pid: 1, repo: "o/r", devRepo: "o/baloon", branch: "b", task: "t", gpuAll: "0,1", devRepoBlock: "[DEV REPO]\n"}
-	plan := newDevPlan("o/r", "s", []DevModule{{Name: "A.lean", Hash: "h", Bytes: 10}}, [][]string{{"A.lean"}}, "p")
-	r.plan = plan
-	p := r.unitPrompt(plan.Leaves()[0], 0, 1, 1, DevFailure{}, "b")
-	for _, want := range []string{"THE REPO IS ON THE MACHINE THAT RUNS YOUR COMMANDS", "/home/claude/baloon exists on that machine", "believe the local result", "ls /home/claude/baloon"} {
-		if !strings.Contains(p, want) {
-			t.Fatalf("dev prompt lacks %q", want)
-		}
-	}
-}
-
 func TestDevBranchIsNamedByWhatItDevelopsNotByThePid(t *testing.T) {
 	a := devBranchFor("Niko1221/Strata", "01529aaa82b9", 6)
 	b := devBranchFor("Niko1221/Strata", "01529aaa82b9", 7)
@@ -471,5 +463,92 @@ func TestARestartedProcessResumesFromTheBranchAndRedoesNothing(t *testing.T) {
 	}
 	if len(env.model.prompts) != conversationsBefore {
 		t.Fatalf("the restarted process started %d conversation(s): it did not find the finished work on the branch", len(env.model.prompts)-conversationsBefore)
+	}
+}
+
+func countConversations(prompts []string) (units, planners int) {
+	for _, p := range prompts {
+		switch {
+		case strings.Contains(p, "[INCREMENTAL BUILD"):
+			units++
+		case strings.Contains(p, "[TASK] group") || strings.Contains(p, "is too big for one session"):
+			planners++
+		}
+	}
+	return
+}
+
+// the overnight run: 3 attempts that wrote nothing, then a split, then more of the same
+func TestTwoConversationsInARowThatWriteNothingStopTheRunWithoutSplitting(t *testing.T) {
+	env := newDevEnv(t, theory2("Alpha", "Beta"))
+	env.model.reply = func(unit string, n int) string {
+		return "I cannot see the repository, so I wrote nothing. (conversation " + string(rune('0'+n)) + ")\n" + strings.Repeat("explanation. ", 30)
+	}
+	env.model.unitWork = func(prompt, unit string, n int) {} // writes nothing, ever
+	const pid = 9701
+	branch := devBranchFor("ref/proj", "refsha1", pid)
+
+	_, err := dev_from_theorems(pid, &Step{Owner: "ref", Repo: "proj"})
+	if err == nil {
+		t.Fatal("the run must stop with an error")
+	}
+	for _, want := range []string{"the last 2 conversations wrote no file", "not cured by retrying or by splitting", "I cannot see the repository", branch} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("the error must say what happened; lacks %q:\n%s", want, err)
+		}
+	}
+	units, planners := countConversations(env.model.prompts)
+	if units != devMaxSilentAttempts {
+		t.Fatalf("exactly %d unit conversations, got %d: a third one, or a split, is the loop", devMaxSilentAttempts, units)
+	}
+	if planners != 0 {
+		t.Fatalf("a planner was asked to split a unit whose conversations never started (%d)", planners)
+	}
+	// nothing is lost: the plan is on the branch, ready for a restart
+	if got := bareShow(env.bare, branch+":"+devPlanFile); !strings.Contains(got, "Alpha.lean") {
+		t.Fatalf("the plan must be kept:\n%.200s", got)
+	}
+}
+
+func TestOneSilentConversationIsNotAStop(t *testing.T) {
+	env := newDevEnv(t, theory2("Alpha"))
+	env.model.unitWork = func(prompt, unit string, n int) {
+		if n == 1 {
+			return // the first one writes nothing
+		}
+		mustWrite(env.mirror, "src/impl.cu", "// ok\n")
+		env.model.writeScripts(unit, 0, 0, "built")
+	}
+	if _, err := dev_from_theorems(9702, &Step{Owner: "ref", Repo: "proj"}); err != nil {
+		t.Fatalf("one silent conversation followed by one that works is just a fix attempt: %v", err)
+	}
+	if units, _ := countConversations(env.model.prompts); units != 2 {
+		t.Fatalf("%d unit conversations", units)
+	}
+}
+
+func TestTheSilentStreakEndsWhenAConversationWritesSomething(t *testing.T) {
+	p := newDevPlan("o/r", "s", mods("A"), [][]string{{"A"}}, "p")
+	id := p.Leaves()[0].ID
+	if p.NoteSilent(id) != 1 || p.NoteSilent(id) != 2 || p.Silent(id) != 2 {
+		t.Fatal("the streak counts")
+	}
+	p.ClearSilent(id)
+	if p.Silent(id) != 0 || p.NoteSilent(id) != 1 {
+		t.Fatal("a conversation that wrote something restarts the count")
+	}
+	p.MarkUnitPass(p.Leaves()[0])
+	if p.Silent(id) != 0 {
+		t.Fatal("a pass clears it")
+	}
+	// it is not persisted: a restart is a person deciding to try again
+	p.NoteSilent(id)
+	b, _ := p.Marshal()
+	q, err := unmarshalDevPlan(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if q.Silent(id) != 0 {
+		t.Fatal("the streak must not survive a restart")
 	}
 }

@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"iter"
 	"log"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -75,7 +75,6 @@ work across child processes. you drive the strategy, children do the reading.
 `
 }
 
-
 type Model struct {
 	client    *Client
 	modelName string
@@ -130,22 +129,6 @@ func shapeToolResults(in []ToolResult) []ToolResult {
 	return out
 }
 
-// bashCommandOf extracts the command line of a bash tool call.
-func bashCommandOf(toolName, inputJSON string) (string, bool) {
-	if !isBashTool(toolName) {
-		return "", false
-	}
-	var in toolInput
-	if json.Unmarshal([]byte(inputJSON), &in) != nil {
-		return "", false
-	}
-	cmd := in.Command
-	if cmd == "" {
-		cmd = in.Code
-	}
-	return cmd, cmd != ""
-}
-
 // terminalText is the text of the round that ended the conversation, as the result
 // should carry it: the done marker line removed, nothing else touched.
 func terminalText(text string) string {
@@ -173,12 +156,6 @@ func settledNow(convID string) bool {
 // kernel, on behalf of the conversation that issued them, and the answer goes
 // back to the child through the same local-result channel as any other command.
 func (m *Model) shadowExecute(convID, toolName, inputJSON string) string {
-	// a dev conversation reaching for git: tell it the truth from this machine, instead of
-	// letting its own sandbox's failure stand (kernel/dev_notice.go)
-	if cmd, ok := bashCommandOf(toolName, inputJSON); ok && isGitCommand(cmd) && kernel.IsDevRole(kernel.ConvRoleOf(convID)) {
-		log.Printf("[kernel-cmd] %s: git in a dev conversation → notice", truncate(convID, 8))
-		return kernel.DevGitNotice()
-	}
 	if cmd, ok := kernel.EinsteinCommandFrom(toolName, inputJSON); ok {
 		out := kernel.HandleEinsteinCommand(convID, cmd)
 		log.Printf("[kernel-cmd] %s: %s → %s", truncate(convID, 8), truncateCmd(cmd, 100), truncate(out, 160))
@@ -186,7 +163,6 @@ func (m *Model) shadowExecute(convID, toolName, inputJSON string) string {
 	}
 	return m.Shadow.Execute(toolName, inputJSON)
 }
-
 
 func (m *Model) ResetConversation() {
 	m.mu.Lock()
@@ -261,10 +237,10 @@ func (m *Model) GenerateContent(ctx context.Context, req *model.LLMRequest, stre
 	}
 	if isNewConv {
 		webReq.CreateConversationParams = &CreateConversationParams{
-			Name:                          "",
-			Model:                         m.modelName,
+			Name:                           "",
+			Model:                          m.modelName,
 			IncludeConversationPreferences: true,
-			IsTemporary:                   false,
+			IsTemporary:                    false,
 		}
 	}
 
@@ -280,12 +256,12 @@ func (m *Model) GenerateContent(ctx context.Context, req *model.LLMRequest, stre
 }
 
 const (
-	exitNormal   = 0
-	exitError    = 1
-	exitSignal   = 2
-	exitOOM      = 3
-	exitStarve   = 4
-	exitRounds   = 5
+	exitNormal = 0
+	exitError  = 1
+	exitSignal = 2
+	exitOOM    = 3
+	exitStarve = 4
+	exitRounds = 5
 )
 
 func exitCodeStr(code int) string {
@@ -315,7 +291,7 @@ type loopState struct {
 	decidedOnce          bool
 	isChild              bool
 	convID               string
-	sseRecovery          bool // set when we sent bare "Continue" after SSE break; cleared after one round
+	sseRecovery          bool        // set when we sent bare "Continue" after SSE break; cleared after one round
 	ledger               *toolLedger // executed/delivered tool_use ids; see sse_recover.go
 }
 
@@ -1111,8 +1087,8 @@ func (m *Model) RunConversation(prompt string) (string, string) {
 		SyncSources:   []json.RawMessage{},
 		Tools:         []WebTool{},
 		CreateConversationParams: &CreateConversationParams{
-			Name:                          "",
-			Model:                         m.modelName,
+			Name:                           "",
+			Model:                          m.modelName,
 			IncludeConversationPreferences: true,
 			IsTemporary:                    false,
 		},
@@ -1190,7 +1166,6 @@ func sleepWithHeartbeat(d time.Duration) {
 		}
 	}
 }
-
 
 // modelUpdateTarget returns the models named in a model_update event ("" if unparseable).
 func modelUpdateTarget(data []byte) (from, to string) {

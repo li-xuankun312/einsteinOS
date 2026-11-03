@@ -50,27 +50,3 @@ func TestTerminalTextKeepsTheAnswerAndDropsOnlyTheMarker(t *testing.T) {
 		t.Fatalf("%q", got)
 	}
 }
-
-// the 2026/11/02 15:23 unit 3: three rounds, one git command each, no file written
-func TestGitFromADevConversationIsAnsweredWithTheTruthFromThisMachine(t *testing.T) {
-	m := &Model{Shadow: &ShadowExecutor{Enabled: false}}
-	dev := "aaaaaaaa-1111-4111-8111-000000000003"
-	other := "bbbbbbbb-1111-4111-8111-000000000004"
-	kernel.RegisterConv(1, dev, "o/r", "dev_unit_3", 3)
-	kernel.RegisterConv(1, other, "o/r", "theorize_chunk_2", 2)
-
-	git := `{"command":"cd /home/claude && git clone https://github.com/zeng-bin3123/baloon.git"}`
-	if got := m.shadowExecute(dev, "bash_tool", git); !strings.Contains(got, "git is not used in this phase") {
-		t.Fatalf("a dev conversation's git must be answered by the kernel: %q", got)
-	}
-	// other roles, and other commands: untouched (the shadow is disabled here, so empty)
-	if got := m.shadowExecute(other, "bash_tool", git); got != "" {
-		t.Fatalf("the theory phase uses git for its own reasons: %q", got)
-	}
-	if got := m.shadowExecute(dev, "bash_tool", `{"command":"ls /home/claude/baloon"}`); got != "" {
-		t.Fatalf("only git is answered this way: %q", got)
-	}
-	if got := m.shadowExecute(dev, "create_file", `{"path":"/x","file_text":"git clone"}`); got != "" {
-		t.Fatalf("a file's content is not a command: %q", got)
-	}
-}

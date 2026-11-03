@@ -92,6 +92,10 @@ type DevPlan struct {
 	FixAttempts map[string]int            `json:"fix_attempts"` // unit id -> attempts
 	LastFailure map[string]DevFailure     `json:"last_failure"` // unit id -> why the last attempt failed
 	InfraFails  int                       `json:"infra_fails"`  // consecutive git/push failures (not the child's fault)
+
+	// silent counts, per unit, the conversations IN A ROW that wrote no file. In memory
+	// only: a restart is a person deciding to try again, and starts the count over.
+	silent map[string]int
 }
 
 // ---- identity --------------------------------------------------------------
@@ -401,6 +405,7 @@ func (p *DevPlan) MarkUnitPass(n DevPlanNode) {
 	}
 	delete(p.FixAttempts, n.ID)
 	delete(p.LastFailure, n.ID)
+	p.ClearSilent(n.ID)
 	p.setConv(n.ID, "")
 }
 
@@ -423,6 +428,22 @@ func (p *DevPlan) Fail(id string, f DevFailure) int {
 	p.LastFailure[id] = f
 	return p.BumpFix(id)
 }
+
+// NoteSilent records that a conversation for this unit wrote nothing, and returns how
+// many in a row have.
+func (p *DevPlan) NoteSilent(id string) int {
+	if p.silent == nil {
+		p.silent = map[string]int{}
+	}
+	p.silent[id]++
+	return p.silent[id]
+}
+
+// ClearSilent ends the streak: the unit's last conversation wrote something (or passed).
+func (p *DevPlan) ClearSilent(id string) { delete(p.silent, id) }
+
+// Silent is the current streak.
+func (p *DevPlan) Silent(id string) int { return p.silent[id] }
 
 // BumpFix counts a failed attempt for the unit and returns the new count.
 func (p *DevPlan) BumpFix(id string) int {

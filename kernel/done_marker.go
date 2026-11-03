@@ -80,38 +80,3 @@ func WithDoneMarker(base TerminationCondition) TerminationCondition {
 	}
 	return OrConditions(&DoneMarkerCond{}, base)
 }
-
-// ---- NoProgress: a conversation whose job is to produce files, and has produced none ----
-
-// NoProgress stops a conversation after Rounds rounds in which nothing has appeared,
-// where "appeared" is whatever the caller's Produced says (for a dev unit: a file in the
-// local mirror that differs from the branch).
-//
-// Why: the account allows 40 requests per 5 hours (the 2026/11/02 18:53 message: 已使用40,
-// 请2026-11-03 05:08:28后重试, a window that opened at 16:08), and every round of a
-// conversation is a request. In that run the dev conversations that wrote nothing ran 12, 17,
-// 20 and 22+ rounds each — a full window spent on rounds that produced nothing, then 2h15m
-// waiting for it to reopen. The other limits (ConsecutiveTextRounds, MaxRounds) do not stop
-// a conversation that alternates a tool call with a paragraph of text forever.
-type NoProgress struct {
-	Rounds   int
-	Produced func() bool
-
-	lastRound int
-	lastValue bool
-}
-
-func (c *NoProgress) Check(e ToolEvent) *StopSignal {
-	if c.Produced == nil || c.Rounds <= 0 || e.Round < c.Rounds {
-		return nil
-	}
-	if e.Round != c.lastRound { // Check runs per tool event: look once per round
-		c.lastRound, c.lastValue = e.Round, c.Produced()
-	}
-	if c.lastValue {
-		return nil
-	}
-	return &StopSignal{Reason: fmt.Sprintf("no_progress=%d_rounds", c.Rounds)}
-}
-func (c *NoProgress) Reset()         { c.lastRound, c.lastValue = 0, false }
-func (c *NoProgress) String() string { return fmt.Sprintf("NoProgress(%d)", c.Rounds) }
