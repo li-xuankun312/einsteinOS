@@ -65,7 +65,7 @@ func loadDevPlanFromBranch(devRepo, branch string) (*DevPlan, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := gitUseBranchFromRemote(dir, branch, "main"); err != nil {
+	if err := gitUseBranchFromRemote(dir, branch, devNewBranchBase(devRepo)); err != nil {
 		return nil, err
 	}
 	b, err := os.ReadFile(dir + "/" + devPlanFile)
@@ -86,7 +86,7 @@ func storeDevPlan(devRepo, branch string, plan *DevPlan, msg string) error {
 	if err != nil {
 		return err
 	}
-	if err := gitUseBranchFromRemote(dir, branch, "main"); err != nil {
+	if err := gitUseBranchFromRemote(dir, branch, devNewBranchBase(devRepo)); err != nil {
 		return err
 	}
 	b, err := plan.Marshal()

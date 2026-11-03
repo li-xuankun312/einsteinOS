@@ -63,3 +63,34 @@ func advanceAfterPipeline(pid int64, owner, repo string) bool {
 	pr_push_step(pid, &Step{Kind: STEP_DEV_FROM_THEOREMS, Owner: owner, Repo: repo})
 	return true
 }
+
+// ---- the base a new dev branch starts from --------------------------------------------------
+
+// A dev branch that does not exist yet is created from a base. It was always "main" — but
+// the previous commit's verified code is on the previous pipeline's dev branch (its PR into
+// main is opened, not merged), so commit N+1 would have started without commit N's code.
+// The base is now the dev branch of the last completed pipeline for that dev repo.
+var (
+	devBasesMu sync.Mutex
+	devBases   = map[string]string{} // dev repo → branch of its last completed pipeline
+)
+
+// devDefaultBase is where a dev repo's first pipeline starts.
+var devDefaultBase = "main"
+
+func recordCompletedBranch(devRepo, branch string) {
+	devBasesMu.Lock()
+	defer devBasesMu.Unlock()
+	devBases[devRepo] = branch
+	log.Printf("ref_cursor: %s: the next pipeline's dev branch starts from %s", devRepo, branch)
+}
+
+// devNewBranchBase: the branch a new dev branch of devRepo is created from.
+func devNewBranchBase(devRepo string) string {
+	devBasesMu.Lock()
+	defer devBasesMu.Unlock()
+	if b := devBases[devRepo]; b != "" {
+		return b
+	}
+	return devDefaultBase
+}

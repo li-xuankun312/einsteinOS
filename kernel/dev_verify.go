@@ -466,7 +466,7 @@ func commitDelta(cloneDir, devRepo, from, onto, mirrorDir string, changed, remov
 // dev tip. The two sides touch different files, so the merge is clean; if it is
 // not, the error is returned and nothing is pushed.
 func promoteBranch(cloneDir, devRepo, from, to string) error {
-	if err := gitUseBranchFromRemote(cloneDir, to, "main"); err != nil {
+	if err := gitUseBranchFromRemote(cloneDir, to, devNewBranchBase(devRepo)); err != nil {
 		return err
 	}
 	if err := GitMerge(cloneDir, from, fmt.Sprintf("merge verified %s into %s", from, to)); err != nil {

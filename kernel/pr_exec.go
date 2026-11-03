@@ -560,7 +560,7 @@ func dev_store_theory(theory, repo, branch string) error {
 	if err != nil {
 		return fmt.Errorf("dev_store_theory: %w", err)
 	}
-	if err := gitUseBranchFromRemote(repoDir, branch, "main"); err != nil {
+	if err := gitUseBranchFromRemote(repoDir, branch, devNewBranchBase(devRepos[0])); err != nil {
 		return fmt.Errorf("dev_store_theory: checkout %s: %w", branch, err)
 	}
 	if err := os.MkdirAll(repoDir+"/.einsteinOS", 0o755); err != nil {
@@ -1407,7 +1407,7 @@ func dev_store_conv(convID, repo, branch, stem string, status map[string]string)
 		return
 	}
 	filePath := fmt.Sprintf(".einsteinOS/convs/%s.md", stem)
-	if err := gitUseBranchFromRemote(repoDir, branch, "main"); err != nil {
+	if err := gitUseBranchFromRemote(repoDir, branch, devNewBranchBase(devRepos[0])); err != nil {
 		log.Printf("dev_store_conv: %s unit %s checkout %s: %v", repo, stem, branch, err)
 		return
 	}
