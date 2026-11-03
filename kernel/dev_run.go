@@ -267,6 +267,8 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 	PRFeedbackAdd(pid, fmt.Sprintf("- dev_from_theorems: all %d units pass, branch %s ready", len(leaves), branch))
 	devCompletionPR(pid, step.Owner, step.Repo, repo, branch, step.SHA, verdicts)
 	log.Printf("dev_from_theorems: conv_registry:\n%s", ConvRegistryStatus())
+	// one pr_pipeline is complete: the next reference commit (ref_cursor.go)
+	advanceAfterPipeline(pid, step.Owner, step.Repo)
 	return lastStdout, nil
 }
 

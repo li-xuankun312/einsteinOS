@@ -366,6 +366,8 @@ func ref_bind_at(pid int64, owner, repo string, startIdx int) (string, error) {
 
 	count := theorem_count(owner + "/" + repo)
 	remaining := len(commits) - theoryIdx - 1
+	// the cursor: which commit this pipeline is for (ref_cursor.go)
+	recordRefBound(pid, owner+"/"+repo, boundRef{Idx: theoryIdx, SHA: theoryCommit.SHA, Total: len(commits)})
 
 	if remaining <= 0 {
 		log.Printf("ref_bind: %s/%s all commits processed", owner, repo)
