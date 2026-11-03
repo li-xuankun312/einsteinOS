@@ -69,3 +69,44 @@ func TestModuleSourceIdentsFromARealSection(t *testing.T) {
 		}
 	}
 }
+
+// the unit is told, up front, what the kernel will hold it to — the facts it is judged on
+func TestTheUnitAndItsReviewerAreToldTheMeasuredRequirements(t *testing.T) {
+	req := UnitRequirements{
+		Sources:    []string{"src/kernels/cpu/q2_avx2.cpp", "src/kernels/cuda/native_mmvq.cu"},
+		GPUSources: []string{"src/kernels/cuda/native_mmvq.cu"},
+		ISAFlags:   []string{"-mavx2", "-mfma"},
+		FlagFiles:  map[string][]string{"src/kernels/cpu/q2_avx2.cpp": {"-mavx2", "-mfma"}},
+		Unmeasured: []string{"SFamilyGemvIndexing"},
+	}
+	r := &devRun{pid: 1, repo: "Niko1221/Strata", devRepo: "o/d", branch: "b", task: "t", gpuAll: "0"}
+	plan := newDevPlan("Niko1221/Strata", "01529aaa82b9f5c58d2bb87264b7b3f7b823678f", []DevModule{{Name: "Q2Avx2Kernel.lean", Hash: "h", Bytes: 10}}, [][]string{{"Q2Avx2Kernel.lean"}}, "p")
+	r.plan = plan
+	unit := plan.Leaves()[0]
+	r.reqs = map[string]UnitRequirements{unit.ID: req}
+	p := r.unitPrompt(unit, 0, 1, 1, DevFailure{}, "b")
+	for _, want := range []string{
+		"[UNIT REQUIREMENTS — measured from the reference Niko1221/Strata at 01529aaa82b9]",
+		"  src/kernels/cpu/q2_avx2.cpp built by the reference with -mavx2 -mfma\n",
+		"  src/kernels/cuda/native_mmvq.cu (CUDA)\n",
+		"a process of test.sh opens a GPU device",
+		"contain the instructions of -mavx2 -mfma (EINSTEINOS_ISA_FLAGS holds them)",
+		"no reference file was found for: SFamilyGemvIndexing",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("prompt missing %q", want)
+		}
+	}
+	if strings.Contains(p, "%!") {
+		t.Error("format damage")
+	}
+	if st := req.Status(); st["reference_gpu_sources"] != "src/kernels/cuda/native_mmvq.cu" || st["reference_isa_flags"] != "-mavx2 -mfma" {
+		t.Fatalf("status %v", st)
+	}
+	if (UnitRequirements{}).Block("o/r", "s") != "" {
+		t.Fatal("nothing measured: no block")
+	}
+	if env := devVerifyEnvISA("0", req.ISAFlags); !strings.Contains(env, `EINSTEINOS_ISA_FLAGS="-mavx2 -mfma"`) {
+		t.Fatalf("env %q", env)
+	}
+}

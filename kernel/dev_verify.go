@@ -334,7 +334,15 @@ func tailText(s string, n int) string {
 // devVerifyEnv is the shell prelude that makes the real toolchain and the
 // usable devices visible to the scripts: corex lives outside the default PATH.
 func devVerifyEnv(gpuUsable string) string {
+	return devVerifyEnvISA(gpuUsable, nil)
+}
+
+// devVerifyEnvISA adds the reference's ISA flags for the unit (EINSTEINOS_ISA_FLAGS).
+func devVerifyEnvISA(gpuUsable string, isa []string) string {
 	env := fmt.Sprintf("export PATH=%s:$PATH; ", toolchainPATH())
+	if len(isa) > 0 {
+		env += fmt.Sprintf("export EINSTEINOS_ISA_FLAGS=%q; ", strings.Join(isa, " "))
+	}
 	if gpuUsable != "" {
 		env += fmt.Sprintf("export EINSTEINOS_GPUS=%q CUDA_VISIBLE_DEVICES=%q; ", gpuUsable, gpuUsable)
 	}
@@ -373,7 +381,7 @@ func runUnitVerifyWith(ws, unitID, gpuUsable string, req UnitRequirements, chang
 	if _, err := os.Stat(filepath.Join(ws, filepath.FromSlash(build))); err != nil {
 		return finish()
 	}
-	env := devVerifyEnv(gpuUsable)
+	env := devVerifyEnvISA(gpuUsable, req.ISAFlags)
 	code, out, btrace, err := runWatched(env+"bash "+build+" 2>&1", ws, buildTimeout)
 	res.Build = btrace
 	res.BuildExit, res.BuildOut = code, tailText(out, 3000)

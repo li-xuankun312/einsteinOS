@@ -366,6 +366,9 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 	}
 	st := out.Status
 	st["unit_id"] = unit.ID
+	for k, v := range r.requirements(unit).Status() {
+		st[k] = v // the reviewer sees what the reference says the unit is, next to what was measured
+	}
 	if status != nil {
 		if f := status["files_written"]; f != "" {
 			st["files_written"] = f
@@ -449,6 +452,9 @@ func (r *devRun) unitPrompt(unit DevPlanNode, idx, total, attempt int, fail DevF
 	plan := r.plan
 
 	p.WriteString(hardwareSection(r.hwInfo))
+	if r.plan != nil {
+		p.WriteString(r.requirements(unit).Block(r.repo, r.plan.RefSHA))
+	}
 
 	// prior units: addresses and logs, never text
 	var prior []DevPlanNode

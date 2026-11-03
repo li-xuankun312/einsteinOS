@@ -225,3 +225,60 @@ func measureUnitRequirements(repo, sha, unitTheory string) UnitRequirements {
 func logUnitRequirements(repo, unitID string, req UnitRequirements) {
 	log.Printf(requirementLogFmt, repo, unitID, req.Sources, req.GPUSources, req.ISAFlags, req.Unmeasured)
 }
+
+const (
+	reqHeadFmt     = "[UNIT REQUIREMENTS — measured from the reference %[1]s at %[2]s]\nyour modules' identifiers are defined in these reference files:\n"
+	reqSourceFmt   = "  %[1]s%[2]s%[3]s\n"
+	reqGPUTag      = " (CUDA)"
+	reqFlagsFmt    = " built by the reference with %[1]s"
+	reqGPUCheckFmt = "the kernel checks: your changes include a .cu/.cuh; build.sh compiles each .cu you write with the CUDA toolchain in %[1]s; a process of test.sh opens a GPU device (%[2]s).\n"
+	reqISACheckFmt = "the kernel checks: the binaries build.sh produces (-o) or test.sh runs contain the instructions of %[1]s (EINSTEINOS_ISA_FLAGS holds them).\n"
+	reqUnmeasFmt   = "no reference file was found for: %[1]s\n"
+)
+
+// Block is the [UNIT REQUIREMENTS] section of the unit's prompt ("" when nothing was measured).
+func (u UnitRequirements) Block(repo, sha string) string {
+	if len(u.Sources) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf(reqHeadFmt, repo, shortSHA12(sha)))
+	for _, f := range u.Sources {
+		gpu, flags := "", ""
+		for _, g := range u.GPUSources {
+			if g == f {
+				gpu = reqGPUTag
+			}
+		}
+		if fl := u.FlagFiles[f]; len(fl) > 0 {
+			flags = fmt.Sprintf(reqFlagsFmt, strings.Join(fl, " "))
+		}
+		b.WriteString(fmt.Sprintf(reqSourceFmt, f, gpu, flags))
+	}
+	if u.GPU() {
+		b.WriteString(fmt.Sprintf(reqGPUCheckFmt, strings.Join(toolchainDirs, ":"), gpuDeviceRe().String()))
+	}
+	if len(u.ISAFlags) > 0 {
+		b.WriteString(fmt.Sprintf(reqISACheckFmt, strings.Join(u.ISAFlags, " ")))
+	}
+	if len(u.Unmeasured) > 0 {
+		b.WriteString(fmt.Sprintf(reqUnmeasFmt, strings.Join(u.Unmeasured, ", ")))
+	}
+	b.WriteString("\n")
+	return b.String()
+}
+
+// Status is what the reviewer reads next to the kernel's measurements.
+func (u UnitRequirements) Status() map[string]string {
+	st := map[string]string{}
+	if len(u.Sources) > 0 {
+		st["reference_sources"] = strings.Join(u.Sources, " ")
+	}
+	if u.GPU() {
+		st["reference_gpu_sources"] = strings.Join(u.GPUSources, " ")
+	}
+	if len(u.ISAFlags) > 0 {
+		st["reference_isa_flags"] = strings.Join(u.ISAFlags, " ")
+	}
+	return st
+}
