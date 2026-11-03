@@ -225,6 +225,14 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 		// splitting the unit, starts the same kind of conversation again. Two in a row means
 		// the cause is outside the unit — stop, say so, keep everything (the plan and the
 		// passed units are on the branch), and leave the decision to a person.
+		// no GPU toolchain on this machine: no retry or split can build a GPU unit here
+		if lf := plan.LastFailure[unit.ID]; !passed && !requeue && lf.Kind == GateToolchainMissing {
+			msg := fmt.Sprintf("unit %s (%s): %s. the code is kept on %s; run on a machine with the toolchain to continue",
+				unit.ID, nodeDesc(unit), lf.Text, lf.BaseRef)
+			log.Printf("dev_from_theorems: %s %s", repo, msg)
+			PRFeedbackAdd(pid, "- dev_from_theorems: "+msg)
+			return lastStdout, fmt.Errorf("dev_from_theorems: %s", msg)
+		}
 		if !passed && !requeue && plan.Silent(unit.ID) >= devMaxSilentAttempts {
 			msg := fmt.Sprintf("unit %s (%s): the last %d conversations wrote no file. a conversation that does not start is not "+
 				"cured by retrying or by splitting the unit, so the run stops here. the plan and the %d unit(s) already passed are "+

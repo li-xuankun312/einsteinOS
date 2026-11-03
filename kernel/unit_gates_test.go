@@ -25,6 +25,19 @@ func realRunner(t *testing.T) {
 	}
 }
 
+var corex = []string{"/usr/local/corex/bin/clang++"}
+
+// withFakeToolchain makes toolchainDirs a directory holding an executable clang++.
+func withFakeToolchain(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	os.WriteFile(dir+"/clang++", []byte("#!/bin/bash\nsleep 0.3\n"), 0o755)
+	old := toolchainDirs
+	t.Cleanup(func() { toolchainDirs = old })
+	toolchainDirs = []string{dir}
+	return dir
+}
+
 var gpuReq = UnitRequirements{Sources: []string{"src/kernels/cuda/fused_gdn.cu"}, GPUSources: []string{"src/kernels/cuda/fused_gdn.cu"}}
 
 // 2026/11/03 unit 6: FusedGdnKernels (reference: fused_gdn.cu) written as a host header,
@@ -32,6 +45,7 @@ var gpuReq = UnitRequirements{Sources: []string{"src/kernels/cuda/fused_gdn.cu"}
 func TestAGPUUnitThatWritesNoCUDADoesNotPass(t *testing.T) {
 	realRunner(t)
 	ws := t.TempDir()
+	withFakeToolchain(t)
 	build, test := devVerifyScripts("u433ffdf2e4")
 	write(t, ws, build, "sleep 0.2") // as long as a real build at least: the watcher sees live processes
 	write(t, ws, test, "sleep 0.2")
@@ -69,7 +83,7 @@ func TestChangedGPUFiles(t *testing.T) {
 func TestTheUnitsOwnCUDAMustBeCompiled(t *testing.T) {
 	existing := []string{"/usr/local/corex/bin/clang++ -x cuda --cuda-gpu-arch=ivcore10 -c src/ix_gdn.cu -o /tmp/o/ix_gdn.cu.o",
 		"/usr/local/corex/bin/clang++ -x cuda --cuda-gpu-arch=ivcore10 -c tests/test_gdn.cu -o /tmp/o/test_gdn.cu.o"}
-	in := GateInput{Req: gpuReq, Changed: []string{"src/baloon/fused_gdn.cu", "include/baloon/fused_gdn.cuh"}, Build: ProcTrace{Cmdlines: existing}}
+	in := GateInput{Req: gpuReq, Changed: []string{"src/baloon/fused_gdn.cu", "include/baloon/fused_gdn.cuh"}, Build: ProcTrace{Cmdlines: existing}, Compilers: corex}
 	if k, txt := unitGates(in); k != "gpu_not_compiled" || !strings.Contains(txt, "src/baloon/fused_gdn.cu") || !strings.Contains(txt, "src/ix_gdn.cu") {
 		t.Fatalf("%q %q", k, txt)
 	}
@@ -91,7 +105,7 @@ func TestTheUnitsOwnCUDAMustBeCompiled(t *testing.T) {
 		t.Fatalf("g++ counted as a CUDA compile: %q", k)
 	}
 	// only a .cuh changed: some CUDA compile must have run
-	in = GateInput{Req: gpuReq, Changed: []string{"include/baloon/x.cuh"}, Test: ProcTrace{Devices: []string{"/dev/iluvatar1"}}}
+	in = GateInput{Req: gpuReq, Changed: []string{"include/baloon/x.cuh"}, Test: ProcTrace{Devices: []string{"/dev/iluvatar1"}}, Compilers: corex}
 	if k, _ := unitGates(in); k != "gpu_not_compiled" {
 		t.Fatalf("header only, nothing compiled: %q", k)
 	}
@@ -104,7 +118,7 @@ func TestTheUnitsOwnCUDAMustBeCompiled(t *testing.T) {
 // 2026/11/03: every test ran on the CPU and exited 0. A GPU unit's test must open a device.
 func TestAGPUUnitsTestMustRunOnTheGPU(t *testing.T) {
 	compiled := ProcTrace{Cmdlines: []string{"clang++ -x cuda --cuda-gpu-arch=ivcore10 -c src/baloon/fused_gdn.cu"}}
-	in := GateInput{Req: gpuReq, Changed: []string{"src/baloon/fused_gdn.cu"}, Build: compiled,
+	in := GateInput{Req: gpuReq, Changed: []string{"src/baloon/fused_gdn.cu"}, Build: compiled, Compilers: corex,
 		Test: ProcTrace{Procs: 3, Exes: []string{"/bin/bash", "/tmp/baloon_unit6_build/test_unit6"}}}
 	k, txt := unitGates(in)
 	if k != "gpu_unused" || !strings.Contains(txt, "3 process(es)") || !strings.Contains(txt, "test_unit6") {
@@ -133,6 +147,9 @@ func TestGPUUseIsMeasuredFromTheTestProcesses(t *testing.T) {
 	build, test := devVerifyScripts("u6")
 	write(t, ws, "bin/clang++", "#!/bin/bash\nsleep 0.3\n") // a compiler that takes as long as one
 	os.Chmod(ws+"/bin/clang++", 0o755)
+	oldDirs := toolchainDirs
+	t.Cleanup(func() { toolchainDirs = oldDirs })
+	toolchainDirs = []string{ws + "/bin"}
 	write(t, ws, build, "bin/clang++ -x cuda --cuda-gpu-arch=ivcore10 -c src/baloon/k.cu")
 	write(t, ws, test, "( exec 3<"+dev+"; sleep 0.3 )")
 	r := runUnitVerifyWith(ws, "u6", "0", gpuReq, []string{"src/baloon/k.cu"}, time.Minute, time.Minute)
@@ -143,5 +160,35 @@ func TestGPUUseIsMeasuredFromTheTestProcesses(t *testing.T) {
 	r = runUnitVerifyWith(ws, "u6", "0", gpuReq, []string{"src/baloon/k.cu"}, time.Minute, time.Minute)
 	if r.Passed() || r.Gate != "gpu_unused" {
 		t.Fatalf("no device opened: %q %q", r.Gate, r.GateText)
+	}
+}
+
+// 2026/11/03 in the sandbox: "corex toolchain not present on this host: skipping CUDA compile",
+// then BUILD OK. A GPU unit on a machine without the toolchain does not pass.
+func TestAGPUUnitWithoutTheToolchainDoesNotPass(t *testing.T) {
+	full := GateInput{Req: gpuReq, Changed: []string{"src/a.cu"},
+		Build: ProcTrace{Cmdlines: []string{"nvcc -c src/a.cu"}}, Test: ProcTrace{Devices: []string{"/dev/iluvatar0"}}}
+	if k, txt := unitGates(full); k != GateToolchainMissing || !strings.Contains(txt, "clang++/nvcc") {
+		t.Fatalf("%q %q", k, txt)
+	}
+	full.Compilers = corex
+	if k, _ := unitGates(full); k != "" {
+		t.Fatalf("with a toolchain: %q", k)
+	}
+	if k, _ := unitGates(GateInput{Req: UnitRequirements{Sources: []string{"a.cpp"}}}); k != "" {
+		t.Fatalf("a CPU unit needs no GPU toolchain: %q", k)
+	}
+	// measured from the directories
+	dir := t.TempDir()
+	old := toolchainDirs
+	t.Cleanup(func() { toolchainDirs = old })
+	toolchainDirs = []string{dir}
+	if got := presentGPUCompilers(); len(got) != 0 {
+		t.Fatalf("%v", got)
+	}
+	os.WriteFile(dir+"/nvcc", []byte("#!/bin/sh\n"), 0o755)
+	os.WriteFile(dir+"/clang++", []byte("not executable"), 0o644)
+	if got := presentGPUCompilers(); len(got) != 1 || got[0] != dir+"/nvcc" {
+		t.Fatalf("%v", got)
 	}
 }

@@ -9,6 +9,7 @@ package kernel
 
 import (
 	"fmt"
+	"os"
 	"path"
 	"regexp"
 	"strings"
@@ -23,19 +24,47 @@ type GateInput struct {
 	Changed []string  // files the unit added or changed (repo-relative)
 	Build   ProcTrace // what build.sh's processes did
 	Test    ProcTrace // what test.sh's processes did
+	// Compilers: the GPU compilers present in toolchainDirs on this machine (measured)
+	Compilers []string
+}
+
+// gpuCompilers are the programs that make a GPU build possible, looked for in toolchainDirs.
+var gpuCompilers = []string{"clang++", "nvcc"}
+
+// presentGPUCompilers measures which gpuCompilers exist in toolchainDirs.
+func presentGPUCompilers() []string {
+	var out []string
+	for _, d := range toolchainDirs {
+		for _, c := range gpuCompilers {
+			p := strings.TrimRight(d, "/") + "/" + c
+			if st, err := os.Stat(p); err == nil && !st.IsDir() && st.Mode()&0o111 != 0 {
+				out = append(out, p)
+			}
+		}
+	}
+	return out
 }
 
 const (
 	gateGPUCodeMissingFmt = "gpu_code_missing: the unit's modules come from CUDA sources in the reference (%[1]s) but it wrote no .cu/.cuh file"
 	gateGPUNotCompiledFmt = "gpu_not_compiled: build.sh ran no CUDA compile of %[1]s (CUDA compiles seen: %[2]s)"
 	gateGPUUnusedFmt      = "gpu_unused: test.sh exited 0 but none of its %[1]d process(es) opened a GPU device (%[2]s); executables that ran: %[3]s"
+	gateToolchainFmt      = "toolchain_missing: the unit's sources are CUDA but none of %[1]s exists in %[2]s on this machine; a build that skips the GPU here proves nothing"
 )
+
+// GateToolchainMissing is the gate a retry cannot fix: the run stops on it (dev_run).
+const GateToolchainMissing = "toolchain_missing"
 
 // unitGates returns the first failed gate's kind and the text of every failed gate.
 func unitGates(in GateInput) (kind, text string) {
 	var kinds, texts []string
 	fail := func(k, t string) { kinds = append(kinds, k); texts = append(texts, t) }
 
+	// a GPU unit is only judged on a machine that can build for the GPU: the 11/03 build.sh
+	// files printed "corex toolchain not present … skipping" and still exited 0
+	if in.Req.GPU() && len(in.Compilers) == 0 {
+		fail(GateToolchainMissing, fmt.Sprintf(gateToolchainFmt, strings.Join(gpuCompilers, "/"), strings.Join(toolchainDirs, ":")))
+	}
 	gpuFiles := changedGPUFiles(in.Changed)
 	if in.Req.GPU() && len(gpuFiles) == 0 {
 		fail("gpu_code_missing", fmt.Sprintf(gateGPUCodeMissingFmt, strings.Join(in.Req.GPUSources, ", ")))
