@@ -104,6 +104,25 @@ type devRun struct {
 	hwInfo, gpuAll              string
 	plan                        *DevPlan
 	sections                    []devFileSection
+	reqs                        map[string]UnitRequirements // per unit, measured once (unit_requirements.go)
+}
+
+// requirements measures what the reference says the unit is made of, once per unit.
+func (r *devRun) requirements(unit DevPlanNode) UnitRequirements {
+	if req, ok := r.reqs[unit.ID]; ok {
+		return req
+	}
+	if r.reqs == nil {
+		r.reqs = map[string]UnitRequirements{}
+	}
+	sha := ""
+	if r.plan != nil {
+		sha = r.plan.RefSHA
+	}
+	req := measureUnitRequirements(r.repo, sha, devUnitFromNode(unit, r.sections).Theory)
+	logUnitRequirements(r.repo, unit.ID, req)
+	r.reqs[unit.ID] = req
+	return req
 }
 
 func (r *devRun) gpuUsable() string {
@@ -326,7 +345,7 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 	// ---- the kernel's verdict, on the real machine -------------------------------------------------
 	var out UnitVerifyOutcome
 	for try := 1; try <= 3; try++ {
-		out = devVerifyAndPush(cloneDir, mirror, r.devRepo, r.branch, baseRef, unit.ID, nodeDesc(unit), r.gpuUsable(), base)
+		out = devVerifyAndPush(cloneDir, mirror, r.devRepo, r.branch, baseRef, unit.ID, nodeDesc(unit), r.gpuUsable(), base, r.requirements(unit))
 		if out.Err == nil {
 			break
 		}
@@ -361,6 +380,9 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 				truncStr(strings.Join(strings.Fields(tailText(stdout, 600)), " "), 600))
 		case out.Result.Compile == "pass" && out.Result.Smoke != "pass":
 			kind, text = "smoke_fail", st["smoke_error"]
+		case out.Result.Gate != "":
+			// the scripts passed; a measured requirement did not (unit_gates.go)
+			kind, text = out.Result.Gate, out.Result.GateText
 		case out.Result.Compile == "missing":
 			kind = "missing"
 		}

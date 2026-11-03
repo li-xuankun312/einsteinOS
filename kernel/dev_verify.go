@@ -263,6 +263,12 @@ type VerifyResult struct {
 	BuildOut  string // tail
 	TestOut   string // tail
 	Elapsed   time.Duration
+	// Gate is the first measured requirement the unit failed (unit_gates.go), "" if none;
+	// GateText says what was measured. Build/Test are what the scripts' processes did.
+	Gate     string
+	GateText string
+	Build    ProcTrace
+	Test     ProcTrace
 }
 
 // Status renders the result as the status map the rest of dev_* reads.
@@ -282,11 +288,18 @@ func (v VerifyResult) Status() map[string]string {
 	case v.Smoke == "missing":
 		st["smoke_error"] = "no test.sh was written; the unit has no tests"
 	}
+	if v.Gate != "" {
+		st["gate"], st["gate_error"] = v.Gate, v.GateText
+	}
+	// what was measured, for the reviewer and the next attempt
+	if len(v.Test.Devices) > 0 {
+		st["gpu_devices_opened"] = strings.Join(v.Test.Devices, " ")
+	}
 	return st
 }
 
-// Passed: both stages ran and exited 0.
-func (v VerifyResult) Passed() bool { return v.Compile == "pass" && v.Smoke == "pass" }
+// Passed: both stages ran and exited 0, and every measured requirement held.
+func (v VerifyResult) Passed() bool { return v.Compile == "pass" && v.Smoke == "pass" && v.Gate == "" }
 
 // devVerifyRunner runs one shell command line and returns its exit code and
 // combined output. The default uses the kernel's own process facility, so the
@@ -330,6 +343,28 @@ func devVerifyEnv(gpuUsable string) string {
 
 // runUnitVerify runs build.sh, then (only if it exited 0) test.sh, inside ws.
 func runUnitVerify(ws, unitID, gpuUsable string, buildTimeout, testTimeout time.Duration) VerifyResult {
+	return runUnitVerifyWith(ws, unitID, gpuUsable, UnitRequirements{}, nil, buildTimeout, testTimeout)
+}
+
+// runWatched runs a script command with its process tree watched.
+func runWatched(command, dir string, timeout time.Duration) (int, string, ProcTrace, error) {
+	f, err := os.CreateTemp("", "einsteinos-verify-*.pid")
+	if err != nil {
+		code, out, rerr := devVerifyRunner(command, dir, timeout)
+		return code, out, ProcTrace{}, rerr
+	}
+	pidFile := f.Name()
+	f.Close()
+	os.Remove(pidFile)
+	defer os.Remove(pidFile)
+	stop := watchProcTree(pidFile)
+	code, out, rerr := devVerifyRunner(watchedCommand(pidFile, command), dir, timeout)
+	return code, out, stop(), rerr
+}
+
+// runUnitVerifyWith is runUnitVerify plus what the reference requires of the unit: both
+// scripts run watched, and after they pass the gates are judged on the measurements.
+func runUnitVerifyWith(ws, unitID, gpuUsable string, req UnitRequirements, changed []string, buildTimeout, testTimeout time.Duration) VerifyResult {
 	start := time.Now()
 	build, test := devVerifyScripts(unitID)
 	res := VerifyResult{Compile: "missing", Smoke: "missing", BuildExit: -1, TestExit: -1}
@@ -339,7 +374,8 @@ func runUnitVerify(ws, unitID, gpuUsable string, buildTimeout, testTimeout time.
 		return finish()
 	}
 	env := devVerifyEnv(gpuUsable)
-	code, out, err := devVerifyRunner(env+"bash "+build+" 2>&1", ws, buildTimeout)
+	code, out, btrace, err := runWatched(env+"bash "+build+" 2>&1", ws, buildTimeout)
+	res.Build = btrace
 	res.BuildExit, res.BuildOut = code, tailText(out, 3000)
 	if err != nil {
 		res.Compile, res.BuildOut = "fail", "could not run build.sh: "+err.Error()
@@ -355,7 +391,8 @@ func runUnitVerify(ws, unitID, gpuUsable string, buildTimeout, testTimeout time.
 	if _, err := os.Stat(filepath.Join(ws, filepath.FromSlash(test))); err != nil {
 		return finish() // Smoke stays "missing"
 	}
-	code, out, err = devVerifyRunner(env+"bash "+test+" 2>&1", ws, testTimeout)
+	code, out, ttrace, err := runWatched(env+"bash "+test+" 2>&1", ws, testTimeout)
+	res.Test = ttrace
 	res.TestExit, res.TestOut = code, tailText(out, 3000)
 	switch {
 	case err != nil:
@@ -364,6 +401,7 @@ func runUnitVerify(ws, unitID, gpuUsable string, buildTimeout, testTimeout time.
 		res.Smoke = "fail"
 	default:
 		res.Smoke = "pass"
+		res.Gate, res.GateText = unitGates(GateInput{Req: req, Changed: changed, Build: res.Build, Test: res.Test})
 	}
 	return finish()
 }
@@ -449,7 +487,7 @@ type UnitVerifyOutcome struct {
 //	mirror    the dir shadow replays the child's file writes into (devMirrorDir)
 //	baseRef   the branch whose tip the mirror was primed from (dev branch, or the
 //	          unit's wip branch when this is a fix attempt)
-func devVerifyAndPush(cloneDir, mirror, devRepo, branch, baseRef, unitID, unitDesc, gpuUsable string, base fileDigest) UnitVerifyOutcome {
+func devVerifyAndPush(cloneDir, mirror, devRepo, branch, baseRef, unitID, unitDesc, gpuUsable string, base fileDigest, req UnitRequirements) UnitVerifyOutcome {
 	out := UnitVerifyOutcome{}
 
 	changed, removed, err := treeDelta(mirror, base)
@@ -479,12 +517,13 @@ func devVerifyAndPush(cloneDir, mirror, devRepo, branch, baseRef, unitID, unitDe
 
 	log.Printf("dev_verify: unit %s: %d file(s) changed, %d removed; verifying %s on the real machine",
 		unitID, len(changed), len(removed), ws)
-	out.Result = runUnitVerify(ws, unitID, gpuUsable, 60*time.Minute, 60*time.Minute)
+	out.Result = runUnitVerifyWith(ws, unitID, gpuUsable, req, changed, 60*time.Minute, 60*time.Minute)
 	out.Status = out.Result.Status()
-	log.Printf("dev_verify: unit %s: compile=%s (exit %d) smoke=%s (exit %d) in %s",
-		unitID, out.Result.Compile, out.Result.BuildExit, out.Result.Smoke, out.Result.TestExit, out.Result.Elapsed.Round(time.Second))
+	log.Printf("dev_verify: unit %s: compile=%s (exit %d) smoke=%s (exit %d) in %s; gate=%q; devices opened %v",
+		unitID, out.Result.Compile, out.Result.BuildExit, out.Result.Smoke, out.Result.TestExit, out.Result.Elapsed.Round(time.Second),
+		out.Result.Gate, out.Result.Test.Devices)
 
-	msg := fmt.Sprintf("unit %s: %s [compile=%s smoke=%s, verified by the kernel]", unitID, truncStr(unitDesc, 120), out.Result.Compile, out.Result.Smoke)
+	msg := fmt.Sprintf("unit %s: %s [compile=%s smoke=%s gate=%s, verified by the kernel]", unitID, truncStr(unitDesc, 120), out.Result.Compile, out.Result.Smoke, gateOrNone(out.Result.Gate))
 	wip := devWipBranch(branch, unitID)
 	if out.Result.Passed() {
 		// onto the base ref first (it may be the wip branch of a fix attempt), then the dev branch
@@ -511,4 +550,11 @@ func devVerifyAndPush(cloneDir, mirror, devRepo, branch, baseRef, unitID, unitDe
 	}
 	out.Pushed = wip
 	return out
+}
+
+func gateOrNone(g string) string {
+	if g == "" {
+		return "ok"
+	}
+	return g
 }

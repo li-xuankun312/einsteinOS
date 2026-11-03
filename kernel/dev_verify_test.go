@@ -223,7 +223,7 @@ func TestVerifyAndPush_PassGoesToDevBranch_FailGoesToWip_FixPromotes(t *testing.
 	write(t, mirror, test, "x")
 	withRunner(t, func(cmd string) (int, string) { return 1, "impl.cu(3): error: identifier undefined" })
 
-	o := devVerifyAndPush(clone, mirror, "o/r", branch, branch, unit, "ActivationQuantLayout", "0", base)
+	o := devVerifyAndPush(clone, mirror, "o/r", branch, branch, unit, "ActivationQuantLayout", "0", base, UnitRequirements{})
 	if o.Err != nil {
 		t.Fatal(o.Err)
 	}
@@ -247,7 +247,7 @@ func TestVerifyAndPush_PassGoesToDevBranch_FailGoesToWip_FixPromotes(t *testing.
 	}
 	write(t, mirror, "src/impl.cu", "fixed")
 	withRunner(t, func(cmd string) (int, string) { return 0, "ok" })
-	o = devVerifyAndPush(clone, mirror, "o/r", branch, wip, unit, "ActivationQuantLayout", "0", base2)
+	o = devVerifyAndPush(clone, mirror, "o/r", branch, wip, unit, "ActivationQuantLayout", "0", base2, UnitRequirements{})
 	if o.Err != nil {
 		t.Fatal(o.Err)
 	}
@@ -278,7 +278,7 @@ func TestVerifyAndPush_FirstTryPassIsOnePushToDevAndNoWip(t *testing.T) {
 	write(t, mirror, build, "x")
 	write(t, mirror, test, "x")
 	withRunner(t, func(string) (int, string) { return 0, "ok" })
-	o := devVerifyAndPush(clone, mirror, "o/r", branch, branch, unit, "m", "", base)
+	o := devVerifyAndPush(clone, mirror, "o/r", branch, branch, unit, "m", "", base, UnitRequirements{})
 	if o.Err != nil || !o.Result.Passed() || o.Pushed != branch {
 		t.Fatalf("%+v", o)
 	}
@@ -297,7 +297,7 @@ func TestVerifyAndPush_NothingWrittenIsNotAPass(t *testing.T) {
 	git(t, clone, "checkout", "-q", "-B", branch, "origin/"+branch)
 	base, _ := primeMirror(clone, mirror)
 	withRunner(t, func(string) (int, string) { t.Fatal("must not run anything"); return 0, "" })
-	o := devVerifyAndPush(clone, mirror, "o/r", branch, branch, "u0", "m", "", base)
+	o := devVerifyAndPush(clone, mirror, "o/r", branch, branch, "u0", "m", "", base, UnitRequirements{})
 	if o.Err != nil || o.Result.Passed() || o.Pushed != "" {
 		t.Fatalf("%+v", o)
 	}
