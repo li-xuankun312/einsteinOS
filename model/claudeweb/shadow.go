@@ -125,6 +125,9 @@ func (s *ShadowExecutor) Execute(toolName string, inputJSON string) string {
 	// and a command with several curls no longer falls into the slow curl path.
 	if isAxleCommand(command) {
 		if set, ok := extractAxleRequests(command); ok {
+			if fillAxleCredentials(&set) {
+				log.Printf("[shadow] axle: the request carried no cookie/CSRF — sent with the kernel's own")
+			}
 			log.Printf("[shadow] axle: using Go HTTP path (%d request(s), payload=%d bytes, session=%d, csrf=%d)",
 				len(set.Payloads), len(set.Payloads[0]), len(set.Session), len(set.CSRF))
 			return runAxleRequests(set)

@@ -210,6 +210,27 @@ func extractAxleRequests(command string) (set axleRequestSet, ok bool) {
 // explicit error block instead of being silently dropped, so the child can see
 // WHICH theorem needs a retry. Every usable response is folded into the kernel
 // proof ledger.
+// axleKernelCreds: the kernel's own Axle credentials (a variable for tests).
+var axleKernelCreds = kernel.AxleCredentials
+
+// fillAxleCredentials gives a request without a cookie or CSRF token the kernel's own.
+// 11/04 02:36:39 and 02:59:36 a child's probe went out with session=0 csrf=0 and came back as
+// a 702-byte authentication error the child then had to interpret. Returns whether it filled.
+func fillAxleCredentials(set *axleRequestSet) bool {
+	if set.Session != "" && set.CSRF != "" {
+		return false
+	}
+	sess, csrf := axleKernelCreds()
+	filled := false
+	if set.Session == "" && sess != "" {
+		set.Session, filled = sess, true
+	}
+	if set.CSRF == "" && csrf != "" {
+		set.CSRF, filled = csrf, true
+	}
+	return filled
+}
+
 func runAxleRequests(set axleRequestSet) string {
 	var out []string
 	for i, p := range set.Payloads {
