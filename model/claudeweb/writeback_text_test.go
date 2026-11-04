@@ -46,3 +46,25 @@ func TestTheDoneRoundLeavesTheVerifyScriptsToTheKernel(t *testing.T) {
 		t.Fatal("only verify scripts in the done round: it ends")
 	}
 }
+
+// 11/04 review_1 and review_2 gave PASS in round 1 after four reads; round 2 restated it
+func TestAReviewThatOnlyReadAndGaveItsVerdictEndsInThatRound(t *testing.T) {
+	reads := []string{
+		`{"command":"cd /home/claude && git clone https://github.com/o/r.git 2>&1 | tail -5; cd r && git checkout -q b"}`,
+		`{"command":"cd /home/claude/r && head -40 .einsteinOS/convs/u1.md; grep -rl X --include=*.lean . | head"}`,
+		`{"command":"cd /home/claude/r && sed -n 25,75p tests/unit5/test_ple_io.cpp"}`,
+	}
+	text := "analysis…\nPASS\nEINSTEINOS_DONE"
+	if !reviewDoneInToolRound("review_conv", reads, text) {
+		t.Fatal("reads only, verdict and marker: end")
+	}
+	if reviewDoneInToolRound("review_conv", append(reads, `{"command":"bash .einsteinOS/verify/u1/test.sh"}`), text) {
+		t.Fatal("it ran something: it needs the real result")
+	}
+	if reviewDoneInToolRound("review_conv", reads, "analysis…\nEINSTEINOS_DONE") {
+		t.Fatal("no verdict yet")
+	}
+	if reviewDoneInToolRound("dev_unit_1", reads, text) {
+		t.Fatal("reviews only")
+	}
+}

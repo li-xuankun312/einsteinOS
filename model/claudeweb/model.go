@@ -142,6 +142,29 @@ func doneInToolRound(role string, results []ToolResult, skippedVerify int) bool 
 	return true
 }
 
+var (
+	reviewVerdictRe = regexp.MustCompile(`(?m)^\s*\**(PASS|FAIL:.*)\**\s*$`)
+	// a command that changes anything or runs a program other than a reader
+	notReadOnlyRe = regexp.MustCompile(`\b(bash|sh|make|cmake|ninja|g\+\+|gcc|clang\+?\+?|nvcc|python3?|pip3?|rm|chmod|curl|wget)\s`)
+)
+
+// reviewDoneInToolRound: a review conversation whose round only read files and whose text
+// already holds its verdict and the done marker.
+func reviewDoneInToolRound(role string, inputs []string, text string) bool {
+	if role != "review_conv" || !kernel.HasDoneMarker(text) || !reviewVerdictRe.MatchString(text) || len(inputs) == 0 {
+		return false
+	}
+	for _, in := range inputs {
+		var c struct {
+			Command string `json:"command"`
+		}
+		if json.Unmarshal([]byte(in), &c) != nil || c.Command == "" || gitWriteRe.MatchString(c.Command) || notReadOnlyRe.MatchString(c.Command+" ") {
+			return false
+		}
+	}
+	return true
+}
+
 var ownVerifyRe = regexp.MustCompile(`\.einsteinOS/verify/[A-Za-z0-9_-]+/(build|test)\.sh|\$[A-Za-z_]+/(build|test)\.sh`)
 
 // runsOwnVerifyScript: a bash command that runs a unit's verify script.
@@ -770,7 +793,19 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 		// five times: twice in the sandbox, twice replayed here, once verified)
 		doneRound := strings.HasPrefix(childRole, "dev_") && stopReason == "end_turn" && kernel.HasDoneMarker(textBuf.String())
 		skippedVerify := 0
+		// a review that gave its verdict in a round of reads only: the reads were of the same
+		// branch in its sandbox, so this machine's copy of them would only be sent back to be
+		// restated (11/04 review_2: a 40,866-byte writeback, "my verdict stands")
+		var cmds []string
 		for _, tb := range collectedTools {
+			cmds = append(cmds, tb.inputJSON.String())
+		}
+		reviewDone := stopReason == "end_turn" && reviewDoneInToolRound(childRole, cmds, textBuf.String())
+		for _, tb := range collectedTools {
+			if reviewDone {
+				st.ledger.record(tb.id, "")
+				continue
+			}
 			if doneRound && runsOwnVerifyScript(tb.inputJSON.String()) {
 				st.ledger.record(tb.id, "")
 				skippedVerify++
@@ -855,7 +890,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 			// is nothing the extra round would learn. 11/04: 12 of the 16 dev/review
 			// conversations ended "one round of work, one round that says done".
 			if len(collectedTools) > 0 && stopReason == "end_turn" && kernel.HasDoneMarker(textBuf.String()) &&
-				doneInToolRound(childRole, toolResults, skippedVerify) && settledNow(convID) {
+				(doneInToolRound(childRole, toolResults, skippedVerify) || reviewDone) && settledNow(convID) {
 				log.Printf("claudeweb: done marker in tool round %d and every local result exited 0 — ending without an extra round", st.rounds)
 				kernel.StoreSignal(kernel.GetLastForkedPid(), &kernel.StopSignal{Reason: "done_marker"})
 				if t := terminalText(textBuf.String()); t != "" {
