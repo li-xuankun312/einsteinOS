@@ -43,7 +43,7 @@ func adoptLegacyDevBranch(devRepo, repo, refSHA, stable string) string {
 	if err != nil {
 		return ""
 	}
-	heads, err := gitOut(dir, 60*time.Second, "ls-remote", "--heads", "origin", "refs/heads/einsteinOS/dev-*", "refs/heads/"+stable)
+	heads, err := gitLsRemoteHeads(dir, devRepo, "refs/heads/einsteinOS/dev-*", "refs/heads/"+stable)
 	if err != nil {
 		log.Printf("dev_adopt: %s could not list the remote branches: %v", repo, err)
 		return ""

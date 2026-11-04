@@ -118,6 +118,51 @@ func gitFetchRefs(repoDir, ownerRepo string, branches ...string) (missing []stri
 	return missing, fmt.Errorf("git_fetch %s %v: no attempt finished", ownerRepo, want)
 }
 
+// gitLsRemoteHeads lists the remote's branches matching patterns ("<sha>\t<ref>" lines),
+// judged like a fetch: a process with no sign of life within the start window is replaced,
+// the transport follows the measured route and falls back after SSH failures. ls-remote
+// prints nothing until it is done, so GIT_TRACE_PACKET makes the connection itself the sign
+// of life; trace lines never parse as "<sha> <ref>". 11/04 08:09:17 a single fixed-60 s
+// ls-remote was killed and dev_adopt skipped the adoption check without retrying.
+func gitLsRemoteHeads(repoDir, ownerRepo string, patterns ...string) (string, error) {
+	useSSH := gitRouteStartSSH(gitSSHFn())
+	sshFails := 0
+	attempts := gitNetAttempts()
+	var quoted []string
+	for _, p := range patterns {
+		quoted = append(quoted, shq(p))
+	}
+	// a clone whose origin is not this GitHub repo (a local mirror, a test) is listed as is
+	local := originOwnerRepo(repoDir) != ownerRepo
+	for attempt := 1; attempt <= attempts; attempt++ {
+		url, env := gitRemoteFn(ownerRepo, useSSH)
+		if local {
+			url, env = "origin", ""
+		}
+		transport := map[bool]string{true: "SSH", false: "HTTPS"}[useSSH]
+		cmd := fmt.Sprintf("%sGIT_TRACE_PACKET=1 git -C %q ls-remote --heads %q %s", env, repoDir, url, strings.Join(quoted, " "))
+		r := gitGuardFn(cmd, repoDir, gitStartWindow, gitMaxRun, 0, nil)
+		if r.Started && !r.TimedOut && r.Code == 0 {
+			gitRouteNote(useSSH, true)
+			var heads []string
+			for _, line := range strings.Split(r.Out, "\n") {
+				if f := strings.Fields(line); len(f) == 2 && strings.HasPrefix(f[1], "refs/heads/") && len(f[0]) == 40 {
+					heads = append(heads, line)
+				}
+			}
+			return strings.Join(heads, "\n"), nil
+		}
+		log.Printf("git_ls_remote: %s attempt %d/%d (%s) failed (started=%v timed_out=%v exit=%d)", ownerRepo, attempt, attempts, transport, r.Started, r.TimedOut, r.Code)
+		gitRouteNote(useSSH, false)
+		if useSSH {
+			if sshFails++; sshFails >= gitSSHFetchFailuresBeforeHTTPS {
+				useSSH = false
+			}
+		}
+	}
+	return "", fmt.Errorf("ls-remote %s: no attempt finished", ownerRepo)
+}
+
 var githubRepoRe = regexp.MustCompile(`github\.com[:/]([^/\s]+/[^/\s]+?)(?:\.git)?/?$`)
 
 // originOwnerRepo reads owner/repo from the clone's origin URL ("" if not GitHub).
