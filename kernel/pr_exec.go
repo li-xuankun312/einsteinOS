@@ -1206,6 +1206,12 @@ func dev_review_unit(pid int64, repo, branch string, unitNum, totalUnits int, un
 	return v
 }
 
+// reviewPortStepFmt: the reviewer compares each counterpart in the port map with the
+// reference definition it ports (args: port map, repo@sha, reference files).
+const reviewPortStepFmt = "4. read %[1]s: each line pairs a definition of the reference %[2]s with its counterpart here.\n" +
+	"   the kernel measured that every counterpart exists; for each line, read both (reference files: %[3]s)\n" +
+	"   and check the counterpart does what the reference definition does. one that does not = FAIL, naming it.\n"
+
 func dev_review_unit_inner(pid int64, repo, branch string, unitNum, totalUnits int, unit devUnit, status map[string]string) string {
 	devRepos := GetDevRepos()
 	if len(devRepos) == 0 {
@@ -1257,9 +1263,13 @@ func dev_review_unit_inner(pid int64, repo, branch string, unitNum, totalUnits i
 	}
 	prompt.WriteString("2. ls .einsteinOS/convs/ — find " + stem + ".md (this unit's work log)\n")
 	prompt.WriteString("3. read its header: compile/smoke there are the kernel's measurements, not the developer's claims\n")
-	prompt.WriteString("4. check: does source code exist for EACH module listed above?\n")
-	prompt.WriteString("   grep for the module names in the source files.\n")
-	prompt.WriteString("   a module with no corresponding source file = incomplete.\n")
+	if status["port_map"] != "" {
+		prompt.WriteString(fmt.Sprintf(reviewPortStepFmt, status["port_map"], status["reference"], status["reference_sources"]))
+	} else {
+		prompt.WriteString("4. check: does source code exist for EACH module listed above?\n")
+		prompt.WriteString("   grep for the module names in the source files.\n")
+		prompt.WriteString("   a module with no corresponding source file = incomplete.\n")
+	}
 	prompt.WriteString("5. the KERNEL already built this unit and ran its tests on the REAL machine; compile= and smoke= in [DEV UNIT STATUS] are\n")
 	prompt.WriteString("   exit codes. do NOT re-run the build (your sandbox has no real toolchain). READ the unit's tests instead:\n")
 	prompt.WriteString("   do they check the LAYER 1 invariants of this unit's modules, and could they fail? a test that cannot fail is a FAIL.\n")

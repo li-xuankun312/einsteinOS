@@ -447,6 +447,7 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 func (r *devRun) reviewUnit(unit DevPlanNode, idx, total int, convID string, st map[string]string, stdout string) (string, bool, bool) {
 	plan := r.plan
 	plan.TakeReviewPending(unit.ID)
+	st = reviewStatus(st, r.repo, plan.RefSHA, unit.ID, r.requirements(unit))
 	du := devUnitFromNode(unit, r.sections)
 	verdict := dev_review_unit(r.pid, r.repo, r.branch, idx+1, total, du, st)
 	log.Printf("dev_from_theorems: %s unit %d/%d id=%s review → %s", r.repo, idx+1, total, unit.ID, verdict)
@@ -677,4 +678,22 @@ func devUnitCondition() TerminationCondition {
 		&ConsecutiveTextRounds{Threshold: 4},
 		&MaxRounds{Limit: 30},
 	))
+}
+
+// reviewStatus adds what the kernel measured about the unit's port to the status the
+// reviewer reads: the reference files, the port map, and that every definition was found.
+// 11/04 the reviewers of u89be81de0b and u0e60a9f272 judged the code against the theory only,
+// never against the reference files it was meant to port.
+func reviewStatus(st map[string]string, repo, sha, unitID string, req UnitRequirements) map[string]string {
+	out := map[string]string{}
+	for k, v := range st {
+		out[k] = v
+	}
+	if len(req.Symbols) > 0 {
+		out["reference"] = repo + "@" + shortSHA(sha)
+		out["reference_sources"] = strings.Join(req.Sources, " ")
+		out["port_map"] = PortMapPath(unitID)
+		out["port"] = fmt.Sprintf("every one of the %d definitions has a counterpart defined where the map says (measured by the kernel)", len(req.Symbols))
+	}
+	return out
 }
