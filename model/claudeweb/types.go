@@ -4,18 +4,18 @@ import "encoding/json"
 
 // CompletionRequest is the request body sent to the claude.ai web API.
 type CompletionRequest struct {
-	Prompt                 string                  `json:"prompt"`
-	Timezone               string                  `json:"timezone,omitempty"`
-	Locale                 string                  `json:"locale,omitempty"`
-	Model                  string                  `json:"model"`
-	Effort                 string                  `json:"effort,omitempty"`
-	ThinkingMode           string                  `json:"thinking_mode,omitempty"`
-	Tools                  []WebTool               `json:"tools"`
-	TurnMessageUUIDs       *TurnMessageUUIDs       `json:"turn_message_uuids,omitempty"`
-	Attachments            []json.RawMessage        `json:"attachments"`
-	Files                  []json.RawMessage        `json:"files"`
-	SyncSources            []json.RawMessage        `json:"sync_sources"`
-	RenderingMode          string                  `json:"rendering_mode,omitempty"`
+	Prompt                   string                    `json:"prompt"`
+	Timezone                 string                    `json:"timezone,omitempty"`
+	Locale                   string                    `json:"locale,omitempty"`
+	Model                    string                    `json:"model"`
+	Effort                   string                    `json:"effort,omitempty"`
+	ThinkingMode             string                    `json:"thinking_mode,omitempty"`
+	Tools                    []WebTool                 `json:"tools"`
+	TurnMessageUUIDs         *TurnMessageUUIDs         `json:"turn_message_uuids,omitempty"`
+	Attachments              []json.RawMessage         `json:"attachments"`
+	Files                    []json.RawMessage         `json:"files"`
+	SyncSources              []json.RawMessage         `json:"sync_sources"`
+	RenderingMode            string                    `json:"rendering_mode,omitempty"`
 	CreateConversationParams *CreateConversationParams `json:"create_conversation_params,omitempty"`
 	// For tool results
 	ParentMessageUUID string       `json:"parent_message_uuid,omitempty"`
@@ -28,10 +28,10 @@ type TurnMessageUUIDs struct {
 }
 
 type CreateConversationParams struct {
-	Name                          string `json:"name"`
-	Model                         string `json:"model"`
+	Name                           string `json:"name"`
+	Model                          string `json:"model"`
 	IncludeConversationPreferences bool   `json:"include_conversation_preferences"`
-	IsTemporary                   bool   `json:"is_temporary"`
+	IsTemporary                    bool   `json:"is_temporary"`
 }
 
 // WebTool is a tool definition in the claude.ai web API format.
@@ -66,16 +66,16 @@ type MessageStartEvent struct {
 }
 
 type StartMessage struct {
-	ID            string            `json:"id"`
-	Type          string            `json:"type"`
-	Role          string            `json:"role"`
-	Model         string            `json:"model"`
-	UUID          string            `json:"uuid"`
-	ParentUUID    string            `json:"parent_uuid"`
-	Content       []json.RawMessage `json:"content"`
-	StopReason    *string           `json:"stop_reason"`
-	StopSequence  *string           `json:"stop_sequence"`
-	RequestID     string            `json:"request_id"`
+	ID           string            `json:"id"`
+	Type         string            `json:"type"`
+	Role         string            `json:"role"`
+	Model        string            `json:"model"`
+	UUID         string            `json:"uuid"`
+	ParentUUID   string            `json:"parent_uuid"`
+	Content      []json.RawMessage `json:"content"`
+	StopReason   *string           `json:"stop_reason"`
+	StopSequence *string           `json:"stop_sequence"`
+	RequestID    string            `json:"request_id"`
 }
 
 // content_block_start
@@ -91,6 +91,9 @@ type ContentBlock struct {
 	ID    string          `json:"id,omitempty"`
 	Name  string          `json:"name,omitempty"`
 	Input json.RawMessage `json:"input,omitempty"`
+	// tool_result blocks: the sandbox's own result, when the stream carries it
+	ToolUseID string          `json:"tool_use_id,omitempty"`
+	Content   json.RawMessage `json:"content,omitempty"`
 }
 
 // content_block_delta

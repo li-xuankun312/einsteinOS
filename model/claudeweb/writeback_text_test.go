@@ -68,3 +68,21 @@ func TestAReviewThatOnlyReadAndGaveItsVerdictEndsInThatRound(t *testing.T) {
 		t.Fatal("reviews only")
 	}
 }
+
+func TestAReadWhoseOutputIsTheSandboxsIsSummarisedNotResent(t *testing.T) {
+	sb, ok := sandboxStdout([]byte(`[{"type":"text","text":"{\"returncode\":0,\"stdout\":\"abc\\n\",\"stderr\":\"\"}"}]`))
+	if !ok || sb != "abc\n" {
+		t.Fatalf("%q %v", sb, ok)
+	}
+	in := `{"command":"cd /home/claude/r && cat tests/unit5/test_ple_hash.cpp"}`
+	got, ok := sameAsSandbox(in, "[pid 85 exit=0] abc\n", sb)
+	if !ok || !strings.Contains(got, "same output as your sandbox (4 bytes") {
+		t.Fatalf("%q", got)
+	}
+	if _, ok := sameAsSandbox(in, "[pid 85 exit=0] abd\n", sb); ok {
+		t.Fatal("different output: sent in full")
+	}
+	if _, ok := sameAsSandbox(`{"command":"bash build.sh"}`, "[pid 85 exit=0] abc\n", sb); ok {
+		t.Fatal("not a read: sent in full")
+	}
+}

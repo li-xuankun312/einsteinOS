@@ -1,14 +1,16 @@
 package claudeweb
 
 import (
-	"regexp"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"iter"
 	"log"
 	"os"
 	"path"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -163,6 +165,55 @@ func reviewDoneInToolRound(role string, inputs []string, text string) bool {
 		}
 	}
 	return true
+}
+
+const sameAsSandboxFmt = "[pid %[1]s exit=0] same output as your sandbox (%[2]d bytes, sha256 %[3]s)"
+
+var localPidRe = regexp.MustCompile(`^\[pid (\d+) exit=0\] `)
+
+// sandboxStdout reads the stdout of a streamed sandbox tool_result ({"returncode":0,"stdout":…}).
+func sandboxStdout(content json.RawMessage) (string, bool) {
+	var parts []struct {
+		Text string `json:"text"`
+	}
+	text := ""
+	if json.Unmarshal(content, &parts) == nil {
+		for _, p := range parts {
+			text += p.Text
+		}
+	} else if json.Unmarshal(content, &text) != nil {
+		return "", false
+	}
+	var r struct {
+		Returncode int    `json:"returncode"`
+		Stdout     string `json:"stdout"`
+	}
+	if json.Unmarshal([]byte(text), &r) != nil || r.Returncode != 0 {
+		return "", false
+	}
+	return r.Stdout, true
+}
+
+// sameAsSandbox: for a read-only command whose output here is byte-for-byte the sandbox's,
+// the line that says so. 11/04 review_2's writeback (40,866 bytes) repeated reads its
+// sandbox had already shown it.
+func sameAsSandbox(inputJSON, local, sandbox string) (string, bool) {
+	var c struct {
+		Command string `json:"command"`
+	}
+	if json.Unmarshal([]byte(inputJSON), &c) != nil || c.Command == "" || gitWriteRe.MatchString(c.Command) || notReadOnlyRe.MatchString(c.Command+" ") {
+		return "", false
+	}
+	m := localPidRe.FindStringSubmatch(local)
+	if m == nil || sandbox == "" {
+		return "", false
+	}
+	out := strings.TrimPrefix(local, m[0])
+	if out != sandbox {
+		return "", false
+	}
+	sum := sha256.Sum256([]byte(out))
+	return fmt.Sprintf(sameAsSandboxFmt, m[1], len(out), hex.EncodeToString(sum[:8])), true
 }
 
 var ownVerifyRe = regexp.MustCompile(`\.einsteinOS/verify/[A-Za-z0-9_-]+/(build|test)\.sh|\$[A-Za-z_]+/(build|test)\.sh`)
@@ -540,6 +591,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 		var parentMsgUUID string
 		_ = parentMsgUUID
 		var stopReason string
+		sandboxOut := map[string]string{} // tool_use id -> the sandbox's stdout, when streamed
 		lastLogTime := time.Now()
 
 		for event := range events {
@@ -573,6 +625,11 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 				var ev ContentBlockStartEvent
 				if err := json.Unmarshal(event.Data, &ev); err != nil {
 					continue
+				}
+				if ev.ContentBlock.Type == "tool_result" && ev.ContentBlock.ToolUseID != "" {
+					if out, ok := sandboxStdout(ev.ContentBlock.Content); ok {
+						sandboxOut[ev.ContentBlock.ToolUseID] = out
+					}
 				}
 				if ev.ContentBlock.Type == "tool_use" {
 					toolBlocks[ev.Index] = &toolBlock{
@@ -821,6 +878,9 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 			// which is how axle feedback got lost and children entered retry loops.
 			if result == "" {
 				continue // let remote result stand
+			}
+			if same, ok := sameAsSandbox(tb.inputJSON.String(), result, sandboxOut[tb.id]); ok {
+				result = same // a read whose output is the sandbox's: say so instead of sending it again
 			}
 			toolResults = append(toolResults, ToolResult{
 				ToolUseID: tb.id,
