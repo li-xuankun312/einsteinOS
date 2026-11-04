@@ -57,6 +57,8 @@ func withRemotes(t *testing.T, sshAvail bool, ssh, https string) {
 }
 
 func TestGitFetchRefsBringsTheNamedBranchesUpToDate(t *testing.T) {
+	gitRouteReset()
+	defer gitRouteReset()
 	remote, clone := fetchFixture(t)
 	withRemotes(t, true, remote, remote)
 	missing, err := gitFetchRefs(clone, "o/r", "einsteinOS/theory", "main", "einsteinOS/theory")
@@ -69,6 +71,8 @@ func TestGitFetchRefsBringsTheNamedBranchesUpToDate(t *testing.T) {
 }
 
 func TestGitFetchRefsReportsAMissingBranchWithoutRetrying(t *testing.T) {
+	gitRouteReset()
+	defer gitRouteReset()
 	remote, clone := fetchFixture(t)
 	withRemotes(t, false, "", remote)
 	missing, err := gitFetchRefs(clone, "o/r", "einsteinOS/dev-new", "einsteinOS/theory")
@@ -81,6 +85,8 @@ func TestGitFetchRefsReportsAMissingBranchWithoutRetrying(t *testing.T) {
 }
 
 func TestGitFetchRefsGoesToHTTPSWhenSSHKeepsFailing(t *testing.T) {
+	gitRouteReset()
+	defer gitRouteReset()
 	remote, clone := fetchFixture(t)
 	withRemotes(t, true, filepath.Join(t.TempDir(), "no-such.git"), remote)
 	if _, err := gitFetchRefs(clone, "o/r", "einsteinOS/theory"); err != nil {
@@ -89,6 +95,8 @@ func TestGitFetchRefsGoesToHTTPSWhenSSHKeepsFailing(t *testing.T) {
 }
 
 func TestOriginOwnerRepo(t *testing.T) {
+	gitRouteReset()
+	defer gitRouteReset()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("no git")
 	}
@@ -111,6 +119,8 @@ func TestOriginOwnerRepo(t *testing.T) {
 // what decides a new attempt is progress: never alive, or alive and then no new
 // --progress line for gitPushStallTimeout — not a fixed wait
 func TestGitFetchRefsRestartsOnNoProgressNotOnATimer(t *testing.T) {
+	gitRouteReset()
+	defer gitRouteReset()
 	withRemotes(t, false, "", "https://example.invalid/o/r.git")
 	old := gitGuardFn
 	t.Cleanup(func() { gitGuardFn = old })

@@ -9,6 +9,8 @@ import (
 )
 
 func TestFetchCommandUsesTheDeployKeyOverSSHAndNeverTouchesOrigin(t *testing.T) {
+	gitRouteReset()
+	defer gitRouteReset()
 	t.Setenv("EINSTEIN_GIT_SSH_KEY", "/root/.ssh/einsteinos_deploy")
 	ssh := gitFetchCmd("/tmp/ref_store_baloon", "zeng-bin3123/baloon", true)
 	for _, want := range []string{"GIT_SSH_COMMAND=", "einsteinos_deploy", "IdentitiesOnly=yes", "git@github.com:zeng-bin3123/baloon.git", "+refs/heads/*:refs/remotes/origin/*"} {
@@ -26,6 +28,8 @@ func TestFetchCommandUsesTheDeployKeyOverSSHAndNeverTouchesOrigin(t *testing.T) 
 
 // GitCloneOrReuse against a scripted runner: what it tries, in what order, and when it gives SSH up
 func TestFetchFallsBackToHTTPSAfterTwoSSHFailuresAndSaysWhichItUsed(t *testing.T) {
+	gitRouteReset()
+	defer gitRouteReset()
 	keyDir := t.TempDir()
 	key := filepath.Join(keyDir, "deploy")
 	os.WriteFile(key, []byte("k"), 0o600)
@@ -56,6 +60,8 @@ func TestFetchFallsBackToHTTPSAfterTwoSSHFailuresAndSaysWhichItUsed(t *testing.T
 }
 
 func TestFetchStaysOnSSHWhenItWorksAndOnHTTPSWithoutAKey(t *testing.T) {
+	gitRouteReset()
+	defer gitRouteReset()
 	dir := filepath.Join(t.TempDir(), "clone")
 	os.MkdirAll(filepath.Join(dir, ".git"), 0o755)
 	var cmds []string

@@ -52,7 +52,7 @@ func gitFetchRefs(repoDir, ownerRepo string, branches ...string) (missing []stri
 			want = append(want, b)
 		}
 	}
-	useSSH := gitSSHFn()
+	useSSH := gitRouteStartSSH(gitSSHFn())
 	sshFails := 0
 	attempts := gitNetAttempts()
 	for attempt := 1; attempt <= attempts && len(want) > 0; attempt++ {
@@ -69,6 +69,7 @@ func gitFetchRefs(repoDir, ownerRepo string, branches ...string) (missing []stri
 		})
 		switch {
 		case r.Code == 0:
+			gitRouteNote(useSSH, true)
 			log.Printf("git_fetch: %s %v (attempt %d, %s, %s)", ownerRepo, want, attempt, transport, time.Since(started).Round(time.Millisecond))
 			recordFetched(ownerRepo, want) // a measured fact: these branches exist (dev_repo_facts.go)
 			return missing, nil
@@ -97,6 +98,7 @@ func gitFetchRefs(repoDir, ownerRepo string, branches ...string) (missing []stri
 			}
 			log.Printf("git_fetch: %s attempt %d/%d (%s) failed (exit %d): %s", ownerRepo, attempt, attempts, transport, r.Code, truncStr(strings.TrimSpace(r.Out), 160))
 		}
+		gitRouteNote(useSSH, false)
 		if useSSH {
 			if sshFails++; sshFails >= gitSSHFetchFailuresBeforeHTTPS {
 				useSSH = false

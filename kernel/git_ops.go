@@ -109,10 +109,11 @@ const gitSSHFetchFailuresBeforeHTTPS = 2
 func GitCloneOrReuse(ownerRepo, dir string) error {
 	attempts := gitNetAttempts()
 	var lastErr error
-	useSSH := gitSSHAvailable()
+	useSSH := gitRouteStartSSH(gitSSHAvailable())
 	sshFails := 0
 	// a failed SSH fetch counts toward going back to HTTPS; an HTTPS one does not
 	sshFailed := func() {
+		gitRouteNote(useSSH, false)
 		if !useSSH {
 			return
 		}
@@ -148,6 +149,7 @@ func GitCloneOrReuse(ownerRepo, dir string) error {
 			if out, rerr := exec.Command("bash", "-c", fmt.Sprintf("cd %q && git reset --hard origin/HEAD 2>&1", dir)).CombinedOutput(); rerr != nil {
 				log.Printf("git_clone_or_reuse: %s reset after fetch: %v: %s", ownerRepo, rerr, truncStr(strings.TrimSpace(string(out)), 120))
 			}
+			gitRouteNote(useSSH, true)
 			log.Printf("git_clone_or_reuse: %s synced (attempt %d, %s)", ownerRepo, attempt, transport)
 			return nil
 		}
@@ -180,6 +182,7 @@ func GitCloneOrReuse(ownerRepo, dir string) error {
 			log.Printf("git_clone_or_reuse: %s attempt %d/%d clone left no .git", ownerRepo, attempt, attempts)
 			continue
 		}
+		gitRouteNote(useSSH, true)
 		log.Printf("git_clone_or_reuse: %s cloned (attempt %d, %s)", ownerRepo, attempt, transport)
 		return nil
 	}
