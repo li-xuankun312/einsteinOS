@@ -356,6 +356,26 @@ func rejectionReason(output string) string {
 	return strings.Join(kept, " | ")
 }
 
+// gitPushServerSide reports whether a push was refused by a server-side error on GitHub's
+// end — retrying the same push can succeed — and which. A refusal of the update itself
+// (non-fast-forward, a protected branch, a hook that declined it) is not: the same push
+// gets the same answer.
+func gitPushServerSide(out string) (bool, string) {
+	o := strings.ToLower(out)
+	if !strings.Contains(o, "[remote rejected]") && !strings.Contains(o, "the remote end hung up") &&
+		!strings.Contains(o, "internal server error") {
+		return false, ""
+	}
+	for _, m := range []string{"(failure)", "internal server error", "(500", " 500 ", "502", "503", "504",
+		"service unavailable", "bad gateway", "gateway time", "timed out", "temporarily",
+		"the remote end hung up unexpectedly", "unpacker error"} {
+		if strings.Contains(o, m) {
+			return true, strings.Trim(m, " (")
+		}
+	}
+	return false, ""
+}
+
 // GitPushRetry pushes a branch with retry on TLS/network failures.
 // Uses the 10 s start guard — if TLS hangs, kill and retry immediately (no 10s sleep).
 // each hung attempt costs 10 s, each real failure gets a 10 s backoff.
@@ -418,6 +438,20 @@ func GitPushRetry(repoDir, ownerRepo, branch string, maxRetry int) error {
 		// a rejected push prints "! [rejected] a -> a (non-fast-forward)": that line
 		// contains "->" too, and used to be read as success. Retrying the same push
 		// cannot change a rejection, so stop with the reason.
+		if transient, why := gitPushServerSide(result); transient {
+			// 11/04 09:35-09:56 (a GitHub Git Operations incident): the pack was uploaded
+			// ("Total 18 (delta 11)") and GitHub answered "! [remote rejected] … (Internal
+			// Server Error)" / "(failure)". That is GitHub's state, not the branch's: the
+			// same push went through minutes later. It was read as final, so plan.json was
+			// not stored twice and a verified unit was counted as a failed push.
+			wait := time.Duration(min(attempt, 4)) * 15 * time.Second
+			log.Printf("git_push: attempt %d/%d: GitHub refused the update with a server-side error (%s) — the same push is retried in %s",
+				attempt, maxRetry, why, wait)
+			if attempt < maxRetry {
+				time.Sleep(wait)
+			}
+			continue
+		}
 		if strings.Contains(result, "[rejected]") || strings.Contains(result, "failed to push some refs") ||
 			strings.Contains(result, "non-fast-forward") {
 			// the actual reason (the "! [rejected] ... (non-fast-forward)" line, any
