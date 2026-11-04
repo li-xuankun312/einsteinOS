@@ -141,7 +141,11 @@ func GitCloneOrReuse(ownerRepo, dir string) error {
 				continue
 			case r.Code != 0:
 				lastErr = fmt.Errorf("fetch exit %d: %s", r.Code, truncStr(r.Out, 200))
-				log.Printf("git_clone_or_reuse: %s attempt %d/%d fetch (%s) failed (exit %d): %s", ownerRepo, attempt, attempts, transport, r.Code, truncStr(strings.TrimSpace(r.Out), 120))
+				if useSSH && gitSSHDenied(r.Out) {
+					log.Printf("git_clone_or_reuse: %s attempt %d/%d fetch (SSH): %s", ownerRepo, attempt, attempts, sshDenialNote())
+				} else {
+					log.Printf("git_clone_or_reuse: %s attempt %d/%d fetch (%s) failed (exit %d): %s", ownerRepo, attempt, attempts, transport, r.Code, truncStr(strings.TrimSpace(r.Out), 120))
+				}
 				sshFailed()
 				continue
 			}
@@ -150,6 +154,9 @@ func GitCloneOrReuse(ownerRepo, dir string) error {
 				log.Printf("git_clone_or_reuse: %s reset after fetch: %v: %s", ownerRepo, rerr, truncStr(strings.TrimSpace(string(out)), 120))
 			}
 			gitRouteNote(useSSH, true)
+			if useSSH {
+				noteSSHKeyAccepted()
+			}
 			log.Printf("git_clone_or_reuse: %s synced (attempt %d, %s)", ownerRepo, attempt, transport)
 			return nil
 		}
@@ -404,7 +411,7 @@ func GitPushRetry(repoDir, ownerRepo, branch string, maxRetry int) error {
 	// gitPushSwitchAfter consecutive failures on one transport it tries the other, when
 	// there is one (a deploy key for SSH, a token for HTTPS).
 	tokenHere := gitTokenFn() != ""
-	streak := 0
+	streak, denials := 0, 0
 	route := func() (url, env string) {
 		if usingSSH {
 			return sshRemoteURL(ownerRepo), fmt.Sprintf("GIT_SSH_COMMAND=%q ", gitSSHCommand())
@@ -494,10 +501,21 @@ func GitPushRetry(repoDir, ownerRepo, branch string, maxRetry int) error {
 		// success indicators
 		if strings.Contains(result, "->") || strings.Contains(result, "Everything up-to-date") || strings.Contains(result, "already exists") {
 			gitRouteNote(usingSSH, true)
+			if usingSSH {
+				noteSSHKeyAccepted()
+			}
+			if denials > 0 {
+				log.Printf("git_push: GitHub refused the deploy key %d time(s) in this push and accepted the same key at attempt %d — the refusals were GitHub-side", denials, attempt)
+			}
 			log.Printf("git_push: %s:%s ok (attempt %d, %s)", ownerRepo, branch, attempt, map[bool]string{true: "SSH", false: "HTTPS"}[usingSSH])
 			return nil
 		}
-		log.Printf("git_push: attempt %d/%d failed: %s", attempt, maxRetry, truncStr(result, 200))
+		if usingSSH && gitSSHDenied(result) {
+			denials++
+			log.Printf("git_push: attempt %d/%d: %s", attempt, maxRetry, sshDenialNote())
+		} else {
+			log.Printf("git_push: attempt %d/%d failed: %s", attempt, maxRetry, truncStr(result, 200))
+		}
 		if gitAuthFailure(result) && !usingSSH && keyHere {
 			// the token is refused; the deploy key is a different credential
 			log.Printf("git_push: the token was refused — back to SSH")

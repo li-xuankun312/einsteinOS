@@ -9,7 +9,9 @@ package kernel
 // What the last calls measured is the best predictor of the next one, so it is kept here.
 
 import (
+	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 )
@@ -81,4 +83,38 @@ func gitRouteReset() {
 	gitRoutes.mu.Lock()
 	defer gitRoutes.mu.Unlock()
 	gitRoutes.sshStreak, gitRoutes.httpsStreak, gitRoutes.httpsUntil = 0, 0, time.Time{}
+}
+
+// ---- "Permission denied (publickey)" for a key that works ---------------------------------
+//
+// 11/04 09:44-10:16 the log held a dozen five-line "Permission denied (publickey)" blocks for
+// the deploy key that pushed at 09:35, 09:52, 10:04 and 10:16: GitHub's key check was failing,
+// not the key. A refusal reads the same either way, so the kernel says which it is from what
+// it measured: whether this key has been accepted in this run.
+
+var (
+	sshKeyMu       sync.Mutex
+	sshKeyAccepted time.Time // last time GitHub accepted the deploy key in this run
+)
+
+// gitSSHDenied: the output is GitHub refusing the SSH key.
+func gitSSHDenied(out string) bool {
+	return strings.Contains(strings.ToLower(out), "permission denied (publickey)")
+}
+
+func noteSSHKeyAccepted() {
+	sshKeyMu.Lock()
+	sshKeyAccepted = gitRouteNow()
+	sshKeyMu.Unlock()
+}
+
+// sshDenialNote is the one line logged for a refusal instead of git's five.
+func sshDenialNote() string {
+	sshKeyMu.Lock()
+	at := sshKeyAccepted
+	sshKeyMu.Unlock()
+	if at.IsZero() {
+		return "GitHub refused the deploy key (not accepted yet in this run: if this persists, check the key is added to the repo with write access)"
+	}
+	return fmt.Sprintf("GitHub refused the deploy key it accepted at %s — a GitHub-side failure, not the key", at.Format("15:04:05"))
 }

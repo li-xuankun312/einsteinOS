@@ -70,6 +70,9 @@ func gitFetchRefs(repoDir, ownerRepo string, branches ...string) (missing []stri
 		switch {
 		case r.Code == 0:
 			gitRouteNote(useSSH, true)
+			if useSSH {
+				noteSSHKeyAccepted()
+			}
 			log.Printf("git_fetch: %s %v (attempt %d, %s, %s)", ownerRepo, want, attempt, transport, time.Since(started).Round(time.Millisecond))
 			recordFetched(ownerRepo, want) // a measured fact: these branches exist (dev_repo_facts.go)
 			return missing, nil
@@ -96,7 +99,11 @@ func gitFetchRefs(repoDir, ownerRepo string, branches ...string) (missing []stri
 				attempt-- // not a network failure
 				continue
 			}
-			log.Printf("git_fetch: %s attempt %d/%d (%s) failed (exit %d): %s", ownerRepo, attempt, attempts, transport, r.Code, truncStr(strings.TrimSpace(r.Out), 160))
+			if useSSH && gitSSHDenied(r.Out) {
+				log.Printf("git_fetch: %s attempt %d/%d (SSH): %s", ownerRepo, attempt, attempts, sshDenialNote())
+			} else {
+				log.Printf("git_fetch: %s attempt %d/%d (%s) failed (exit %d): %s", ownerRepo, attempt, attempts, transport, r.Code, truncStr(strings.TrimSpace(r.Out), 160))
+			}
 		}
 		gitRouteNote(useSSH, false)
 		if useSSH {

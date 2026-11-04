@@ -66,3 +66,20 @@ func TestWithoutATokenThePushStaysOnSSH(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// a refusal of a key GitHub accepted earlier in this run is said to be GitHub-side
+func TestARefusalOfAnAcceptedKeyIsReportedAsGitHubSide(t *testing.T) {
+	sshKeyMu.Lock()
+	sshKeyAccepted = time.Time{}
+	sshKeyMu.Unlock()
+	if !gitSSHDenied("git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.") {
+		t.Fatal("must recognise the refusal")
+	}
+	if n := sshDenialNote(); !strings.Contains(n, "not accepted yet") {
+		t.Fatalf("never accepted: say so: %s", n)
+	}
+	noteSSHKeyAccepted()
+	if n := sshDenialNote(); !strings.Contains(n, "GitHub-side") {
+		t.Fatalf("accepted before: GitHub-side: %s", n)
+	}
+}
