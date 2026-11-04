@@ -393,6 +393,9 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 		kind := "compile_fail"
 		text := st["compile_error"]
 		switch {
+		case out.Status["existing_code"] == "true":
+			// it wrote nothing and the existing code failed: that failure is the evidence
+			kind, text = "existing_code_fails", "the conversation wrote no file, and the code already on the branch for this unit fails on the real machine:\n"+st["compile_error"]+st["smoke_error"]+out.Result.GateText
 		case len(out.Changed) == 0 && len(out.Removed) == 0:
 			kind = "nothing_written"
 			// the only evidence of WHY is what the conversation said: 2026/11/02 unit 2 spent

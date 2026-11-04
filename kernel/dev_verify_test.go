@@ -358,3 +358,45 @@ func TestAFailedPushAfterAVerificationRetriesOnlyThePush(t *testing.T) {
 		t.Fatal("the retried push did not land")
 	}
 }
+
+// 11/04 09:28 unit u6d34237bff found its unit implemented by an earlier run and changed
+// nothing; it was failed as nothing_written without the kernel looking. The kernel now
+// verifies that existing code itself.
+func TestAUnitThatWritesNothingHasItsExistingCodeVerified(t *testing.T) {
+	_, clone := setupRemote(t)
+	mirror := t.TempDir()
+	const branch = "einsteinOS/dev-7"
+	unit := "u77"
+	build, test := devVerifyScripts(unit)
+	git(t, clone, "checkout", "-q", "-B", branch, "origin/"+branch)
+	base, _ := primeMirror(clone, mirror)
+	write(t, mirror, "src/impl.cu", "good")
+	write(t, mirror, build, "x")
+	write(t, mirror, test, "x")
+	withRunner(t, func(string) (int, string) { return 0, "ok" })
+	if o := devVerifyAndPush(clone, mirror, "o/r", branch, branch, unit, "m", "", base, UnitRequirements{}); o.Err != nil || !o.Result.Passed() {
+		t.Fatalf("earlier run: %+v", o)
+	}
+
+	// this run: the conversation writes nothing
+	git(t, clone, "fetch", "-q", "origin")
+	git(t, clone, "checkout", "-q", "-B", branch, "origin/"+branch)
+	mirror2 := t.TempDir()
+	base2, _ := primeMirror(clone, mirror2)
+	runs := 0
+	withRunner(t, func(string) (int, string) { runs++; return 0, "ok" })
+	o := devVerifyAndPush(clone, mirror2, "o/r", branch, branch, unit, "m", "", base2, UnitRequirements{})
+	if o.Err != nil || !o.Result.Passed() || o.Status["existing_code"] != "true" || o.Pushed != branch {
+		t.Fatalf("existing code verified and passed: %+v", o)
+	}
+	if runs == 0 {
+		t.Fatal("the kernel must run the unit's scripts on the existing code")
+	}
+
+	// and when the existing code fails, the failure is the result, not "nothing_written"
+	withRunner(t, func(string) (int, string) { return 1, "error: undefined" })
+	o = devVerifyAndPush(clone, mirror2, "o/r", branch, branch, unit, "m", "", base2, UnitRequirements{})
+	if o.Result.Passed() || o.Status["existing_code"] != "true" || o.Pushed != "" {
+		t.Fatalf("existing code fails: %+v", o)
+	}
+}

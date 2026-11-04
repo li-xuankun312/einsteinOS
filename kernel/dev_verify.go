@@ -38,6 +38,7 @@ import (
 	"io/fs"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -514,6 +515,9 @@ func devVerifyAndPush(cloneDir, mirror, devRepo, branch, baseRef, unitID, unitDe
 	}
 	out.Changed, out.Removed = changed, removed
 	if len(changed) == 0 && len(removed) == 0 {
+		if prior := devUnitPriorFiles(cloneDir, baseRef, unitID); len(prior) > 0 {
+			return devVerifyExisting(cloneDir, mirror, branch, baseRef, unitID, gpuUsable, req, prior)
+		}
 		out.Result = VerifyResult{Compile: "missing", Smoke: "missing", BuildExit: -1, TestExit: -1}
 		out.Status = out.Result.Status()
 		out.Status["compile_error"] = "the conversation wrote no file (the mirror is identical to the branch tip)"
@@ -543,6 +547,63 @@ func devVerifyAndPush(cloneDir, mirror, devRepo, branch, baseRef, unitID, unitDe
 	out.msg = fmt.Sprintf("unit %s: %s [compile=%s smoke=%s gate=%s, verified by the kernel]", unitID, truncStr(unitDesc, 120), out.Result.Compile, out.Result.Smoke, gateOrNone(out.Result.Gate))
 	out.Verified = true
 	out.Pushed, out.Err = devPushVerdict(cloneDir, mirror, devRepo, branch, baseRef, unitID, out.Changed, out.Removed, out.msg, out.Result.Passed())
+	return out
+}
+
+// devUnitPriorFiles: the files the kernel's earlier verified commits for this unit
+// ("unit <id>: …") put on baseRef, when they are still there.
+func devUnitPriorFiles(cloneDir, baseRef, unitID string) []string {
+	out, err := exec.Command("git", "-C", cloneDir, "log", "--format=", "--name-only",
+		"--grep=^unit "+unitID+":", "origin/"+baseRef).Output()
+	if err != nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var files []string
+	for _, f := range strings.Split(string(out), "\n") {
+		f = strings.TrimSpace(f)
+		if f == "" || seen[f] {
+			continue
+		}
+		seen[f] = true
+		if exec.Command("git", "-C", cloneDir, "cat-file", "-e", "origin/"+baseRef+":"+f).Run() == nil {
+			files = append(files, f)
+		}
+	}
+	sort.Strings(files)
+	return files
+}
+
+// devVerifyExisting verifies the code already on the branch for a unit whose conversation
+// wrote nothing, with the same scripts, gates and /proc measurement as new code. 11/04
+// 09:28 unit u6d34237bff's conversation found the unit already implemented by an earlier
+// run, changed nothing, said so — and was failed as nothing_written without the kernel
+// looking. Passing here sends the unit to review; nothing is pushed (nothing changed).
+func devVerifyExisting(cloneDir, mirror, branch, baseRef, unitID, gpuUsable string, req UnitRequirements, prior []string) UnitVerifyOutcome {
+	out := UnitVerifyOutcome{Verified: true}
+	if err := gitUseBranchFromRemote(cloneDir, baseRef, branch); err != nil {
+		out.Verified = false
+		out.Err = fmt.Errorf("checkout base %s: %w", baseRef, err)
+		return out
+	}
+	ws, err := assembleWorkspace(cloneDir, mirror, nil, nil)
+	if err != nil {
+		out.Verified = false
+		out.Err = fmt.Errorf("assemble workspace: %w", err)
+		return out
+	}
+	defer os.RemoveAll(ws)
+	log.Printf("dev_verify: unit %s wrote nothing; verifying the branch's existing code for it (%d file(s) from its earlier verified commits) on the real machine",
+		unitID, len(prior))
+	out.Result = runUnitVerifyWith(ws, unitID, gpuUsable, req, prior, 60*time.Minute, 60*time.Minute)
+	out.Status = out.Result.Status()
+	out.Status["existing_code"] = "true"
+	log.Printf("dev_verify: unit %s (existing code): compile=%s (exit %d) smoke=%s (exit %d) in %s; gate=%q; devices opened %v",
+		unitID, out.Result.Compile, out.Result.BuildExit, out.Result.Smoke, out.Result.TestExit, out.Result.Elapsed.Round(time.Second),
+		out.Result.Gate, out.Result.Test.Devices)
+	if out.Result.Passed() {
+		out.Pushed = baseRef
+	}
 	return out
 }
 
