@@ -108,6 +108,11 @@ type devRun struct {
 }
 
 // requirements measures what the reference says the unit is made of, once per unit.
+// shown is what a conversation is given of the unit's requirements: the reference masked.
+func (r *devRun) shown(unit DevPlanNode) UnitRequirements {
+	return maskRequirements(r.requirements(unit), newRefMask(refMaskIdent, r.repo))
+}
+
 func (r *devRun) requirements(unit DevPlanNode) UnitRequirements {
 	if req, ok := r.reqs[unit.ID]; ok {
 		return req
@@ -158,12 +163,11 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 		hwInfo = pr.HWInfo
 		writeGHToken(pr.Title)
 		// the dev conv must NOT know the source repo: only the dev repo and the abstract theory
+		var refs []string
 		for _, ref := range pr.RefRepos {
-			refFull := ref.Owner + "/" + ref.Name
-			task = strings.ReplaceAll(task, refFull, "(reference project)")
-			task = strings.ReplaceAll(task, "github.com/"+refFull, "(reference)")
-			task = strings.ReplaceAll(task, ref.Name, "(ref)")
+			refs = append(refs, ref.Owner+"/"+ref.Name)
 		}
+		task = newRefMask(refMaskText, refs...).Replace(task)
 	}
 
 	devRepos := GetDevRepos()
@@ -402,7 +406,7 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 		if out.Verified {
 			out = devRetryPush(cloneDir, mirror, r.devRepo, r.branch, baseRef, unit.ID, out)
 		} else {
-			out = devVerifyAndPush(cloneDir, mirror, r.devRepo, r.branch, baseRef, unit.ID, nodeDesc(unit), r.gpuUsable(), base, r.requirements(unit))
+			out = devVerifyAndPush(cloneDir, mirror, r.devRepo, r.branch, baseRef, unit.ID, nodeDesc(unit), r.gpuUsable(), base, r.shown(unit))
 		}
 		if out.Err == nil {
 			break
@@ -483,7 +487,7 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 func (r *devRun) reviewUnit(unit DevPlanNode, idx, total int, convID string, st map[string]string, stdout string) (string, bool, bool) {
 	plan := r.plan
 	plan.TakeReviewPending(unit.ID)
-	st = reviewStatus(st, r.repo, plan.RefSHA, unit.ID, r.requirements(unit))
+	st = reviewStatus(st, unit.ID, r.shown(unit))
 	du := devUnitFromNode(unit, r.sections)
 	verdict := dev_review_unit(r.pid, r.repo, r.branch, idx+1, total, du, st)
 	log.Printf("dev_from_theorems: %s unit %d/%d id=%s review → %s", r.repo, idx+1, total, unit.ID, verdict)
@@ -520,9 +524,10 @@ func (r *devRun) unitPrompt(unit DevPlanNode, idx, total, attempt int, fail DevF
 
 	p.WriteString(hardwareSection(r.hwInfo))
 	if r.plan != nil {
-		p.WriteString(r.requirements(unit).Block(r.repo, r.plan.RefSHA))
-		p.WriteString(r.requirements(unit).PortChecklist(r.repo, r.plan.RefSHA, unit.ID))
-		p.WriteString(r.requirements(unit).IntegrationBlock(r.repo, r.plan.RefSHA, unit.ID))
+		// the measured requirements name reference files: masked like everything else shown
+		p.WriteString(newRefMask(refMaskIdent, r.repo).Replace(r.requirements(unit).Block("(reference)", r.plan.RefSHA)))
+		p.WriteString(r.shown(unit).PortChecklist("(reference)", r.plan.RefSHA, unit.ID))
+		p.WriteString(r.shown(unit).IntegrationBlock("(reference)", r.plan.RefSHA, unit.ID))
 	}
 
 	// prior units: addresses and logs, never text
@@ -721,14 +726,12 @@ func devUnitCondition() TerminationCondition {
 // reviewer reads: the reference files, the port map, and that every definition was found.
 // 11/04 the reviewers of u89be81de0b and u0e60a9f272 judged the code against the theory only,
 // never against the reference files it was meant to port.
-func reviewStatus(st map[string]string, repo, sha, unitID string, req UnitRequirements) map[string]string {
+func reviewStatus(st map[string]string, unitID string, req UnitRequirements) map[string]string {
 	out := map[string]string{}
 	for k, v := range st {
 		out[k] = v
 	}
 	if len(req.Symbols) > 0 {
-		out["reference"] = repo + "@" + shortSHA(sha)
-		out["reference_sources"] = strings.Join(req.Sources, " ")
 		out["port_map"] = PortMapPath(unitID)
 		out["port"] = fmt.Sprintf("every one of the %d definitions has a counterpart defined where the map says (measured by the kernel)", len(req.Symbols))
 	}

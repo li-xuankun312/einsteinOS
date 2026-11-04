@@ -1206,11 +1206,13 @@ func dev_review_unit(pid int64, repo, branch string, unitNum, totalUnits int, un
 	return v
 }
 
-// reviewPortStepFmt: the reviewer compares each counterpart in the port map with the
-// reference definition it ports (args: port map, repo@sha, reference files).
-const reviewPortStepFmt = "4. read %[1]s: each line pairs a definition of the reference %[2]s with its counterpart here.\n" +
-	"   the kernel measured that every counterpart exists; for each line, read both (reference files: %[3]s)\n" +
-	"   and check the counterpart does what the reference definition does. one that does not = FAIL, naming it.\n"
+// reviewPortStepFmt: the reviewer reads the port map — the kernel measured that every
+// reference definition (masked: the reviewer, like the developer, does not see the
+// reference) has a counterpart — and checks each counterpart against the theory module that
+// specifies it (arg: the port map).
+const reviewPortStepFmt = "4. read %[1]s: each line pairs a measured definition of the reference with its counterpart here;\n" +
+	"   the kernel measured that every counterpart exists. for each one, check it does what the theory module specifying it says.\n" +
+	"   one that does not = FAIL, naming it.\n"
 
 func dev_review_unit_inner(pid int64, repo, branch string, unitNum, totalUnits int, unit devUnit, status map[string]string) string {
 	devRepos := GetDevRepos()
@@ -1264,7 +1266,7 @@ func dev_review_unit_inner(pid int64, repo, branch string, unitNum, totalUnits i
 	prompt.WriteString("2. ls .einsteinOS/convs/ — find " + stem + ".md (this unit's work log)\n")
 	prompt.WriteString("3. read its header: compile/smoke there are the kernel's measurements, not the developer's claims\n")
 	if status["port_map"] != "" {
-		prompt.WriteString(fmt.Sprintf(reviewPortStepFmt, status["port_map"], status["reference"], status["reference_sources"]))
+		prompt.WriteString(fmt.Sprintf(reviewPortStepFmt, status["port_map"]))
 	} else {
 		prompt.WriteString("4. check: does source code exist for EACH module listed above?\n")
 		prompt.WriteString("   grep for the module names in the source files.\n")

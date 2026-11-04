@@ -86,7 +86,7 @@ func TestTheUnitAndItsReviewerAreToldTheMeasuredRequirements(t *testing.T) {
 	r.reqs = map[string]UnitRequirements{unit.ID: req}
 	p := r.unitPrompt(unit, 0, 1, 1, DevFailure{}, "b")
 	for _, want := range []string{
-		"[UNIT REQUIREMENTS — measured from the reference Niko1221/Strata at 01529aaa82b9]",
+		"[UNIT REQUIREMENTS — measured from the reference (reference) at 01529aaa82b9]",
 		"  src/kernels/cpu/q2_avx2.cpp built by the reference with -mavx2 -mfma\n",
 		"  src/kernels/cuda/native_mmvq.cu (CUDA)\n",
 		"a process of test.sh opens a GPU device",
