@@ -410,7 +410,8 @@ func runUnitVerifyWith(ws, unitID, gpuUsable string, req UnitRequirements, chang
 		res.Smoke = "fail"
 	default:
 		res.Smoke = "pass"
-		res.Gate, res.GateText = unitGates(GateInput{Req: req, Changed: changed, Build: res.Build, Test: res.Test, Compilers: presentGPUCompilers()})
+		res.Gate, res.GateText = unitGates(GateInput{Req: req, Changed: changed, Build: res.Build, Test: res.Test, Compilers: presentGPUCompilers(),
+			PortMissing: portMissing(ws, unitID, req.Symbols)})
 	}
 	return finish()
 }

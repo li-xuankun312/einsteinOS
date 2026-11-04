@@ -484,6 +484,7 @@ func (r *devRun) unitPrompt(unit DevPlanNode, idx, total, attempt int, fail DevF
 	p.WriteString(hardwareSection(r.hwInfo))
 	if r.plan != nil {
 		p.WriteString(r.requirements(unit).Block(r.repo, r.plan.RefSHA))
+		p.WriteString(r.requirements(unit).PortChecklist(r.repo, r.plan.RefSHA, unit.ID))
 	}
 
 	// prior units: addresses and logs, never text

@@ -28,6 +28,8 @@ type GateInput struct {
 	Test    ProcTrace // what test.sh's processes did
 	// Compilers: the GPU compilers present in toolchainDirs on this machine (measured)
 	Compilers []string
+	// PortMissing: reference definitions without a verified counterpart (port_gate.go)
+	PortMissing []string
 }
 
 // gpuCompilers are the programs that make a GPU build possible, looked for in toolchainDirs.
@@ -106,6 +108,10 @@ func unitGates(in GateInput) (kind, text string) {
 				fail("isa_path_missing", fmt.Sprintf(gateISAMissingFmt, isaSourceList(in.Req), strings.Join(need, " "), strings.Join(missing, ", "), shortList(bins, 6)))
 			}
 		}
+	}
+
+	if len(in.PortMissing) > 0 {
+		fail("port_incomplete", fmt.Sprintf(gatePortFmt, len(in.PortMissing), len(in.Req.Symbols), strings.Join(in.PortMissing, "\n")))
 	}
 
 	if len(kinds) == 0 {

@@ -43,7 +43,7 @@ var (
 	theoryFileHeadRe  = regexp.MustCompile(`(?m)^## (?:FILE|MODULE): (\S+)\n`)
 	refGitFn          = func(dir string, args ...string) (string, error) { return gitDirOut(dir, args...) }
 	refBareDirFmt     = "/tmp/ref_%[1]s_%[2]s.git"
-	requirementLogFmt = "dev_requirements: %[1]s unit %[2]s: sources %[3]v; gpu %[4]v; isa %[5]v; unmeasured modules %[6]v"
+	requirementLogFmt = "dev_requirements: %[1]s unit %[2]s: sources %[3]v; gpu %[4]v; isa %[5]v; unmeasured modules %[6]v; definitions to port %[7]d"
 )
 
 func gitDirOut(dir string, args ...string) (string, error) {
@@ -159,6 +159,9 @@ type UnitRequirements struct {
 	FlagFiles  map[string][]string // source → its options, from the reference's build files
 	Unmeasured []string            // modules for which no identifier was found
 	Evidence   map[string][]string // source → identifiers that put it there
+	// Symbols: every top-level definition of Sources at the reference commit (ref_symbols.go);
+	// the unit's port is checked against these (port_gate.go)
+	Symbols []RefSymbol
 }
 
 // GPU: the unit's sources include CUDA.
@@ -199,6 +202,11 @@ func measureUnitRequirements(repo, sha, unitTheory string) UnitRequirements {
 		}
 	}
 	sort.Strings(req.Sources)
+	for _, f := range req.Sources {
+		if text, err := refGitFn(bare, "show", sha+":"+f); err == nil {
+			req.Symbols = append(req.Symbols, SymbolsOf(f, text)...)
+		}
+	}
 	flags := refPerSourceFlags(bare, sha)
 	isa := map[string]bool{}
 	for _, f := range req.Sources {
@@ -223,7 +231,7 @@ func measureUnitRequirements(repo, sha, unitTheory string) UnitRequirements {
 
 // logUnitRequirements writes the measurement and its evidence.
 func logUnitRequirements(repo, unitID string, req UnitRequirements) {
-	log.Printf(requirementLogFmt, repo, unitID, req.Sources, req.GPUSources, req.ISAFlags, req.Unmeasured)
+	log.Printf(requirementLogFmt, repo, unitID, req.Sources, req.GPUSources, req.ISAFlags, req.Unmeasured, len(req.Symbols))
 }
 
 const (
