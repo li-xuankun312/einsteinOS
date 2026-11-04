@@ -1,6 +1,7 @@
 package kernel
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -314,5 +315,46 @@ func TestVerifyAndPush_NothingWrittenIsNotAPass(t *testing.T) {
 	}
 	if !strings.Contains(o.Status["compile_error"], "wrote no file") {
 		t.Fatalf("%v", o.Status)
+	}
+}
+
+// 11/04 09:42-09:49: a verified unit whose push GitHub refused was verified again for each
+// push attempt. The verdict stands; only the push is retried.
+func TestAFailedPushAfterAVerificationRetriesOnlyThePush(t *testing.T) {
+	bare, clone := setupRemote(t)
+	mirror := t.TempDir()
+	const branch = "einsteinOS/dev-7"
+	unit := "u5"
+	build, test := devVerifyScripts(unit)
+	git(t, clone, "checkout", "-q", "-B", branch, "origin/"+branch)
+	base, _ := primeMirror(clone, mirror)
+	write(t, mirror, "src/impl.cu", "good")
+	write(t, mirror, build, "x")
+	write(t, mirror, test, "x")
+	runs := 0
+	withRunner(t, func(string) (int, string) { runs++; return 0, "ok" })
+	realPush := devGitPush
+	refuse := true
+	devGitPush = func(dir, repo, br string, n int) error {
+		if refuse {
+			return fmt.Errorf("push of %s rejected by the remote: (Internal Server Error)", br)
+		}
+		return realPush(dir, repo, br, n)
+	}
+	o := devVerifyAndPush(clone, mirror, "o/r", branch, branch, unit, "m", "", base, UnitRequirements{})
+	if o.Err == nil || !o.Verified || !o.Result.Passed() {
+		t.Fatalf("a refused push after a pass: Err set, Verified, passed: %+v", o)
+	}
+	ran := runs
+	refuse = false
+	o = devRetryPush(clone, mirror, "o/r", branch, branch, unit, o)
+	if o.Err != nil || o.Pushed != branch {
+		t.Fatalf("%+v", o)
+	}
+	if runs != ran {
+		t.Fatalf("the retry ran the build/test again (%d → %d runs)", ran, runs)
+	}
+	if !remoteHas(t, bare, branch, "src/impl.cu") {
+		t.Fatal("the retried push did not land")
 	}
 }

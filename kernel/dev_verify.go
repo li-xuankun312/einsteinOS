@@ -490,6 +490,12 @@ type UnitVerifyOutcome struct {
 	Changed []string // files the child added/changed
 	Removed []string
 	Err     error
+	// Verified: the real-machine verification ran and Result holds its verdict. An Err
+	// after that is a push failure: only the push is retried (devRetryPush), the verdict
+	// stands. 11/04 09:42-09:49 unit u0e60a9f272 passed and was verified three times
+	// (3 × 1m22s) because GitHub refused the pushes.
+	Verified bool
+	msg      string
 }
 
 // devVerifyAndPush runs steps 1-4 for one unit after its conversation ended.
@@ -534,18 +540,30 @@ func devVerifyAndPush(cloneDir, mirror, devRepo, branch, baseRef, unitID, unitDe
 		unitID, out.Result.Compile, out.Result.BuildExit, out.Result.Smoke, out.Result.TestExit, out.Result.Elapsed.Round(time.Second),
 		out.Result.Gate, out.Result.Test.Devices)
 
-	msg := fmt.Sprintf("unit %s: %s [compile=%s smoke=%s gate=%s, verified by the kernel]", unitID, truncStr(unitDesc, 120), out.Result.Compile, out.Result.Smoke, gateOrNone(out.Result.Gate))
+	out.msg = fmt.Sprintf("unit %s: %s [compile=%s smoke=%s gate=%s, verified by the kernel]", unitID, truncStr(unitDesc, 120), out.Result.Compile, out.Result.Smoke, gateOrNone(out.Result.Gate))
+	out.Verified = true
+	out.Pushed, out.Err = devPushVerdict(cloneDir, mirror, devRepo, branch, baseRef, unitID, out.Changed, out.Removed, out.msg, out.Result.Passed())
+	return out
+}
+
+// devRetryPush pushes an outcome whose verification already ran, without verifying again.
+func devRetryPush(cloneDir, mirror, devRepo, branch, baseRef, unitID string, out UnitVerifyOutcome) UnitVerifyOutcome {
+	out.Pushed, out.Err = devPushVerdict(cloneDir, mirror, devRepo, branch, baseRef, unitID, out.Changed, out.Removed, out.msg, out.Result.Passed())
+	return out
+}
+
+// devPushVerdict puts verified code on the dev branch and failing code on the unit's wip
+// branch. It returns the branch the code ended up on.
+func devPushVerdict(cloneDir, mirror, devRepo, branch, baseRef, unitID string, changed, removed []string, msg string, passed bool) (string, error) {
 	wip := devWipBranch(branch, unitID)
-	if out.Result.Passed() {
+	if passed {
 		// onto the base ref first (it may be the wip branch of a fix attempt), then the dev branch
 		if baseRef != branch {
 			if err := commitDelta(cloneDir, devRepo, baseRef, baseRef, mirror, changed, removed, msg); err != nil {
-				out.Err = err
-				return out
+				return "", err
 			}
 			if err := promoteBranch(cloneDir, devRepo, baseRef, branch); err != nil {
-				out.Err = err
-				return out
+				return "", err
 			}
 			// the wip branch is merged into the dev branch: it has nothing left to hold.
 			// 11/03 left einsteinOS/dev-…-wip-u89be81de0b and -wip-ueac0e4654d behind.
@@ -557,19 +575,15 @@ func devVerifyAndPush(cloneDir, mirror, devRepo, branch, baseRef, unitID, unitDe
 				}
 			}
 		} else if err := commitDelta(cloneDir, devRepo, branch, branch, mirror, changed, removed, msg); err != nil {
-			out.Err = err
-			return out
+			return "", err
 		}
-		out.Pushed = branch
-		return out
+		return branch, nil
 	}
 	// not verified: park it where the next sandbox can read it. NEVER on the dev branch.
 	if err := commitDelta(cloneDir, devRepo, baseRef, wip, mirror, changed, removed, msg); err != nil {
-		out.Err = err
-		return out
+		return "", err
 	}
-	out.Pushed = wip
-	return out
+	return wip, nil
 }
 
 func gateOrNone(g string) string {

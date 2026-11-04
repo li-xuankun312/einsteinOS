@@ -357,11 +357,19 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 	// ---- the kernel's verdict, on the real machine -------------------------------------------------
 	var out UnitVerifyOutcome
 	for try := 1; try <= 3; try++ {
-		out = devVerifyAndPush(cloneDir, mirror, r.devRepo, r.branch, baseRef, unit.ID, nodeDesc(unit), r.gpuUsable(), base, r.requirements(unit))
+		if out.Verified {
+			out = devRetryPush(cloneDir, mirror, r.devRepo, r.branch, baseRef, unit.ID, out)
+		} else {
+			out = devVerifyAndPush(cloneDir, mirror, r.devRepo, r.branch, baseRef, unit.ID, nodeDesc(unit), r.gpuUsable(), base, r.requirements(unit))
+		}
 		if out.Err == nil {
 			break
 		}
-		log.Printf("dev_from_theorems: %s unit %s verify/push error (try %d/3): %v", r.repo, unit.ID, try, out.Err)
+		what := "verify/push error"
+		if out.Verified {
+			what = "push error after the verification (only the push is retried)"
+		}
+		log.Printf("dev_from_theorems: %s unit %s %s (try %d/3): %v", r.repo, unit.ID, what, try, out.Err)
 		time.Sleep(20 * time.Second)
 	}
 	if out.Err != nil {
