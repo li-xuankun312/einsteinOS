@@ -6,7 +6,12 @@ package kernel
 // 'https://ghp_…@github.com'` five times: the clone URL carries the GitHub token,
 // and git echoes the URL in its errors.
 
-import "regexp"
+import (
+	"os"
+	"regexp"
+	"sort"
+	"strings"
+)
 
 var secretRes = []struct {
 	re   *regexp.Regexp
@@ -23,8 +28,50 @@ var secretRes = []struct {
 
 // redactSecrets removes tokens, URL credentials and the Axle session from s.
 func redactSecrets(s string) string {
+	// by value first: the patterns only catch the shapes they were written for. 11/03 a
+	// child wrote cookie='eyJ…' (06:45, pushed in a chunk's conv.json) and CSRF='YFbn…'
+	// (08:22, in the log); neither has a prefix a pattern knows. The kernel knows the values.
+	for _, v := range knownSecretValues() {
+		s = strings.ReplaceAll(s, v, "<redacted>")
+	}
 	for _, r := range secretRes {
 		s = r.re.ReplaceAllString(s, r.repl)
 	}
 	return s
+}
+
+// minSecretLen: shorter values are not replaced (they could match ordinary text).
+const minSecretLen = 12
+
+// knownSecretValuesFn is a variable for tests.
+var knownSecretValuesFn = func() []string {
+	sess, csrf := axleCredentials()
+	vals := []string{sess, csrf, GetGHToken(), os.Getenv("GITHUB_TOKEN"), os.Getenv("GH_TOKEN"), os.Getenv("AXLE_COOKIE"), os.Getenv("AXLE_CSRF")}
+	// the claude.ai cookie: the whole header value and each of its values
+	if ck := os.Getenv("CLAUDE_WEB_COOKIE"); ck != "" {
+		vals = append(vals, ck)
+		for _, part := range strings.Split(ck, ";") {
+			if i := strings.Index(part, "="); i >= 0 {
+				vals = append(vals, strings.TrimSpace(part[i+1:]))
+			}
+		}
+	}
+	return vals
+}
+
+// knownSecretValues: the credentials this kernel holds, longest first (so a value that
+// contains another is replaced whole), without short or duplicate ones.
+func knownSecretValues() []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, v := range knownSecretValuesFn() {
+		v = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(v), "provertools_session="))
+		if len(v) < minSecretLen || seen[v] {
+			continue
+		}
+		seen[v] = true
+		out = append(out, v)
+	}
+	sort.Slice(out, func(i, j int) bool { return len(out[i]) > len(out[j]) })
+	return out
 }
