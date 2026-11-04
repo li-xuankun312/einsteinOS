@@ -1378,18 +1378,47 @@ func dev_review_unit_inner(pid int64, repo, branch string, unitNum, totalUnits i
 	return "FAIL: review gave no verdict, compile=" + status["compile"]
 }
 
-func dev_store_conv(convID, repo, branch, stem string, status map[string]string) {
-	rawJSON, err := DownloadConvRaw(convID)
-	if err != nil {
-		log.Printf("dev_store_conv: %s unit %s download failed: %v", repo, stem, err)
-		return
-	}
-	// same reasoning as ref_store_chunk's conv.json redaction: this raw
-	// transcript can contain a child's verification-script commands verbatim,
-	// Axle cookie/CSRF included, before it becomes part of a git-tracked summary.
-	rawJSON = []byte(redactSecrets(string(rawJSON)))
+// devConvRetryWait is a variable for tests.
+var devConvRetryWait = func(try int) time.Duration { return time.Duration(5<<try) * time.Second }
 
-	summary := dev_conv_summary(rawJSON, convID, stem, status)
+// devConvDownloadTries: a conversation download is tried this many times before the
+// record is written as unavailable. 11/04 09:52:50 and 10:02:45 one TLS handshake timeout
+// each left units u0e60a9f272 and ubd109f97f8 without a record of this attempt.
+const devConvDownloadTries = 5
+
+// devConvRecord returns the summary stored at .einsteinOS/convs/<unit>.md for this attempt:
+// the conversation's summary, or — when it cannot be downloaded — a note saying so. The note
+// replaces whatever was there: on 11/04 the reviewers of u0e60a9f272 and ubd109f97f8 read
+// the record of the 11/03 run's conversation as if it were this attempt's.
+func devConvRecord(convID, stem string, status map[string]string) (summary string, rawBytes int) {
+	var lastErr error
+	for try := 1; try <= devConvDownloadTries; try++ {
+		rawJSON, err := DownloadConvRaw(convID)
+		if err == nil {
+			// same reasoning as ref_store_chunk's conv.json redaction: this raw
+			// transcript can contain a child's verification-script commands verbatim,
+			// Axle cookie/CSRF included, before it becomes part of a git-tracked summary.
+			rawJSON = []byte(redactSecrets(string(rawJSON)))
+			return dev_conv_summary(rawJSON, convID, stem, status), len(rawJSON)
+		}
+		lastErr = err
+		if downloadConvRawFn == nil {
+			break // nothing to retry: no model can download here
+		}
+		log.Printf("dev_store_conv: unit %s download %d/%d failed: %v", stem, try, devConvDownloadTries, err)
+		if try < devConvDownloadTries {
+			time.Sleep(devConvRetryWait(try))
+		}
+	}
+	return fmt.Sprintf("# unit %s — conversation record unavailable\n\n"+
+		"The conversation of this attempt (%s) could not be downloaded after %d tries (%v).\n"+
+		"Any record stored here before belonged to an EARLIER attempt or run and was removed, so it is not read as this one.\n"+
+		"What is this attempt's: the code on the branch, and the kernel's verification on the real machine: compile=%s smoke=%s.\n",
+		stem, convID, devConvDownloadTries, lastErr, status["compile"], status["smoke"]), 0
+}
+
+func dev_store_conv(convID, repo, branch, stem string, status map[string]string) {
+	summary, rawBytes := devConvRecord(convID, stem, status)
 	if len(summary) < 50 {
 		log.Printf("dev_store_conv: %s unit %s summary too short, skipping", repo, stem)
 		return
@@ -1425,7 +1454,7 @@ func dev_store_conv(convID, repo, branch, stem string, status map[string]string)
 		return
 	}
 	log.Printf("dev_store_conv: %s unit %s stored (%d bytes summary from %d bytes raw): %s",
-		repo, stem, len(summary), len(rawJSON), filePath)
+		repo, stem, len(summary), rawBytes, filePath)
 }
 
 // dev_conv_summary: parse raw conversation JSON and extract a compact summary.
