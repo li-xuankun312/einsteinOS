@@ -115,6 +115,21 @@ func localResultHeader(result string) string {
 
 // shapeToolResults applies the round budget to results that are about to be quoted
 // in a Continue message (the SSE-recovery path), and writes the header.
+// writebackText is the message that hands the local results back. With no results it is
+// just "Continue.": 11/04 09:53:39 (and five times on 11/03) a text-only round got the
+// header "… use these:" followed by nothing, which reads as results that went missing.
+func writebackText(results []ToolResult) string {
+	if len(results) == 0 {
+		return "Continue."
+	}
+	var b strings.Builder
+	b.WriteString("Continue. Note: the following tools were executed on the LOCAL machine (source of truth). If any results differ from your sandbox, use these:\n\n")
+	for _, tr := range results {
+		b.WriteString(fmt.Sprintf("[%s] %s\n\n", tr.ToolUseID, tr.Content))
+	}
+	return b.String()
+}
+
 func shapeToolResults(in []ToolResult) []ToolResult {
 	raw := make([]string, len(in))
 	for i, tr := range in {
@@ -850,10 +865,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 					return m.shadowExecute(convID, name, input)
 				})
 				var localDiff strings.Builder
-				localDiff.WriteString("Continue. Note: the following tools were executed on the LOCAL machine (source of truth). If any results differ from your sandbox, use these:\n\n")
-				for _, tr := range shapeToolResults(rr) {
-					localDiff.WriteString(fmt.Sprintf("[%s] %s\n\n", tr.ToolUseID, tr.Content))
-				}
+				localDiff.WriteString(writebackText(shapeToolResults(rr)))
 				if len(rr) > 0 {
 					localDiff.WriteString(kernel.WritebackNote(childRole, convID))
 				}
@@ -912,10 +924,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 		}
 
 		var localDiff strings.Builder
-		localDiff.WriteString("Continue. Note: the following tools were executed on the LOCAL machine (source of truth). If any results differ from your sandbox, use these:\n\n")
-		for _, tr := range toolResults {
-			localDiff.WriteString(fmt.Sprintf("[%s] %s\n\n", tr.ToolUseID, tr.Content))
-		}
+		localDiff.WriteString(writebackText(toolResults))
 		// measured facts the kernel adds to this writeback (theory: the sorry state of
 		// the files, so a chunk learns it with the Axle answer, not in an extra round)
 		if len(toolResults) > 0 {
