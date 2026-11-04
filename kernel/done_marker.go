@@ -33,6 +33,12 @@ func DoneInstruction() string {
 		"(only then: do not write it while anything is still unfinished.)\n", DoneMarker)
 }
 
+// DevDoneInToolRound tells a dev unit it can end on its last check: a done marker in the
+// message that runs the final build/test ends the conversation there when every command
+// exits 0 on the real machine (model/claudeweb doneInToolRound); otherwise the results come
+// back and the conversation goes on.
+const DevDoneInToolRound = "you may write that line in the same message that runs your final build and test: if every command in it exits 0 on the real machine, the conversation ends there; if any fails, you get the results and continue.\n"
+
 // lastLine returns the last non-empty line of s, trimmed of markdown noise.
 func lastLine(s string) string {
 	lines := strings.Split(strings.TrimRight(s, " \t\r\n"), "\n")

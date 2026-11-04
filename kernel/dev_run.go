@@ -552,7 +552,7 @@ func (r *devRun) unitPrompt(unit DevPlanNode, idx, total, attempt int, fail DevF
 	p.WriteString("\n")
 
 	build, test := devVerifyScripts(unit.ID)
-	p.WriteString(fmt.Sprintf(dev_unit_instruction, idx+1, total, unit.ID, r.gpuAll, r.gpuUsable(), r.gpuUsable(), build, test, einsteinHelp, DoneInstruction(), toolchainPATH()))
+	p.WriteString(fmt.Sprintf(dev_unit_instruction, idx+1, total, unit.ID, r.gpuAll, r.gpuUsable(), r.gpuUsable(), build, test, einsteinHelp, DoneInstruction()+DevDoneInToolRound, toolchainPATH()))
 
 	if fb := pr_feedback(r.pid); fb != "" {
 		p.WriteString(fmt.Sprintf("\n\n[PRIOR FEEDBACK]\n%s", fb))
