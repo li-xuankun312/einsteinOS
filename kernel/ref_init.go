@@ -390,6 +390,11 @@ func ref_theorize(parent int64, owner, name, sha, diff string, nfiles int, msg s
 	// step 1: kernel does static survey (wc -l + extensions)
 	heavy, light := fileSurvey(owner, name, sha, files)
 
+	if stored, _, ok := storedTheoryFn(sha); ok {
+		theorem_store(owner+"/"+name, sha, stored, 0)
+		return stored
+	}
+
 	// step 2: ONE conversation classifies every file (heavy = needs LAYER 1a/1b)
 	// and, when there are enough files to need it, groups the heavy ones into
 	// chunks (ref_survey_plan.go). The directory-level pre-survey is gone: it
