@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 var (
@@ -113,6 +114,52 @@ func devPlanSave(repo, devRepo, branch string, plan *DevPlan, msg string) {
 	}
 	if err := storeDevPlan(devRepo, branch, plan, msg); err != nil {
 		log.Printf("dev_plan: %s plan NOT stored on %s (%s): %v — continuing with the in-memory plan", repo, branch, msg, err)
+		devPlanMu.Lock()
+		devPlanUnstored[devPlanKey(repo, branch)] = devPlanPending{devRepo, branch, plan, msg}
+		devPlanMu.Unlock()
+		return
+	}
+	devPlanMu.Lock()
+	delete(devPlanUnstored, devPlanKey(repo, branch))
+	devPlanMu.Unlock()
+}
+
+type devPlanPending struct {
+	devRepo, branch string
+	plan            *DevPlan
+	msg             string
+}
+
+// devPlanUnstored: plans whose last store failed (11/04 09:35:45, 09:56:17), by key.
+var devPlanUnstored = map[string]devPlanPending{}
+
+// FlushDevPlans stores every plan whose last store failed, within d. Called when the
+// program is interrupted, so a Ctrl+C does not throw away a state only held in memory.
+func FlushDevPlans(d time.Duration) int {
+	devPlanMu.Lock()
+	var todo []devPlanPending
+	for _, p := range devPlanUnstored {
+		todo = append(todo, p)
+	}
+	devPlanMu.Unlock()
+	done := make(chan int, 1)
+	go func() {
+		n := 0
+		for _, p := range todo {
+			if err := storeDevPlan(p.devRepo, p.branch, p.plan, p.msg+" (stored at exit)"); err == nil {
+				n++
+			} else {
+				log.Printf("dev_plan: at exit, plan for %s still NOT stored: %v", p.branch, err)
+			}
+		}
+		done <- n
+	}()
+	select {
+	case n := <-done:
+		return n
+	case <-time.After(d):
+		log.Printf("dev_plan: at exit, storing %d plan(s) did not finish within %s", len(todo), d)
+		return 0
 	}
 }
 

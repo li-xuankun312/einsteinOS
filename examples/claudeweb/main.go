@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"time"
 
 	"google.golang.org/genai"
 
@@ -52,7 +53,12 @@ func main() {
 	go func() {
 		sig := <-sigCh
 		n := kernel.KillAllTrackedProcessGroups()
-		log.Printf("claudeweb: received %v — killed %d isolated subprocess group(s) that would otherwise be orphaned, exiting", sig, n)
+		log.Printf("claudeweb: received %v — killed %d isolated subprocess group(s) that would otherwise be orphaned", sig, n)
+		// a plan whose last store failed exists only in memory: store it before exiting
+		if stored := kernel.FlushDevPlans(60 * time.Second); stored > 0 {
+			log.Printf("claudeweb: stored %d dev plan(s) that were only in memory", stored)
+		}
+		log.Printf("claudeweb: exiting")
 		os.Exit(130)
 	}()
 
