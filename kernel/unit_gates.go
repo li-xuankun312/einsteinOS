@@ -55,6 +55,7 @@ const (
 	gateGPUUnusedFmt      = "gpu_unused: test.sh exited 0 but none of its %[1]d process(es) opened a GPU device (%[2]s); executables that ran: %[3]s"
 	gateISAMissingFmt     = "isa_path_missing: the reference builds %[1]s with %[2]s; no binary the build produced or the test ran contains %[3]s (binaries looked at: %[4]s)"
 	gateISAUnmeasuredFmt  = "isa_unmeasured: the reference builds %[1]s with %[2]s, and the binaries could not be disassembled (%[3]s)"
+	gateToolchainUnusedFmt = "toolchain_unused: the unit is GPU work but no process of build.sh ran a program from %[1]s (programs that ran: %[2]s) — a build that skips the toolchain proves nothing"
 	gateToolchainFmt      = "toolchain_missing: the unit's sources are CUDA but none of %[1]s exists in %[2]s on this machine; a build that skips the GPU here proves nothing"
 )
 
@@ -110,6 +111,11 @@ func unitGates(in GateInput) (kind, text string) {
 		}
 	}
 
+	// 11/04 14:27:52 the unit's build.sh printed "corex toolchain not present on this host" and
+	// exited 0: whether the toolchain was used is measured from the build's processes
+	if (in.Req.GPU() || in.Req.RequireGPU) && len(in.Compilers) > 0 && !toolchainRan(in.Build) {
+		fail("toolchain_unused", fmt.Sprintf(gateToolchainUnusedFmt, strings.Join(toolchainDirs, ":"), shortList(in.Build.Exes, 8)))
+	}
 	if len(in.PortMissing) > 0 {
 		fail("port_incomplete", fmt.Sprintf(gatePortFmt, len(in.PortMissing), len(in.Req.Symbols), strings.Join(in.PortMissing, "\n")))
 	}
@@ -293,4 +299,35 @@ func isaSourceList(req UnitRequirements) string {
 	}
 	sort.Strings(fs)
 	return strings.Join(fs, ", ")
+}
+
+// toolchainRan: a process of the build ran the GPU toolchain — its executable lives in
+// toolchainDirs, its command line starts there, or it is a CUDA compile (which on this machine
+// only the toolchain can do; /proc's exe of a compiler driver may be a resolved symlink).
+func toolchainRan(t ProcTrace) bool {
+	if ranFrom(t.Exes, toolchainDirs) {
+		return true
+	}
+	for _, c := range t.Cmdlines {
+		f := strings.Fields(c)
+		if len(f) == 0 {
+			continue
+		}
+		if ranFrom(f[:1], toolchainDirs) || cudaCompileRe.MatchString(c) {
+			return true
+		}
+	}
+	return false
+}
+
+// ranFrom: some program in exes lives in one of dirs.
+func ranFrom(exes, dirs []string) bool {
+	for _, e := range exes {
+		for _, d := range dirs {
+			if strings.HasPrefix(e, strings.TrimRight(d, "/")+"/") {
+				return true
+			}
+		}
+	}
+	return false
 }
