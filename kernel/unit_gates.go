@@ -84,7 +84,7 @@ func unitGates(in GateInput) (kind, text string) {
 	}
 
 	// a GPU unit's tests must run on the GPU: some process of test.sh had a device open
-	if in.Req.GPU() && len(in.Test.Devices) == 0 {
+	if (in.Req.GPU() || in.Req.RequireGPU) && len(in.Test.Devices) == 0 {
 		fail("gpu_unused", fmt.Sprintf(gateGPUUnusedFmt, in.Test.Procs, gpuDeviceRe().String(), shortList(in.Test.Exes, 8)))
 	}
 

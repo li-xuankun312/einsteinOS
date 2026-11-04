@@ -374,6 +374,13 @@ func runWatched(command, dir string, timeout time.Duration) (int, string, ProcTr
 // runUnitVerifyWith is runUnitVerify plus what the reference requires of the unit: both
 // scripts run watched, and after they pass the gates are judged on the measurements.
 func runUnitVerifyWith(ws, unitID, gpuUsable string, req UnitRequirements, changed []string, buildTimeout, testTimeout time.Duration) VerifyResult {
+	if len(req.Tests) > 0 {
+		// the integration unit's test.sh is the reference's registered tests, written here
+		_, test := devVerifyScripts(unitID)
+		tp := filepath.Join(ws, test)
+		_ = os.MkdirAll(filepath.Dir(tp), 0o755)
+		_ = os.WriteFile(tp, []byte(integrationScript(req.Repo, req.SHA, req.Tests)), 0o755)
+	}
 	start := time.Now()
 	build, test := devVerifyScripts(unitID)
 	res := VerifyResult{Compile: "missing", Smoke: "missing", BuildExit: -1, TestExit: -1}

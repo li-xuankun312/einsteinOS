@@ -73,6 +73,8 @@ type DevPlanNode struct {
 	// Sources: a port unit's reference files (no theory module covers them); its pass is
 	// recorded in DevPlan.PortPass
 	Sources []string `json:"sources,omitempty"`
+	// Integration: the commit's last unit, judged by the reference's registered tests
+	Integration bool `json:"integration,omitempty"`
 }
 
 // DevFailure is why a unit's last attempt did not pass, and where its code is,
@@ -109,6 +111,8 @@ type DevPlan struct {
 	// 11/04 the theory covered 58 of the commit's files and the rest had no unit at all.
 	PortUnits []DevPlanNode   `json:"port_units,omitempty"`
 	PortPass  map[string]bool `json:"port_pass,omitempty"`
+	// IntegrationUnit: judged by the reference's own registered tests (integration.go)
+	IntegrationUnit *DevPlanNode `json:"integration_unit,omitempty"`
 
 	// silent counts, per unit, the conversations IN A ROW that wrote no file. In memory
 	// only: a restart is a person deciding to try again, and starts the count over.
@@ -388,7 +392,20 @@ func (p *DevPlan) Leaves() []DevPlanNode {
 			walk(n)
 		}
 	}
-	return append(out, p.PortUnits...)
+	out = append(out, p.PortUnits...)
+	if p.IntegrationUnit != nil {
+		out = append(out, *p.IntegrationUnit)
+	}
+	return out
+}
+
+// SetIntegrationUnit makes the commit's integration unit the last unit of the plan.
+func (p *DevPlan) SetIntegrationUnit(id string) bool {
+	if p.IntegrationUnit != nil && p.IntegrationUnit.ID == id {
+		return false
+	}
+	p.IntegrationUnit = &DevPlanNode{ID: id, Integration: true, Reason: "integration: the reference's registered tests"}
+	return true
 }
 
 // AddPortUnits adds a unit for each reference directory with code files that covered does
@@ -435,7 +452,7 @@ func (p *DevPlan) keysOf(n DevPlanNode) []string {
 // content is the one that passed (a module whose theory changed has to be done
 // again).
 func (p *DevPlan) UnitPass(n DevPlanNode) bool {
-	if len(n.Sources) > 0 {
+	if len(n.Sources) > 0 || n.Integration {
 		return p.PortPass[n.ID]
 	}
 	for _, m := range n.Modules {
@@ -474,7 +491,7 @@ func (p *DevPlan) TakeReviewPending(id string) (map[string]string, bool) {
 }
 
 func (p *DevPlan) MarkUnitPass(n DevPlanNode) {
-	if len(n.Sources) > 0 {
+	if len(n.Sources) > 0 || n.Integration {
 		if p.PortPass == nil {
 			p.PortPass = map[string]bool{}
 		}

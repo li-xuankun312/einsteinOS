@@ -120,7 +120,13 @@ func (r *devRun) requirements(unit DevPlanNode) UnitRequirements {
 		sha = r.plan.RefSHA
 	}
 	var req UnitRequirements
-	if len(unit.Sources) > 0 {
+	if unit.Integration {
+		tests, cuda := refIntegrationTests(r.repo, sha)
+		req = UnitRequirements{Tests: tests, RequireGPU: cuda, Repo: r.repo, SHA: sha}
+		log.Printf("dev_requirements: %s integration unit %s: %d registered test(s) of the reference; GPU required=%v", r.repo, unit.ID, len(tests), cuda)
+		r.reqs[unit.ID] = req
+		return req
+	} else if len(unit.Sources) > 0 {
 		req = requirementsForSources(r.repo, sha, unit.Sources)
 	} else {
 		req = measureUnitRequirements(r.repo, sha, devUnitFromNode(unit, r.sections).Theory)
@@ -201,6 +207,10 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 					covered[f] = true
 				}
 			}
+		}
+		if tests, _ := refIntegrationTests(repo, plan.RefSHA); len(tests) > 0 && plan.SetIntegrationUnit(IntegrationUnitID(plan.RefSHA)) {
+			log.Printf("dev_plan: %s the reference registers %d tests: integration unit %s is the last unit", repo, len(tests), IntegrationUnitID(plan.RefSHA))
+			devPlanSave(repo, devRepo, branch, plan, "plan: integration unit")
 		}
 		if n := plan.AddPortUnits(all, covered); n > 0 {
 			log.Printf("dev_plan: %s reference has %d code files; theory units cover %d; %d port unit(s) added for the rest", repo, len(all), len(covered), n)
@@ -508,6 +518,7 @@ func (r *devRun) unitPrompt(unit DevPlanNode, idx, total, attempt int, fail DevF
 	if r.plan != nil {
 		p.WriteString(r.requirements(unit).Block(r.repo, r.plan.RefSHA))
 		p.WriteString(r.requirements(unit).PortChecklist(r.repo, r.plan.RefSHA, unit.ID))
+		p.WriteString(r.requirements(unit).IntegrationBlock(r.repo, r.plan.RefSHA, unit.ID))
 	}
 
 	// prior units: addresses and logs, never text

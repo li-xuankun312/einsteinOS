@@ -162,6 +162,11 @@ type UnitRequirements struct {
 	// Symbols: every top-level definition of Sources at the reference commit (ref_symbols.go);
 	// the unit's port is checked against these (port_gate.go)
 	Symbols []RefSymbol
+	// Tests: the reference's registered tests, for the integration unit (integration.go);
+	// RequireGPU: the reference builds CUDA, so they must open a GPU device
+	Tests      []RefTest
+	RequireGPU bool
+	Repo, SHA  string
 }
 
 // GPU: the unit's sources include CUDA.
