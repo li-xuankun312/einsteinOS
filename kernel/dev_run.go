@@ -197,6 +197,10 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 		plan: plan, sections: dev_extract_file_sections(theory),
 	}
 
+	if n := plan.RejudgeIfGatesChanged(); n > 0 {
+		log.Printf("dev_plan: %s %d unit(s) passed under another gate set — judged again under %s", repo, n, devGateSet)
+		devPlanSave(repo, devRepo, branch, plan, "plan: rejudge under "+devGateSet)
+	}
 	// every code file of the reference commit has a unit: the ones no theory unit's measured
 	// sources include get port units, one per directory
 	if all := refPortSources(repo, plan.RefSHA); len(all) > 0 {

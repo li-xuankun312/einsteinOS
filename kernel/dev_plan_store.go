@@ -111,6 +111,8 @@ type DevPlan struct {
 	// 11/04 the theory covered 58 of the commit's files and the rest had no unit at all.
 	PortUnits []DevPlanNode   `json:"port_units,omitempty"`
 	PortPass  map[string]bool `json:"port_pass,omitempty"`
+	// Gates: the gate set the recorded passes were judged by (devGateSet)
+	Gates string `json:"gates,omitempty"`
 	// IntegrationUnit: judged by the reference's own registered tests (integration.go)
 	IntegrationUnit *DevPlanNode `json:"integration_unit,omitempty"`
 
@@ -748,4 +750,29 @@ func unmarshalDevPlan(b []byte) (*DevPlan, error) {
 		p.LastFailure = map[string]DevFailure{}
 	}
 	return &p, nil
+}
+
+// devGateSet names what a pass means. A plan whose passes were judged by another set is
+// judged again: 11/04 u89be81de0b and u0e60a9f272 passed before the port gate existed.
+const devGateSet = "build+test+gpu+isa+port+integration"
+
+// RejudgeIfGatesChanged clears the passes recorded under another gate set and reports how
+// many units that reopened.
+func (p *DevPlan) RejudgeIfGatesChanged() int {
+	if p.Gates == devGateSet {
+		return 0
+	}
+	n := 0
+	for _, l := range p.Leaves() {
+		if p.UnitPass(l) {
+			n++
+		}
+	}
+	for k, st := range p.State {
+		st.Pass = false
+		p.State[k] = st
+	}
+	p.PortPass = map[string]bool{}
+	p.Gates = devGateSet
+	return n
 }

@@ -31,3 +31,15 @@ func TestEveryReferenceCodeFileHasAUnit(t *testing.T) {
 		t.Fatalf("survives plan.json: %v %+v", err, q)
 	}
 }
+
+func TestPassesJudgedByAnotherGateSetAreJudgedAgain(t *testing.T) {
+	p := newDevPlan("ref/proj", "sha", mods("A"), [][]string{{"A"}}, "plan")
+	p.MarkUnitPass(p.Leaves()[0])
+	if n := p.RejudgeIfGatesChanged(); n != 1 || p.UnitPass(p.Leaves()[0]) {
+		t.Fatalf("reopened %d", n)
+	}
+	p.MarkUnitPass(p.Leaves()[0])
+	if n := p.RejudgeIfGatesChanged(); n != 0 || !p.UnitPass(p.Leaves()[0]) {
+		t.Fatal("same gate set: kept")
+	}
+}
