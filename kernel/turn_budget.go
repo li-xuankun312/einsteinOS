@@ -148,11 +148,19 @@ func OutputsSorryNote() string {
 	if len(files) == 0 {
 		return ""
 	}
+	// the names too: 11/04 each chunk spent a whole round on `ls /mnt/user-data/outputs`
+	// (pids 25, 41, 51) right after a note that only gave the count
+	names := make([]string, 0, len(files))
+	for _, f := range files {
+		names = append(names, fmt.Sprintf("%s (%d bytes)", f.Name, len(f.Content)))
+	}
+	listing := "files there now: " + strings.Join(names, ", ") + "\n"
 	sites := sorrySites(files)
 	if len(sites) == 0 {
-		return fmt.Sprintf(outputsNoSorryFmt, len(files), TheoryOutputsDir)
+		return fmt.Sprintf(outputsNoSorryFmt, len(files), TheoryOutputsDir) + listing
 	}
 	var b strings.Builder
+	b.WriteString(listing)
 	b.WriteString(fmt.Sprintf(outputsSorryHeadFmt, sorryCount(sites), len(sites), len(files), TheoryOutputsDir))
 	for _, s := range sites {
 		b.WriteString(fmt.Sprintf(outputsSorryLineFmt, s.File, strings.Join(s.Decls, ", ")))

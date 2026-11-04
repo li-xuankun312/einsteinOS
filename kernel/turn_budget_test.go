@@ -87,7 +87,7 @@ func TestOutputsSorryNoteIsMeasuredOnTheMirroredFiles(t *testing.T) {
 	}
 	write("A.lean", "theorem a : True := trivial\n")
 	write("notes.md", "sorry\n") // not a .lean file
-	if got := OutputsSorryNote(); got != "[measured on this machine] no sorry in the 1 .lean file(s) in "+TheoryOutputsDir+"\n" {
+	if got := OutputsSorryNote(); got != "[measured on this machine] no sorry in the 1 .lean file(s) in "+TheoryOutputsDir+"\nfiles there now: A.lean (28 bytes)\n" {
 		t.Fatalf("clean: %q", got)
 	}
 	write("B.lean", "theorem b1 : True := by\n  sorry\ntheorem b2 : True := sorry -- still\n")
@@ -109,5 +109,20 @@ func TestOutputsSorryNoteIsMeasuredOnTheMirroredFiles(t *testing.T) {
 	RegisterConv(0, conv, "o/r", "theorize_chunk_4", 0)
 	if WritebackNote("", conv) != got {
 		t.Fatal("a continued theory conversation (no fork role) did not get the note")
+	}
+}
+
+// 11/04: a round spent on `ls /mnt/user-data/outputs` after each writeback. The note names
+// the files, so the listing is already there.
+func TestTheWritebackNoteNamesTheFilesNotOnlyTheirCount(t *testing.T) {
+	old := outputsLeanFn
+	t.Cleanup(func() { outputsLeanFn = old })
+	outputsLeanFn = func(string) []chunkFile {
+		return []chunkFile{{Name: "GgufReader.lean", Content: []byte("theorem a : True := trivial")},
+			{Name: "MtpDrafter.lean", Content: []byte("theorem b : True := trivial")}}
+	}
+	n := OutputsSorryNote()
+	if !strings.Contains(n, "GgufReader.lean (") || !strings.Contains(n, "MtpDrafter.lean (") {
+		t.Fatalf("%s", n)
 	}
 }
