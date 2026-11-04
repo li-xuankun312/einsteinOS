@@ -119,7 +119,12 @@ func (r *devRun) requirements(unit DevPlanNode) UnitRequirements {
 	if r.plan != nil {
 		sha = r.plan.RefSHA
 	}
-	req := measureUnitRequirements(r.repo, sha, devUnitFromNode(unit, r.sections).Theory)
+	var req UnitRequirements
+	if len(unit.Sources) > 0 {
+		req = requirementsForSources(r.repo, sha, unit.Sources)
+	} else {
+		req = measureUnitRequirements(r.repo, sha, devUnitFromNode(unit, r.sections).Theory)
+	}
 	logUnitRequirements(r.repo, unit.ID, req)
 	r.reqs[unit.ID] = req
 	return req
@@ -184,6 +189,23 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 		pid: pid, repo: repo, devRepo: devRepo, branch: branch, task: task,
 		hwInfo: hwInfo, gpuAll: gpuAll,
 		plan: plan, sections: dev_extract_file_sections(theory),
+	}
+
+	// every code file of the reference commit has a unit: the ones no theory unit's measured
+	// sources include get port units, one per directory
+	if all := refPortSources(repo, plan.RefSHA); len(all) > 0 {
+		covered := map[string]bool{}
+		for _, l := range plan.Leaves() {
+			if len(l.Sources) == 0 {
+				for _, f := range run.requirements(l).Sources {
+					covered[f] = true
+				}
+			}
+		}
+		if n := plan.AddPortUnits(all, covered); n > 0 {
+			log.Printf("dev_plan: %s reference has %d code files; theory units cover %d; %d port unit(s) added for the rest", repo, len(all), len(covered), n)
+			devPlanSave(repo, devRepo, branch, plan, fmt.Sprintf("plan: %d port units", n))
+		}
 	}
 
 	var lastStdout string

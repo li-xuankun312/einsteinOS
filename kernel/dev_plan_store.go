@@ -24,6 +24,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"path"
 	"sort"
 	"strings"
 )
@@ -69,6 +70,9 @@ type DevPlanNode struct {
 	Children []string `json:"children,omitempty"`
 	Reason   string   `json:"reason,omitempty"` // why it was split / created
 	Conv     string   `json:"conv,omitempty"`   // the conversation that passed it (an address, not text)
+	// Sources: a port unit's reference files (no theory module covers them); its pass is
+	// recorded in DevPlan.PortPass
+	Sources []string `json:"sources,omitempty"`
 }
 
 // DevFailure is why a unit's last attempt did not pass, and where its code is,
@@ -101,6 +105,10 @@ type DevPlan struct {
 	// that stops here (11/04 10:16:54: u9dc1be2eae pushed at 10:16:47, Ctrl+C before its
 	// review) resumes with the review instead of writing and verifying the unit again.
 	ReviewPending map[string]map[string]string `json:"review_pending,omitempty"`
+	// PortUnits: one unit per reference directory whose code files no theory unit covers;
+	// 11/04 the theory covered 58 of the commit's files and the rest had no unit at all.
+	PortUnits []DevPlanNode   `json:"port_units,omitempty"`
+	PortPass  map[string]bool `json:"port_pass,omitempty"`
 
 	// silent counts, per unit, the conversations IN A ROW that wrote no file. In memory
 	// only: a restart is a person deciding to try again, and starts the count over.
@@ -380,7 +388,39 @@ func (p *DevPlan) Leaves() []DevPlanNode {
 			walk(n)
 		}
 	}
-	return out
+	return append(out, p.PortUnits...)
+}
+
+// AddPortUnits adds a unit for each reference directory with code files that covered does
+// not contain, and returns how many it added.
+func (p *DevPlan) AddPortUnits(all []string, covered map[string]bool) int {
+	byDir := map[string][]string{}
+	var dirs []string
+	for _, f := range all {
+		if covered[f] {
+			continue
+		}
+		d := path.Dir(f)
+		if _, ok := byDir[d]; !ok {
+			dirs = append(dirs, d)
+		}
+		byDir[d] = append(byDir[d], f)
+	}
+	sort.Strings(dirs)
+	have := map[string]bool{}
+	for _, u := range p.PortUnits {
+		have[u.ID] = true
+	}
+	added := 0
+	for _, d := range dirs {
+		id := "p" + devUnitID(byDir[d], "port")[1:]
+		if have[id] {
+			continue
+		}
+		p.PortUnits = append(p.PortUnits, DevPlanNode{ID: id, Sources: byDir[d], Reason: "port: reference files of " + d + " no theory unit covers"})
+		added++
+	}
+	return added
 }
 
 func (p *DevPlan) keysOf(n DevPlanNode) []string {
@@ -395,6 +435,9 @@ func (p *DevPlan) keysOf(n DevPlanNode) []string {
 // content is the one that passed (a module whose theory changed has to be done
 // again).
 func (p *DevPlan) UnitPass(n DevPlanNode) bool {
+	if len(n.Sources) > 0 {
+		return p.PortPass[n.ID]
+	}
 	for _, m := range n.Modules {
 		st, ok := p.State[stateKey(m, n.Scope)]
 		if !ok || !st.Pass {
@@ -431,6 +474,13 @@ func (p *DevPlan) TakeReviewPending(id string) (map[string]string, bool) {
 }
 
 func (p *DevPlan) MarkUnitPass(n DevPlanNode) {
+	if len(n.Sources) > 0 {
+		if p.PortPass == nil {
+			p.PortPass = map[string]bool{}
+		}
+		p.PortPass[n.ID] = true
+		return
+	}
 	for _, m := range n.Modules {
 		p.State[stateKey(m, n.Scope)] = DevModuleState{Hash: p.Modules[m].Hash, Pass: true, UnitID: n.ID}
 	}

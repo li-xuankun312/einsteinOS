@@ -201,31 +201,7 @@ func measureUnitRequirements(repo, sha, unitTheory string) UnitRequirements {
 			req.Evidence[f] = append(req.Evidence[f], ev[f]...)
 		}
 	}
-	sort.Strings(req.Sources)
-	for _, f := range req.Sources {
-		if text, err := refGitFn(bare, "show", sha+":"+f); err == nil {
-			req.Symbols = append(req.Symbols, SymbolsOf(f, text)...)
-		}
-	}
-	flags := refPerSourceFlags(bare, sha)
-	isa := map[string]bool{}
-	for _, f := range req.Sources {
-		for _, ext := range gpuSourceExts {
-			if strings.HasSuffix(f, ext) {
-				req.GPUSources = append(req.GPUSources, f)
-			}
-		}
-		if fl := flags[f]; len(fl) > 0 {
-			req.FlagFiles[f] = fl
-			for _, x := range fl {
-				isa[x] = true
-			}
-		}
-	}
-	for x := range isa {
-		req.ISAFlags = append(req.ISAFlags, x)
-	}
-	sort.Strings(req.ISAFlags)
+	finishRequirements(bare, sha, &req)
 	return req
 }
 
@@ -289,4 +265,63 @@ func (u UnitRequirements) Status() map[string]string {
 		st["reference_isa_flags"] = strings.Join(u.ISAFlags, " ")
 	}
 	return st
+}
+
+// finishRequirements measures, for req.Sources, their definitions, the CUDA files among them
+// and the compile options the reference's build gives them.
+func finishRequirements(bare, sha string, req *UnitRequirements) {
+	sort.Strings(req.Sources)
+	for _, f := range req.Sources {
+		if text, err := refGitFn(bare, "show", sha+":"+f); err == nil {
+			req.Symbols = append(req.Symbols, SymbolsOf(f, text)...)
+		}
+	}
+	flags := refPerSourceFlags(bare, sha)
+	isa := map[string]bool{}
+	for _, f := range req.Sources {
+		for _, ext := range gpuSourceExts {
+			if strings.HasSuffix(f, ext) {
+				req.GPUSources = append(req.GPUSources, f)
+			}
+		}
+		if fl := flags[f]; len(fl) > 0 {
+			req.FlagFiles[f] = fl
+			for _, x := range fl {
+				isa[x] = true
+			}
+		}
+	}
+	for x := range isa {
+		req.ISAFlags = append(req.ISAFlags, x)
+	}
+	sort.Strings(req.ISAFlags)
+}
+
+// requirementsForSources measures a unit whose reference files are given (a port unit) rather
+// than found from theory identifiers.
+func requirementsForSources(repo, sha string, sources []string) UnitRequirements {
+	req := UnitRequirements{Sources: append([]string(nil), sources...), FlagFiles: map[string][]string{}, Evidence: map[string][]string{}}
+	finishRequirements(refBareDir(repo), sha, &req)
+	return req
+}
+
+// portSourceRe: the files of a reference commit that are code to port (tests, parity checks
+// and benchmarks excluded by refNotSourceRe).
+var portSourceRe = regexp.MustCompile(`\.(cu|cuh|cpp|cc|c|h|hpp|hh|inc|py)$`)
+
+// refPortSources lists every file of the reference commit that is code to port.
+func refPortSources(repo, sha string) []string {
+	out, err := refGitFn(refBareDir(repo), "ls-tree", "-r", "--name-only", sha)
+	if err != nil {
+		return nil
+	}
+	var files []string
+	for _, f := range strings.Split(out, "\n") {
+		f = strings.TrimSpace(f)
+		if f != "" && portSourceRe.MatchString(f) && !refNotSourceRe.MatchString(f) {
+			files = append(files, f)
+		}
+	}
+	sort.Strings(files)
+	return files
 }
