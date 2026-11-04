@@ -1,6 +1,7 @@
 package claudeweb
 
 import (
+	"regexp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -126,11 +127,11 @@ func localResultHeader(result string) string {
 // tool ran here and exited 0 — an Axle answer, a failure or a skipped tool is something the
 // child has not seen yet. A report written before the results (hw_probe, review, planner)
 // still needs the round that reads them.
-func doneInToolRound(role string, results []ToolResult) bool {
+func doneInToolRound(role string, results []ToolResult, skippedVerify int) bool {
 	if !strings.HasPrefix(role, "dev_unit") && !strings.HasPrefix(role, "dev_fix") {
 		return false
 	}
-	if len(results) == 0 {
+	if len(results) == 0 && skippedVerify == 0 {
 		return false
 	}
 	for _, r := range results {
@@ -139,6 +140,18 @@ func doneInToolRound(role string, results []ToolResult) bool {
 		}
 	}
 	return true
+}
+
+var ownVerifyRe = regexp.MustCompile(`\.einsteinOS/verify/[A-Za-z0-9_-]+/(build|test)\.sh|\$[A-Za-z_]+/(build|test)\.sh`)
+
+// runsOwnVerifyScript: a bash command that runs a unit's verify script.
+func runsOwnVerifyScript(inputJSON string) bool {
+	var in struct {
+		Command string `json:"command"`
+	}
+	// a command that also writes files is run: skipping it would lose them
+	return json.Unmarshal([]byte(inputJSON), &in) == nil && ownVerifyRe.MatchString(in.Command) &&
+		!gitWriteRe.MatchString(in.Command)
 }
 
 func writebackText(results []ToolResult) string {
@@ -752,7 +765,18 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 		}
 
 		var toolResults []ToolResult
+		// a dev unit's done round: its own verify scripts are run by the kernel on the real
+		// machine right after, so they are not run here too (11/04 unit 1 ran its build.sh
+		// five times: twice in the sandbox, twice replayed here, once verified)
+		doneRound := strings.HasPrefix(childRole, "dev_") && stopReason == "end_turn" && kernel.HasDoneMarker(textBuf.String())
+		skippedVerify := 0
 		for _, tb := range collectedTools {
+			if doneRound && runsOwnVerifyScript(tb.inputJSON.String()) {
+				st.ledger.record(tb.id, "")
+				skippedVerify++
+				log.Printf("[shadow] skip: the unit's verify script in its done round — the kernel runs it on the real machine next")
+				continue
+			}
 			result := m.shadowExecute(convID, tb.name, tb.inputJSON.String())
 			st.ledger.record(tb.id, result) // cached even when "" (shadow skipped it)
 			// shadow returns "" when it intentionally skips execution:
@@ -831,7 +855,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 			// is nothing the extra round would learn. 11/04: 12 of the 16 dev/review
 			// conversations ended "one round of work, one round that says done".
 			if len(collectedTools) > 0 && stopReason == "end_turn" && kernel.HasDoneMarker(textBuf.String()) &&
-				doneInToolRound(childRole, toolResults) && settledNow(convID) {
+				doneInToolRound(childRole, toolResults, skippedVerify) && settledNow(convID) {
 				log.Printf("claudeweb: done marker in tool round %d and every local result exited 0 — ending without an extra round", st.rounds)
 				kernel.StoreSignal(kernel.GetLastForkedPid(), &kernel.StopSignal{Reason: "done_marker"})
 				if t := terminalText(textBuf.String()); t != "" {
