@@ -89,7 +89,7 @@ func PRFork(repo, branch, title string, refs []RefRepo) (int64, error) {
 
 	metaMu.Lock()
 	taskMeta[int64(pid)] = &TaskMeta{
-		Prompt: fmt.Sprintf("[PR] %s: %s", repo, title),
+		Prompt: prPrompt(repo, title),
 		Pwd:    ".",
 		Done:   make(chan struct{}),
 	}
@@ -270,4 +270,13 @@ func PRPs() string {
 			t.Pid, t.Counter, state, len(pr.Commits), repo, title)
 	}
 	return out
+}
+
+// prPrompt is the task line of a PR. A PR created before its repo is known has repo ".":
+// 11/04 every [TASK] began "[PR] .: 项目在 …".
+func prPrompt(repo, title string) string {
+	if r := strings.TrimSpace(repo); r != "" && r != "." {
+		return fmt.Sprintf("[PR] %s: %s", r, title)
+	}
+	return "[PR] " + title
 }
