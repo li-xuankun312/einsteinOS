@@ -166,6 +166,18 @@ func (s *ShadowExecutor) Execute(toolName string, inputJSON string) string {
 		// child cloned (kernel/git_twin.go): a clone is mirrored once, shallow, with
 		// the kernel's own credentials; the child's token is never used.
 		kernel.GitTwinSync(command, s.WorkDir)
+		if gitCommandWritesFiles(command) {
+			// 11/03 21:37:38 unit 11 wrote its build.sh and test.sh in a command that also ran
+			// git: the whole command was skipped here, the files never reached this machine,
+			// and the kernel's verification found compile=missing. Such a command now runs
+			// here with git's network and remote commands as no-ops (gitShim), so the files
+			// it writes arrive; the sandbox's output still stands.
+			if pid, err := kernel.ForkExec(gitShim+command, s.WorkDir); err == nil {
+				_, code, _ := kernel.Wait(pid)
+				log.Printf("[shadow] git command that also writes files: ran here with git clone/fetch/push/pull as no-ops (exit %d); the sandbox's output stands", code)
+			}
+			return ""
+		}
 		log.Printf("[shadow] skip git (remote has full output)")
 		return ""
 	}
@@ -334,6 +346,21 @@ func isCurlOrWget(command string) bool {
 		return true
 	}
 	return false
+}
+
+// gitShim makes git's network and remote commands no-ops for a command run on this machine
+// (the sandbox already ran them), lets every other git command touch the local tree, and
+// never stops a && chain.
+const gitShim = `git() { local a=("$@") i=0; while [ $i -lt ${#a[@]} ]; do case "${a[$i]}" in -C|-c) i=$((i+2));; -*) i=$((i+1));; *) break;; esac; done; ` +
+	`case "${a[$i]}" in clone|fetch|push|pull|remote|ls-remote|submodule) return 0;; esac; ` +
+	`GIT_AUTHOR_NAME=shadow GIT_AUTHOR_EMAIL=shadow@local GIT_COMMITTER_NAME=shadow GIT_COMMITTER_EMAIL=shadow@local command git "$@" >/dev/null 2>&1; return 0; }
+`
+
+var gitWriteRe = regexp.MustCompile(`(^|[^0-9&>])>>?\s*[^&\s/]|\btee\s|\bcp\s|\bmv\s|\bmkdir\s|\bsed\s+-i|\bpython3?\b|\btouch\s|\binstall\s|\bpatch\s|\bunzip\s|\btar\s+-?x`)
+
+// gitCommandWritesFiles: a command that runs git and also writes files on its own.
+func gitCommandWritesFiles(command string) bool {
+	return gitWriteRe.MatchString(command)
 }
 
 func isGitCommand(command string) bool {
