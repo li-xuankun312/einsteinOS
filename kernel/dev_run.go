@@ -286,6 +286,12 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 		baseRef = fail.BaseRef
 	}
 
+	if st, ok := plan.ReviewPending[unit.ID]; ok {
+		log.Printf("dev_from_theorems: %s unit %d/%d id=%s was verified and pushed before the run stopped — resuming with its review",
+			r.repo, idx+1, total, unit.ID)
+		return r.reviewUnit(unit, idx, total, "", st, "")
+	}
+
 	cloneDir, err := devRepoLocalDir(r.devRepo)
 	if err != nil {
 		log.Printf("dev_run: %s no local clone: %v", r.repo, err)
@@ -429,9 +435,18 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 	}
 
 	// ---- verified on the real machine and pushed; now the reviewer reads the real branch -----------------
+	plan.MarkReviewPending(unit.ID, st)
+	devPlanSave(r.repo, r.devRepo, r.branch, plan, fmt.Sprintf("plan: unit %s verified, review pending", unit.ID))
 	if convID != "" {
 		dev_store_conv(convID, r.repo, r.branch, unit.ID, st)
 	}
+	return r.reviewUnit(unit, idx, total, convID, st, stdout)
+}
+
+// reviewUnit runs the review of a verified unit and records its verdict.
+func (r *devRun) reviewUnit(unit DevPlanNode, idx, total int, convID string, st map[string]string, stdout string) (string, bool, bool) {
+	plan := r.plan
+	plan.TakeReviewPending(unit.ID)
 	du := devUnitFromNode(unit, r.sections)
 	verdict := dev_review_unit(r.pid, r.repo, r.branch, idx+1, total, du, st)
 	log.Printf("dev_from_theorems: %s unit %d/%d id=%s review → %s", r.repo, idx+1, total, unit.ID, verdict)

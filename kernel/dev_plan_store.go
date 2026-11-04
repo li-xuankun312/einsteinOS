@@ -96,6 +96,11 @@ type DevPlan struct {
 	FailHistory map[string][]string   `json:"fail_history,omitempty"`
 	LastFailure map[string]DevFailure `json:"last_failure"` // unit id -> why the last attempt failed
 	InfraFails  int                   `json:"infra_fails"`  // consecutive git/push failures (not the child's fault)
+	// ReviewPending: units whose code passed the real-machine verification and is on the dev
+	// branch, but whose review has not answered yet — unit id -> the verified status. A run
+	// that stops here (11/04 10:16:54: u9dc1be2eae pushed at 10:16:47, Ctrl+C before its
+	// review) resumes with the review instead of writing and verifying the unit again.
+	ReviewPending map[string]map[string]string `json:"review_pending,omitempty"`
 
 	// silent counts, per unit, the conversations IN A ROW that wrote no file. In memory
 	// only: a restart is a person deciding to try again, and starts the count over.
@@ -403,6 +408,28 @@ func (p *DevPlan) UnitPass(n DevPlanNode) bool {
 }
 
 // MarkUnitPass records the pass on the modules.
+// MarkReviewPending records that unit id's verified code is on the dev branch and its review
+// has not answered yet.
+func (p *DevPlan) MarkReviewPending(id string, status map[string]string) {
+	if p.ReviewPending == nil {
+		p.ReviewPending = map[string]map[string]string{}
+	}
+	keep := map[string]string{}
+	for _, k := range []string{"compile", "smoke", "existing_code"} {
+		if v := status[k]; v != "" {
+			keep[k] = v
+		}
+	}
+	p.ReviewPending[id] = keep
+}
+
+// TakeReviewPending returns and clears unit id's pending review, if any.
+func (p *DevPlan) TakeReviewPending(id string) (map[string]string, bool) {
+	st, ok := p.ReviewPending[id]
+	delete(p.ReviewPending, id)
+	return st, ok
+}
+
 func (p *DevPlan) MarkUnitPass(n DevPlanNode) {
 	for _, m := range n.Modules {
 		p.State[stateKey(m, n.Scope)] = DevModuleState{Hash: p.Modules[m].Hash, Pass: true, UnitID: n.ID}
