@@ -30,10 +30,14 @@ const thi_output = `output one .lean file per module via create_file.
 file: %[1]s/<CamelCaseName>.lean — name by what the code DOES, not the source path.
 `
 
+// thi_structure: the SOURCES line is what the kernel's coverage check reads. Matching by
+// name alone missed short ones: 11/04 03:13:42 chunk 5 was continued for src/kernels/cuda/
+// ple.cu and qsa.cu, already covered by PleBlockGpu.lean and QsaCacheIndexerAttention.lean.
 const thi_structure = `each .lean file:
 
 /-!
 # MODULE: <snake_case_name>
+SOURCES: <every reference file this module covers, by its full repo path, comma-separated>
 <what this module does — 1-3 sentences>
 
 ## Source semantics

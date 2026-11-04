@@ -1003,6 +1003,7 @@ func chunk_fill_missing(convID string, chunk []string, result, tag string) (stri
 		for _, f := range cov.Missing {
 			prompt.WriteString(f + "\n")
 		}
+		prompt.WriteString("a file an existing module already covers: add its path to that module's SOURCES line (the coverage check reads it); otherwise write the module.\n")
 		contResult, _ := ContinueConv(convID, prompt.String())
 		if full, err := DownloadConv(convID); err == nil && len(full) > len(result) {
 			log.Printf("ref_split: %s ContinueConv + re-download: %d bytes (was %d)", tag, len(full), len(result))
