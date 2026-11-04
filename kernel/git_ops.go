@@ -356,6 +356,13 @@ func rejectionReason(output string) string {
 	return strings.Join(kept, " | ")
 }
 
+// gitTokenFn: the GitHub token, if one is here (a variable for tests).
+var gitTokenFn = GetGHToken
+
+// gitPushSwitchAfter: consecutive push failures on one transport before the next attempt
+// goes over the other.
+const gitPushSwitchAfter = 3
+
 // gitPushServerSide reports whether a push was refused by a server-side error on GitHub's
 // end — retrying the same push can succeed — and which. A refusal of the update itself
 // (non-fast-forward, a protected branch, a hook that declined it) is not: the same push
@@ -389,13 +396,31 @@ func GitPushRetry(repoDir, ownerRepo, branch string, maxRetry int) error {
 	// no deploy key is configured here (e.g. a different machine that hasn't set
 	// one up), so this never regresses an environment that relied on HTTPS push
 	// actually working.
-	pushURL := sshRemoteURL(ownerRepo)
-	sshEnv := ""
-	usingSSH := gitSSHAvailable()
-	if usingSSH {
-		sshEnv = fmt.Sprintf("GIT_SSH_COMMAND=%q ", gitSSHCommand())
-	} else {
-		pushURL = CloneURL(ownerRepo)
+	keyHere := gitSSHFn()
+	usingSSH := gitRouteStartSSH(keyHere)
+	// 11/04 09:43-09:46 and 10:13-10:16: 17 and 14 SSH attempts (start timeouts and
+	// "Permission denied (publickey)" for a key that worked before and after) while HTTPS
+	// fetches of the same repo took 2 s. The push now alternates: after
+	// gitPushSwitchAfter consecutive failures on one transport it tries the other, when
+	// there is one (a deploy key for SSH, a token for HTTPS).
+	tokenHere := gitTokenFn() != ""
+	streak := 0
+	route := func() (url, env string) {
+		if usingSSH {
+			return sshRemoteURL(ownerRepo), fmt.Sprintf("GIT_SSH_COMMAND=%q ", gitSSHCommand())
+		}
+		return CloneURL(ownerRepo), ""
+	}
+	failed := func(attempt int) {
+		gitRouteNote(usingSSH, false)
+		if streak++; streak < gitPushSwitchAfter {
+			return
+		}
+		if other := !usingSSH; (other && keyHere) || (!other && tokenHere) {
+			usingSSH, streak = other, 0
+			log.Printf("git_push: %d failures in a row — attempt %d goes over %s", gitPushSwitchAfter, attempt+1,
+				map[bool]string{true: "SSH", false: "HTTPS"}[usingSSH])
+		}
 	}
 	if floor := gitPushAttempts(); maxRetry < floor {
 		maxRetry = floor // see gitPushAttempts: a zero-byte connection failure needs
@@ -403,8 +428,9 @@ func GitPushRetry(repoDir, ownerRepo, branch string, maxRetry int) error {
 		// in a real run (20/20 failed)
 	}
 	log.Printf("git_push: %s using %s (%s)", branch, map[bool]string{true: "SSH", false: "HTTPS"}[usingSSH],
-		map[bool]string{true: gitSSHKeyPath(), false: "no deploy key found, falling back to token"}[usingSSH])
+		map[bool]string{true: gitSSHKeyPath(), false: "token"}[usingSSH])
 	for attempt := 1; attempt <= maxRetry; attempt++ {
+		pushURL, sshEnv := route()
 		// --progress forces git to emit "Counting objects...", "Writing objects..."
 		// etc to stderr even though stdout/stderr are not a terminal. Without it a
 		// push that is slow but succeeding prints NOTHING until it is completely
@@ -413,7 +439,7 @@ func GitPushRetry(repoDir, ownerRepo, branch string, maxRetry int) error {
 		// killing pushes that were actually working, not just ones that never
 		// connected.
 		pushCmd := fmt.Sprintf("cd %q && %sgit push --progress %q %s", repoDir, sshEnv, pushURL, branch)
-		r := gitGuard(pushCmd, repoDir, gitStartWindow, gitPushMaxRun, gitPushStallTimeout, func(elapsed time.Duration, line string) {
+		r := gitGuardFn(pushCmd, repoDir, gitStartWindow, gitPushMaxRun, gitPushStallTimeout, func(elapsed time.Duration, line string) {
 			// this IS the live "it's connected and moving" signal the silent final
 			// verdict couldn't give: proof that bytes are actually flowing, with real
 			// content (percent complete, object counts), not just elapsed time
@@ -422,6 +448,7 @@ func GitPushRetry(repoDir, ownerRepo, branch string, maxRetry int) error {
 		if !r.Started {
 			log.Printf("git_push: attempt %d/%d start timeout (%s, no progress output at all — likely never connected), retrying",
 				attempt, maxRetry, gitStartWindow)
+			failed(attempt)
 			continue // no sleep — only waited the start window
 		}
 		if r.TimedOut {
@@ -432,6 +459,7 @@ func GitPushRetry(repoDir, ownerRepo, branch string, maxRetry int) error {
 			// connected" and is logged as such.
 			log.Printf("git_push: attempt %d/%d connected and made progress but did not finish within %s, retrying: %s",
 				attempt, maxRetry, gitPushMaxRun, truncStr(lastProgressLine(r.Out), 160))
+			failed(attempt)
 			continue
 		}
 		result := r.Out
@@ -439,6 +467,7 @@ func GitPushRetry(repoDir, ownerRepo, branch string, maxRetry int) error {
 		// contains "->" too, and used to be read as success. Retrying the same push
 		// cannot change a rejection, so stop with the reason.
 		if transient, why := gitPushServerSide(result); transient {
+			gitRouteNote(usingSSH, true) // the transport worked; GitHub's side did not
 			// 11/04 09:35-09:56 (a GitHub Git Operations incident): the pack was uploaded
 			// ("Total 18 (delta 11)") and GitHub answered "! [remote rejected] … (Internal
 			// Server Error)" / "(failure)". That is GitHub's state, not the branch's: the
@@ -464,10 +493,18 @@ func GitPushRetry(repoDir, ownerRepo, branch string, maxRetry int) error {
 		}
 		// success indicators
 		if strings.Contains(result, "->") || strings.Contains(result, "Everything up-to-date") || strings.Contains(result, "already exists") {
-			log.Printf("git_push: %s:%s ok (attempt %d)", ownerRepo, branch, attempt)
+			gitRouteNote(usingSSH, true)
+			log.Printf("git_push: %s:%s ok (attempt %d, %s)", ownerRepo, branch, attempt, map[bool]string{true: "SSH", false: "HTTPS"}[usingSSH])
 			return nil
 		}
 		log.Printf("git_push: attempt %d/%d failed: %s", attempt, maxRetry, truncStr(result, 200))
+		if gitAuthFailure(result) && !usingSSH && keyHere {
+			// the token is refused; the deploy key is a different credential
+			log.Printf("git_push: the token was refused — back to SSH")
+			usingSSH, streak = true, 0
+			continue
+		}
+		failed(attempt)
 		if gitAuthFailure(result) {
 			return fmt.Errorf("push rejected by GitHub (credentials invalid, expired, or without write access to %s) — not retrying: %s",
 				ownerRepo, truncStr(strings.TrimSpace(result), 160))
