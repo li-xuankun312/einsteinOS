@@ -7,6 +7,7 @@ import (
 	"iter"
 	"log"
 	"os"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -175,6 +176,19 @@ func (m *Model) shadowExecute(convID, toolName, inputJSON string) string {
 		out := kernel.HandleEinsteinCommand(convID, cmd)
 		log.Printf("[kernel-cmd] %s: %s → %s", truncate(convID, 8), truncateCmd(cmd, 100), truncate(out, 160))
 		return out
+	}
+	if toolName == "str_replace" {
+		var in struct {
+			Path   string `json:"path"`
+			OldStr string `json:"old_str"`
+			NewStr string `json:"new_str"`
+		}
+		if json.Unmarshal([]byte(inputJSON), &in) == nil && strings.HasSuffix(in.Path, ".lean") {
+			if o, n := extractTheoremSig(in.OldStr), extractTheoremSig(in.NewStr); o != "" && n != "" && o != n {
+				sig := kernel.RecordStatementChange(convID, path.Base(in.Path), o, n)
+				log.Printf("[shadow] statement change measured: %s", strings.Join(sig, "; "))
+			}
+		}
 	}
 	return m.Shadow.Execute(toolName, inputJSON)
 }

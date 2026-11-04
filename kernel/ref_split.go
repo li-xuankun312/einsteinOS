@@ -362,6 +362,10 @@ func ref_split_with(parent_pid int64, owner, repo, sha string, files []string, t
 		if files := chunkFilesFor(storeConvID); len(files) > 0 {
 			theory = renderChunkFiles(files)
 			nfiles = len(files)
+			if ch := StatementChangesFor(storeConvID); len(ch) > 0 {
+				theory += renderStatementChanges(ch)
+				log.Printf("ref_split: chunk %d/%d: %d statement(s) changed after verification, recorded in its theory", i+1, len(chunks), len(ch))
+			}
 			log.Printf("ref_split: chunk %d/%d theory = %d file(s) from the sandbox, %d bytes (transcript was %d)",
 				i+1, len(chunks), len(files), len(theory), len(result))
 		}
