@@ -49,6 +49,16 @@ func (w *progressWatch) touch() {
 	w.mu.Unlock()
 }
 
+// pause stops the silence clock without cancelling: the kernel is sleeping on purpose (a
+// quota reset, a Cloudflare wait), and there is no stream to be silent. 11/04 08:18:52 logged
+// "no byte from the stream for 5m0s — cancelling it" five minutes into a 55-minute quota
+// sleep that had no stream at all. The next attempt starts a fresh watch.
+func (w *progressWatch) pause() {
+	w.mu.Lock()
+	w.timer.Stop()
+	w.mu.Unlock()
+}
+
 // stop releases the context (the caller is done with the request or the stream).
 func (w *progressWatch) stop() {
 	w.mu.Lock()

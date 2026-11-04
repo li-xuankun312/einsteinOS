@@ -137,9 +137,11 @@ func (c *Client) Completion(convID string, req *CompletionRequest) (io.ReadClose
 				if isProxyThrottle(errStr) {
 					if waitDur := parseRetryAfter(errStr); waitDur > 0 {
 						log.Printf("claudeweb: proxy throttle, sleeping %v until quota resets", waitDur)
+						watch.pause()
 						sleepWithHeartbeat(waitDur)
 					} else {
 						log.Printf("claudeweb: proxy throttle, waiting 2 minutes before retry")
+						watch.pause()
 						sleepWithHeartbeat(2 * time.Minute)
 					}
 					lastErr = &RateLimitError{Body: errStr}
@@ -153,6 +155,7 @@ func (c *Client) Completion(convID string, req *CompletionRequest) (io.ReadClose
 			if resp.StatusCode == 403 && contains(errStr, "Just a moment") {
 				// Cloudflare challenge — IP flagged, wait and retry
 				log.Printf("claudeweb: Cloudflare challenge, waiting 3 minutes before retry")
+				watch.pause()
 				sleepWithHeartbeat(3 * time.Minute)
 				lastErr = fmt.Errorf("cloudflare 403: challenge page")
 				continue
@@ -172,6 +175,7 @@ func (c *Client) Completion(convID string, req *CompletionRequest) (io.ReadClose
 	// especially important for Continue (writeback) where the child's work is done.
 	log.Printf("claudeweb: fast retries exhausted, entering slow retry (3 attempts, 3min intervals)")
 	for slowAttempt := 0; slowAttempt < 3; slowAttempt++ {
+		watch.pause()
 		sleepWithHeartbeat(3 * time.Minute)
 		log.Printf("claudeweb: slow retry %d/3", slowAttempt+1)
 		watch.stop()
