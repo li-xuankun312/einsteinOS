@@ -119,6 +119,28 @@ func localResultHeader(result string) string {
 // writebackText is the message that hands the local results back. With no results it is
 // just "Continue.": 11/04 09:53:39 (and five times on 11/03) a text-only round got the
 // header "… use these:" followed by nothing, which reads as results that went missing.
+// doneInToolRound: may a conversation of this role end on a done marker in the same round
+// as its tools? Only dev units and their fixes: their final text is not the product (the
+// kernel verifies the code on the real machine afterwards). A theory chunk is left out — its
+// verification answers come from Axle, which the sandbox cannot see. And only when every
+// tool ran here and exited 0 — an Axle answer, a failure or a skipped tool is something the
+// child has not seen yet. A report written before the results (hw_probe, review, planner)
+// still needs the round that reads them.
+func doneInToolRound(role string, results []ToolResult) bool {
+	if !strings.HasPrefix(role, "dev_unit") && !strings.HasPrefix(role, "dev_fix") {
+		return false
+	}
+	if len(results) == 0 {
+		return false
+	}
+	for _, r := range results {
+		if !strings.Contains(r.Content, " exit=0] ") {
+			return false
+		}
+	}
+	return true
+}
+
 func writebackText(results []ToolResult) string {
 	if len(results) == 0 {
 		return "Continue."
@@ -804,6 +826,23 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 					doExit(exitNormal, fmt.Sprintf("[terminated: %s]", sig.Reason))
 					return
 				}
+			}
+			// a done marker in a round that ran tools: when every local result exited 0 there
+			// is nothing the extra round would learn. 11/04: 12 of the 16 dev/review
+			// conversations ended "one round of work, one round that says done".
+			if len(collectedTools) > 0 && stopReason == "end_turn" && kernel.HasDoneMarker(textBuf.String()) &&
+				doneInToolRound(childRole, toolResults) && settledNow(convID) {
+				log.Printf("claudeweb: done marker in tool round %d and every local result exited 0 — ending without an extra round", st.rounds)
+				kernel.StoreSignal(kernel.GetLastForkedPid(), &kernel.StopSignal{Reason: "done_marker"})
+				if t := terminalText(textBuf.String()); t != "" {
+					kernel.NoteRoundText(convID, t, len(collectedTools), st.localDelivered)
+					yield(&model.LLMResponse{
+						Content: &genai.Content{Role: "model", Parts: []*genai.Part{{Text: t}}},
+						Partial: true,
+					}, nil)
+				}
+				doExit(exitNormal, "[terminated: done_marker]")
+				return
 			}
 			// check round-based / time-based conditions on text-only rounds
 			if len(collectedTools) == 0 {
