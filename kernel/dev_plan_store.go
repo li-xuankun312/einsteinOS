@@ -111,6 +111,8 @@ type DevPlan struct {
 	// 11/04 the theory covered 58 of the commit's files and the rest had no unit at all.
 	PortUnits []DevPlanNode   `json:"port_units,omitempty"`
 	PortPass  map[string]bool `json:"port_pass,omitempty"`
+	// VerifySeen: units one of whose conversations saw its verify scripts run here
+	VerifySeen map[string]bool `json:"verify_seen,omitempty"`
 	// Gates: the gate set the recorded passes were judged by (devGateSet)
 	Gates string `json:"gates,omitempty"`
 	// IntegrationUnit: judged by the reference's own registered tests (integration.go)

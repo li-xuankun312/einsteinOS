@@ -876,6 +876,9 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 			if b, t := ownVerifyScripts(tb.inputJSON.String()); (b || t) && strings.Contains(result, " exit=0] ") {
 				ranBuild, ranTest = ranBuild || b, ranTest || t
 			}
+			if b, t := ownVerifyScripts(tb.inputJSON.String()); (b || t) && strings.Contains(result, "[pid ") {
+				kernel.NoteVerifySeen(convID)
+			}
 			st.ledger.record(tb.id, result) // cached even when "" (shadow skipped it)
 			// shadow returns "" when it intentionally skips execution:
 			// axle verification, git, curl/wget, lean/elan, ssh, unknown tools.

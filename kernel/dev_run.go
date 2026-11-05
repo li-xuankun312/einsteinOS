@@ -337,7 +337,12 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 		unit := leaves[idx]
 
 		// whether to split is the kernel's call, from numbers
-		if need, why := dev_node_needs_split(plan, unit); need {
+		need, why := dev_node_needs_split(plan, unit)
+		if need && !plan.VerifySeen[unit.ID] && plan.FixAttempts[unit.ID] < 2*DevMaxFixAttempts {
+			log.Printf(devSplitUnseenFmt, repo, unit.ID, why)
+			need = false
+		}
+		if need {
 			if kids := dev_split_node(pid, plan, unit.ID, repo, devRepo, branch, theory, why); kids != nil {
 				continue // the leaves changed; look again
 			}
@@ -488,6 +493,12 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 	}
 
 	// the conversation may have started others; do not judge half a unit
+	if convID != "" && VerifySeen(convID) {
+		if plan.VerifySeen == nil {
+			plan.VerifySeen = map[string]bool{}
+		}
+		plan.VerifySeen[unit.ID] = true
+	}
 	if convID != "" {
 		if !WaitConvTree(convID, 90*time.Minute, 10*time.Second) {
 			log.Printf("dev_from_theorems: %s unit %s: conversations below %s still running after 90 min", r.repo, unit.ID, shortID(convID))
