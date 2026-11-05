@@ -147,7 +147,7 @@ func doneInToolRound(role string, results []ToolResult, verifiedHere bool) bool 
 var (
 	reviewVerdictRe = regexp.MustCompile(`(?m)^\s*\**(PASS|FAIL:.*)\**\s*$`)
 	// a command that changes anything or runs a program other than a reader
-	notReadOnlyRe = regexp.MustCompile(`\b(bash|sh|make|cmake|ninja|g\+\+|gcc|clang\+?\+?|nvcc|python3?|pip3?|rm|chmod|curl|wget)\s`)
+	notReadOnlyRe = regexp.MustCompile(`(?:^|[\s;&|(])(bash|sh|make|cmake|ninja|g\+\+|gcc|clang\+?\+?|nvcc|python3?|pip3?|rm|chmod|curl|wget)\s`)
 )
 
 // reviewDoneInToolRound: a review conversation whose round only read files and whose text

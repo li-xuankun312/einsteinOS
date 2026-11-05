@@ -62,6 +62,10 @@ func TestAReviewThatOnlyReadAndGaveItsVerdictEndsInThatRound(t *testing.T) {
 	if reviewDoneInToolRound("review_conv", append(reads, `{"command":"bash .einsteinOS/verify/u1/test.sh"}`), text) {
 		t.Fatal("it ran something: it needs the real result")
 	}
+	// 11/05 review 077eea45: "…/build.sh; …" in a read command was taken for running sh
+	if !reviewDoneInToolRound("review_conv", append(reads, `{"command":"cd /home/claude/r && cat include/x.hpp; ls .einsteinOS/verify/u1/build.sh tests | head"}`), text) {
+		t.Fatal("a path ending in .sh is not a program run")
+	}
 	if reviewDoneInToolRound("review_conv", reads, "analysis…\nEINSTEINOS_DONE") {
 		t.Fatal("no verdict yet")
 	}
