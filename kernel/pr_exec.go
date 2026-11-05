@@ -145,6 +145,12 @@ func PRRunNext(pid int64) (string, error) {
 		if strings.HasPrefix(step.Command, "start=") {
 			fmt.Sscanf(step.Command, "start=%d", &startIdx)
 		}
+		if startIdx == 0 {
+			if n := storedNextIndex(step.Owner + "/" + step.Repo); n > 0 {
+				log.Printf("ref_cursor: %s/%s resumes at commit index %d (stored when the previous pipeline completed)", step.Owner, step.Repo, n)
+				startIdx = n
+			}
+		}
 		result, err = ref_bind_at(pid, step.Owner, step.Repo, startIdx)
 
 	case STEP_REF_READ:

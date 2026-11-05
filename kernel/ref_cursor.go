@@ -59,6 +59,7 @@ func advanceAfterPipeline(pid int64, owner, repo string) bool {
 		return false
 	}
 	log.Printf(refCursorLogFmt, full, b.Idx, short_sha(b.SHA), next, b.Total, b.Total-next-1)
+	saveCursor(func(st *cursorState) { st.Next[full] = next })
 	pr_push_step(pid, &Step{Kind: STEP_REF_BIND, Owner: owner, Repo: repo, Command: fmt.Sprintf("start=%d", next)})
 	pr_push_step(pid, &Step{Kind: STEP_DEV_FROM_THEOREMS, Owner: owner, Repo: repo})
 	return true
@@ -82,6 +83,7 @@ func recordCompletedBranch(devRepo, branch string) {
 	devBasesMu.Lock()
 	defer devBasesMu.Unlock()
 	devBases[devRepo] = branch
+	saveCursor(func(st *cursorState) { st.Bases[devRepo] = branch })
 	log.Printf("ref_cursor: %s: the next pipeline's dev branch starts from %s", devRepo, branch)
 }
 
@@ -90,6 +92,9 @@ func devNewBranchBase(devRepo string) string {
 	devBasesMu.Lock()
 	defer devBasesMu.Unlock()
 	if b := devBases[devRepo]; b != "" {
+		return b
+	}
+	if b := storedBase(devRepo); b != "" {
 		return b
 	}
 	return devDefaultBase
