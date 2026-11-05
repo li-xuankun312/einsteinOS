@@ -35,6 +35,10 @@ var (
 	refSourceExts     = []string{"*.cu", "*.cuh", "*.cpp", "*.cc", "*.c", "*.h", "*.hpp"}
 	gpuSourceExts     = []string{".cu", ".cuh"}
 	refNotSourceRe    = regexp.MustCompile(`(_test|_parity|_bench)\.|(^|/)(tests?|bench)/`)
+	// refVendoredRe: code the reference vendors from elsewhere (third_party/ggml/ggml-common.h
+	// in Strata's first commit, 78 definitions). It is not the reference's own code: a port may
+	// vendor the same file, so its definitions are not a port requirement.
+	refVendoredRe = regexp.MustCompile(`(^|/)(third_party|thirdparty|3rdparty|vendor|vendored|external|extern|deps)/`)
 	backtickRe        = regexp.MustCompile("`([^`\\n]{1,200})`")
 	cIdentRe          = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]{3,}`)
 	mappingLineRe     = regexp.MustCompile(`->|<-|←|→`)
@@ -170,6 +174,8 @@ type UnitRequirements struct {
 	// RefRead: the reference commit could be read here, so an empty measurement means the
 	// reference really holds nothing for the unit (not that it was not looked at)
 	RefRead bool
+	// Vendored: sources the reference vendors (refVendoredRe), not ported
+	Vendored []string
 }
 
 // GPU: the unit's sources include CUDA.
@@ -281,6 +287,15 @@ func (u UnitRequirements) Status() map[string]string {
 // finishRequirements measures, for req.Sources, their definitions, the CUDA files among them
 // and the compile options the reference's build gives them.
 func finishRequirements(bare, sha string, req *UnitRequirements) {
+	var own []string
+	for _, f := range req.Sources {
+		if refVendoredRe.MatchString(f) {
+			req.Vendored = append(req.Vendored, f)
+			continue
+		}
+		own = append(own, f)
+	}
+	req.Sources = own
 	sort.Strings(req.Sources)
 	for _, f := range req.Sources {
 		if text, err := refGitFn(bare, "show", sha+":"+f); err == nil {
@@ -332,7 +347,7 @@ func refPortSources(repo, sha string) []string {
 	var files []string
 	for _, f := range strings.Split(out, "\n") {
 		f = strings.TrimSpace(f)
-		if f != "" && portSourceRe.MatchString(f) && !refNotSourceRe.MatchString(f) {
+		if f != "" && portSourceRe.MatchString(f) && !refNotSourceRe.MatchString(f) && !refVendoredRe.MatchString(f) {
 			files = append(files, f)
 		}
 	}

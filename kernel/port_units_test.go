@@ -43,3 +43,27 @@ func TestPassesJudgedByAnotherGateSetAreJudgedAgain(t *testing.T) {
 		t.Fatal("same gate set: kept")
 	}
 }
+
+// third_party/ggml/ggml-common.h (78 definitions) is vendored, not the reference's own code
+func TestVendoredReferenceCodeIsNotAPortRequirement(t *testing.T) {
+	for f, want := range map[string]bool{"third_party/ggml/ggml-common.h": true, "src/vendor/x.h": true, "src/core/layer.cpp": false, "include/extern_api.hpp": false} {
+		if refVendoredRe.MatchString(f) != want {
+			t.Errorf("%s: %v", f, !want)
+		}
+	}
+	old := refGitFn
+	defer func() { refGitFn = old }()
+	refGitFn = func(dir string, args ...string) (string, error) {
+		if args[0] == "ls-tree" {
+			return "third_party/ggml/ggml-common.h\nsrc/a.cpp\n", nil
+		}
+		return "int f() { return 1; }\n", nil
+	}
+	if got := refPortSources("o/r", "sha"); len(got) != 1 || got[0] != "src/a.cpp" {
+		t.Fatalf("%v", got)
+	}
+	r := requirementsForSources("o/r", "sha", []string{"third_party/ggml/ggml-common.h", "src/a.cpp"})
+	if len(r.Sources) != 1 || len(r.Vendored) != 1 || len(r.Symbols) != 1 {
+		t.Fatalf("%+v", r)
+	}
+}
