@@ -1,6 +1,7 @@
 package claudeweb
 
 import (
+	"path/filepath"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -312,7 +313,64 @@ func (m *Model) shadowExecute(convID, toolName, inputJSON string) string {
 			}
 		}
 	}
+	if toolName == "bash_tool" {
+		// a statement changed by a command (python, sed, a heredoc) rather than str_replace:
+		// measured from the .lean files before and after (11/04 03:11 and 03:13 were only
+		// caught because they came through str_replace)
+		before := leanStatements(kernel.TheoryOutputsDir)
+		out := m.Shadow.Execute(toolName, inputJSON)
+		for _, c := range statementDiffs(before, leanStatements(kernel.TheoryOutputsDir)) {
+			sig := kernel.RecordStatementChange(convID, c[0], c[1], c[2])
+			log.Printf("[shadow] statement changed by a command in %s: %s", c[0], strings.Join(sig, "; "))
+		}
+		return out
+	}
 	return m.Shadow.Execute(toolName, inputJSON)
+}
+
+var leanStmtStartRe = regexp.MustCompile(`(?m)^(?:theorem|lemma)\s`)
+
+// leanStatements: for every .lean file in dir, its theorem statements in order.
+func leanStatements(dir string) map[string][]string {
+	files, _ := filepath.Glob(filepath.Join(dir, "*.lean"))
+	out := map[string][]string{}
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		text := string(b)
+		locs := leanStmtStartRe.FindAllStringIndex(text, -1)
+		var sigs []string
+		for i, l := range locs {
+			end := len(text)
+			if i+1 < len(locs) {
+				end = locs[i+1][0]
+			}
+			if sig := extractTheoremSig(text[l[0]:end]); sig != "" {
+				sigs = append(sigs, sig)
+			}
+		}
+		out[filepath.Base(f)] = sigs
+	}
+	return out
+}
+
+// statementDiffs pairs statements by file and position: [file, old, new] for each that changed.
+func statementDiffs(before, after map[string][]string) [][3]string {
+	var d [][3]string
+	for f, old := range before {
+		now, ok := after[f]
+		if !ok {
+			continue
+		}
+		for i := 0; i < len(old) && i < len(now); i++ {
+			if old[i] != now[i] {
+				d = append(d, [3]string{f, old[i], now[i]})
+			}
+		}
+	}
+	return d
 }
 
 func (m *Model) ResetConversation() {
