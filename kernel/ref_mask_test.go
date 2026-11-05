@@ -43,3 +43,12 @@ func TestTheWholePromptIsMaskedAtFork(t *testing.T) {
 		t.Fatalf("paths and names stay paths and names: %s", out)
 	}
 }
+
+// masking keeps line numbers: the line ranges given to units stay valid
+func TestMaskingTheTheoryKeepsItsLines(t *testing.T) {
+	th := "## FILE: a.lean\nSOURCES: include/strata/kernels/ngram.hpp\n-- Strata's PLE table\nend\n"
+	out := maskShownPrompt("Niko1221/Strata", th)
+	if strings.Count(out, "\n") != strings.Count(th, "\n") || strings.Contains(strings.ToLower(out), "strata") {
+		t.Fatalf("%q", out)
+	}
+}

@@ -551,6 +551,11 @@ func dev_repair_proofs(pid int64, repo, theory string, failed []string, attempt 
 // forking them anyway only burns quota on a task they cannot do (Strata run: the
 // store failed, the dev child ran 8 rounds and reported "theory.md absent").
 func dev_store_theory(theory, repo, branch string) error {
+	// the dev-facing copy of the theory is masked like a prompt: dev conversations read it
+	// (sed -n 'a,bp' .einsteinOS/theory.md), and on 11/05 it held the reference's name 89 times.
+	// Masking replaces within lines, so the line ranges given to units stay valid; the kernel
+	// keeps measuring from the unmasked theory in memory and on einsteinOS/theory.
+	theory = maskShownPrompt(repo, theory)
 	devRepos := GetDevRepos()
 	if len(devRepos) == 0 {
 		log.Printf("dev_store_theory: no dev repos, skipping")
@@ -1431,6 +1436,8 @@ func devConvRecord(convID, stem string, status map[string]string) (summary strin
 
 func dev_store_conv(convID, repo, branch, stem string, status map[string]string) {
 	summary, rawBytes := devConvRecord(convID, stem, status)
+	// a stored record is read by the next units and reviewers: masked like a prompt
+	summary = maskShownPrompt(repo, summary)
 	if len(summary) < 50 {
 		log.Printf("dev_store_conv: %s unit %s summary too short, skipping", repo, stem)
 		return
