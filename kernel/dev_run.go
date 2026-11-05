@@ -609,7 +609,7 @@ func (r *devRun) unitPrompt(unit DevPlanNode, idx, total, attempt int, fail DevF
 		}
 	}
 	p.WriteString("\n\n" + BudgetBlock(devWorkLoad(len(unit.Modules), bytes), RoundBudgetOf(devUnitCondition())))
-	return p.String()
+	return maskShownPrompt(r.repo, p.String())
 }
 
 const dev_unit_instruction = `

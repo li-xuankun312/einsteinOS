@@ -12,8 +12,11 @@ package kernel
 
 import (
 	"fmt"
+	"log"
+	"regexp"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 // refMaskFmts: what is masked, as formats over (owner, name, lower(name), upper(name)).
@@ -32,10 +35,54 @@ var (
 	refMaskIdent = map[string]string{"url": "reference", "repo": "reference", "name": "Ref", "lower": "ref", "upper": "REF"}
 )
 
-// newRefMask builds the replacer for the given references ("owner/name") and label set.
-func newRefMask(labels map[string]string, refs ...string) *strings.Replacer {
-	type pair struct{ from, to string }
-	var pairs []pair
+// refMasker replaces whole occurrences only: a name is not replaced inside a longer word
+// (a repository called "r" must not turn every r into a label).
+type refMasker struct {
+	re   *regexp.Regexp
+	repl map[string]string
+}
+
+// Replace masks s.
+func (m *refMasker) Replace(s string) string {
+	if m == nil || m.re == nil {
+		return s
+	}
+	// a match consumes its boundary characters, so neighbours separated by one character
+	// need another pass
+	for i := 0; i < 4; i++ {
+		n := m.replaceOnce(s)
+		if n == s {
+			return n
+		}
+		s = n
+	}
+	return s
+}
+
+func (m *refMasker) replaceOnce(s string) string {
+	return m.re.ReplaceAllStringFunc(s, func(w string) string {
+		lead, core, trail := "", w, ""
+		if r, n := utf8.DecodeRuneInString(core); n > 0 && !isWordRune(r) {
+			lead, core = core[:n], core[n:]
+		}
+		if r, n := utf8.DecodeLastRuneInString(core); n > 0 && !isWordRune(r) {
+			trail, core = core[len(core)-n:], core[:len(core)-n]
+		}
+		if r, ok := m.repl[core]; ok {
+			return lead + r + trail
+		}
+		return w
+	})
+}
+
+func isWordRune(b rune) bool {
+	return (b >= '0' && b <= '9') || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
+}
+
+// newRefMask builds the masker for the given references ("owner/name") and label set.
+func newRefMask(labels map[string]string, refs ...string) *refMasker {
+	repl := map[string]string{}
+	var froms []string
 	for _, r := range refs {
 		owner, name, ok := strings.Cut(r, "/")
 		if !ok || name == "" {
@@ -43,28 +90,30 @@ func newRefMask(labels map[string]string, refs ...string) *strings.Replacer {
 		}
 		for _, f := range refMaskFmts {
 			from := fmt.Sprintf(f.from, owner, name, strings.ToLower(name), strings.ToUpper(name))
-			pairs = append(pairs, pair{from, labels[f.label]})
+			if _, seen := repl[from]; !seen && from != "" {
+				repl[from] = labels[f.label]
+				froms = append(froms, from)
+			}
 		}
+	}
+	if len(froms) == 0 {
+		return &refMasker{}
 	}
 	// longest first: "github.com/o/n" before "o/n" before "n"
-	sort.SliceStable(pairs, func(i, j int) bool { return len(pairs[i].from) > len(pairs[j].from) })
-	var args []string
-	seen := map[string]bool{}
-	for _, p := range pairs {
-		if p.from == "" || seen[p.from] {
-			continue
-		}
-		seen[p.from] = true
-		args = append(args, p.from, p.to)
+	sort.SliceStable(froms, func(i, j int) bool { return len(froms[i]) > len(froms[j]) })
+	var alts []string
+	for _, f := range froms {
+		alts = append(alts, regexp.QuoteMeta(f))
 	}
-	return strings.NewReplacer(args...)
+	re := regexp.MustCompile(`(?:^|[^A-Za-z0-9])(?:` + strings.Join(alts, "|") + `)(?:[^A-Za-z0-9]|$)`)
+	return &refMasker{re: re, repl: repl}
 }
 
 // maskRequirements returns req with every reference name in what a conversation is given
 // (definitions to port, registered tests) replaced by identifier-safe labels. The kernel keeps
 // measuring with the real paths (Sources); the port map and the integration script use the
 // masked forms on both sides.
-func maskRequirements(req UnitRequirements, m *strings.Replacer) UnitRequirements {
+func maskRequirements(req UnitRequirements, m *refMasker) UnitRequirements {
 	if m == nil {
 		return req
 	}
@@ -80,3 +129,20 @@ func maskRequirements(req UnitRequirements, m *strings.Replacer) UnitRequirement
 	out.Repo = "(reference)"
 	return out
 }
+
+// maskShownPrompt passes a whole prompt for a dev or review conversation through the mask,
+// whatever section the reference's name got into: 11/05 it was in [PRIOR FEEDBACK]
+// ("dev[Niko1221/Strata] unit 7/35 …", 18 times) and in the review's status
+// (reference_sources = include/strata/…), sections the per-field masking did not cover.
+// What is left after masking is measured and logged, never sent silently.
+func maskShownPrompt(repo, prompt string) string {
+	out := newRefMask(refMaskIdent, repo).Replace(prompt)
+	if _, name, ok := strings.Cut(repo, "/"); ok && name != "" {
+		if n := strings.Count(strings.ToLower(out), strings.ToLower(name)); n > 0 {
+			log.Printf(refMaskLeakFmt, n, name)
+		}
+	}
+	return out
+}
+
+const refMaskLeakFmt = "ref_mask: %[1]d occurrence(s) of %[2]q left in a prompt after masking (a casing the table does not cover)"

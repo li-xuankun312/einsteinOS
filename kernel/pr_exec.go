@@ -1093,7 +1093,7 @@ func dev_fix(pid int64, step *Step) (string, error) {
 	log.Printf("dev_fix: %s attempt=%d failure=%s gpu_usable=%s",
 		repo, attempt, step.Command, gpuUsable)
 
-	child, err := ForkWithRole(prompt.String(), ".", fmt.Sprintf("dev_fix_%d", attempt))
+	child, err := ForkWithRole(maskShownPrompt(repo, prompt.String()), ".", fmt.Sprintf("dev_fix_%d", attempt))
 	if err != nil {
 		return "", err
 	}
@@ -1298,7 +1298,7 @@ func dev_review_unit_inner(pid int64, repo, branch string, unitNum, totalUnits i
 		&ConsecutiveTextRounds{Threshold: 2}, // reviewer done reading → writes verdict
 		&MaxRounds{Limit: 10},
 	))
-	child, err := ForkWithTermination(prompt.String(), ".", "review_conv", reviewTerm)
+	child, err := ForkWithTermination(maskShownPrompt(repo, prompt.String()), ".", "review_conv", reviewTerm)
 	if err != nil {
 		log.Printf("dev_review_unit: %s unit %d fork failed: %v, using compile status",
 			repo, unitNum, err)

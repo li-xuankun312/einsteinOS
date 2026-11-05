@@ -30,3 +30,16 @@ func TestTheReferenceNameIsMaskedEverywhereAConversationLooks(t *testing.T) {
 		t.Fatalf("leak:\n%s", all)
 	}
 }
+
+// 11/05 the name reached the dev prompt through [PRIOR FEEDBACK] and the review through its
+// status: the whole prompt is masked at fork
+func TestTheWholePromptIsMaskedAtFork(t *testing.T) {
+	p := "[PRIOR FEEDBACK]\n- dev[Niko1221/Strata] unit 7/35 (u042aaf67ce): compile=fail\n  reference_sources = include/strata/artifact/dequant.hpp\nSTRATA_ORACLE"
+	out := maskShownPrompt("Niko1221/Strata", p)
+	if strings.Contains(strings.ToLower(out), "strata") || strings.Contains(out, "Niko1221") {
+		t.Fatalf("%s", out)
+	}
+	if !strings.Contains(out, "include/ref/artifact/dequant.hpp") || !strings.Contains(out, "REF_ORACLE") {
+		t.Fatalf("paths and names stay paths and names: %s", out)
+	}
+}
