@@ -915,6 +915,11 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 			}
 		}
 
+		if len(collectedTools) > 0 {
+			// whether the stream carries the sandbox's own results is measured, not assumed:
+			// the same-as-sandbox summary (sameAsSandbox) only works when it does
+			log.Printf("claudeweb: round %d: the stream carried the sandbox's result for %d of %d tool(s)", st.rounds, len(sandboxOut), len(collectedTools))
+		}
 		var toolResults []ToolResult
 		var preRan, preOK bool
 		var preReport string
