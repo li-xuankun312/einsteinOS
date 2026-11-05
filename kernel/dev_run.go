@@ -19,6 +19,7 @@ package kernel
 // failing is SPLIT (dev_split_node), not retried forever.
 
 import (
+	"sort"
 	"fmt"
 	"log"
 	"strings"
@@ -105,6 +106,66 @@ type devRun struct {
 	plan                        *DevPlan
 	sections                    []devFileSection
 	reqs                        map[string]UnitRequirements // per unit, measured once (unit_requirements.go)
+	raw                         map[string]UnitRequirements // before definition ownership
+	owners                      map[string]string           // "file\tname" -> the unit that ports it
+	ownersFor                   string                      // the leaves the owners were computed for
+}
+
+// definitionOwners assigns every reference definition to exactly one unit, in plan order:
+// the first unit whose sources hold it ports it, the others do not list it. Units split
+// from one node divide its sources between them (file i to sibling i mod k). 11/05
+// src/program/generate.cpp was a source of 4 units, and the three units split from
+// u042aaf67ce each had to port the same 90 definitions.
+func (r *devRun) definitionOwners() map[string]string {
+	leaves := r.plan.Leaves()
+	var ids []string
+	for _, l := range leaves {
+		ids = append(ids, l.ID)
+	}
+	key := strings.Join(ids, ",")
+	if r.owners != nil && r.ownersFor == key {
+		return r.owners
+	}
+	r.owners, r.ownersFor, r.reqs = map[string]string{}, key, nil
+	siblings := map[string][]string{}
+	for _, l := range leaves {
+		if l.Parent != "" {
+			siblings[l.Parent] = append(siblings[l.Parent], l.ID)
+		}
+	}
+	for _, l := range leaves {
+		if l.Integration {
+			continue
+		}
+		raw := r.rawRequirements(l)
+		mine := map[string]bool{}
+		if sib := siblings[l.Parent]; l.Parent != "" && len(sib) > 1 {
+			files := append([]string(nil), raw.Sources...)
+			sort.Strings(files)
+			at := 0
+			for i, id := range sib {
+				if id == l.ID {
+					at = i
+				}
+			}
+			for i, f := range files {
+				if i%len(sib) == at {
+					mine[f] = true
+				}
+			}
+		}
+		for _, sym := range raw.Symbols {
+			k := sym.File + "\t" + sym.Name
+			if _, taken := r.owners[k]; taken {
+				continue
+			}
+			if len(mine) > 0 && !mine[sym.File] {
+				continue
+			}
+			r.owners[k] = l.ID
+		}
+	}
+	return r.owners
 }
 
 // requirements measures what the reference says the unit is made of, once per unit.
@@ -113,12 +174,40 @@ func (r *devRun) shown(unit DevPlanNode) UnitRequirements {
 	return maskRequirements(r.requirements(unit), newRefMask(refMaskIdent, r.repo))
 }
 
+// requirements: what the unit is measured against — its raw requirements, with only the
+// definitions it owns (definitionOwners).
 func (r *devRun) requirements(unit DevPlanNode) UnitRequirements {
-	if req, ok := r.reqs[unit.ID]; ok {
+	req := r.rawRequirements(unit)
+	if unit.Integration || r.plan == nil {
 		return req
+	}
+	owners := r.definitionOwners()
+	if cached, ok := r.reqs[unit.ID]; ok {
+		return cached
 	}
 	if r.reqs == nil {
 		r.reqs = map[string]UnitRequirements{}
+	}
+	var own []RefSymbol
+	for _, sym := range req.Symbols {
+		if owners[sym.File+"\t"+sym.Name] == unit.ID {
+			own = append(own, sym)
+		}
+	}
+	if len(own) != len(req.Symbols) {
+		log.Printf("dev_requirements: %s unit %s ports %d of its sources' %d definitions; the rest belong to other units", r.repo, unit.ID, len(own), len(req.Symbols))
+	}
+	req.Symbols = own
+	r.reqs[unit.ID] = req
+	return req
+}
+
+func (r *devRun) rawRequirements(unit DevPlanNode) UnitRequirements {
+	if req, ok := r.raw[unit.ID]; ok {
+		return req
+	}
+	if r.raw == nil {
+		r.raw = map[string]UnitRequirements{}
 	}
 	sha := ""
 	if r.plan != nil {
@@ -129,7 +218,7 @@ func (r *devRun) requirements(unit DevPlanNode) UnitRequirements {
 		tests, cuda := refIntegrationTests(r.repo, sha)
 		req = UnitRequirements{Tests: tests, RequireGPU: cuda, Repo: r.repo, SHA: sha}
 		log.Printf("dev_requirements: %s integration unit %s: %d registered test(s) of the reference; GPU required=%v", r.repo, unit.ID, len(tests), cuda)
-		r.reqs[unit.ID] = req
+		r.raw[unit.ID] = req
 		return req
 	} else if len(unit.Sources) > 0 {
 		req = requirementsForSources(r.repo, sha, unit.Sources)
@@ -137,7 +226,7 @@ func (r *devRun) requirements(unit DevPlanNode) UnitRequirements {
 		req = measureUnitRequirements(r.repo, sha, devUnitFromNode(unit, r.sections).Theory)
 	}
 	logUnitRequirements(r.repo, unit.ID, req)
-	r.reqs[unit.ID] = req
+	r.raw[unit.ID] = req
 	return req
 }
 

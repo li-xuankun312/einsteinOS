@@ -83,7 +83,7 @@ func TestTheUnitAndItsReviewerAreToldTheMeasuredRequirements(t *testing.T) {
 	plan := newDevPlan("Niko1221/Strata", "01529aaa82b9f5c58d2bb87264b7b3f7b823678f", []DevModule{{Name: "Q2Avx2Kernel.lean", Hash: "h", Bytes: 10}}, [][]string{{"Q2Avx2Kernel.lean"}}, "p")
 	r.plan = plan
 	unit := plan.Leaves()[0]
-	r.reqs = map[string]UnitRequirements{unit.ID: req}
+	r.raw = map[string]UnitRequirements{unit.ID: req}
 	p := r.unitPrompt(unit, 0, 1, 1, DevFailure{}, "b")
 	for _, want := range []string{
 		"[UNIT REQUIREMENTS — measured from the reference (reference) at 01529aaa82b9]",
