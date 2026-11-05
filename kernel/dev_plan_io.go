@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -66,6 +68,13 @@ func loadDevPlanFromBranch(devRepo, branch string) (*DevPlan, error) {
 	if err != nil {
 		return nil, err
 	}
+	// the plan lives on the kernel's state branch, which no conversation clones; an older
+	// plan still on the dev branch is read from there once and moves on its next store
+	if gitUseBranchFromRemote(dir, devStateBranch, devNewBranchBase(devRepo)) == nil {
+		if b, err := os.ReadFile(filepath.Join(dir, devStatePlanPath(branch))); err == nil {
+			return unmarshalDevPlan(b)
+		}
+	}
 	if err := gitUseBranchFromRemote(dir, branch, devNewBranchBase(devRepo)); err != nil {
 		return nil, err
 	}
@@ -79,6 +88,16 @@ func loadDevPlanFromBranch(devRepo, branch string) (*DevPlan, error) {
 	return unmarshalDevPlan(b)
 }
 
+// devStateBranch holds the kernel's plans, one file per dev branch. 11/05 08:52:07 a reviewer
+// read .einsteinOS/plan.json on the dev branch, which names the reference (its "ref" and the
+// port units' source paths are what the kernel measures with, so they cannot be masked).
+// Conversations clone the dev branch, never this one.
+const devStateBranch = "einsteinOS/state"
+
+func devStatePlanPath(branch string) string {
+	return ".einsteinOS/plans/" + strings.ReplaceAll(branch, "/", "__") + ".json"
+}
+
 // storeDevPlan commits plan.json to the branch. A failure is returned, not
 // swallowed: a plan that exists only in memory is exactly what this file is
 // here to prevent — but the caller may still continue with the in-memory copy.
@@ -87,21 +106,33 @@ func storeDevPlan(devRepo, branch string, plan *DevPlan, msg string) error {
 	if err != nil {
 		return err
 	}
-	if err := gitUseBranchFromRemote(dir, branch, devNewBranchBase(devRepo)); err != nil {
-		return err
-	}
 	b, err := plan.Marshal()
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(dir+"/.einsteinOS", 0o755); err != nil {
+	// the dev branch keeps no plan: an older plan.json there is removed once
+	if err := gitUseBranchFromRemote(dir, branch, devNewBranchBase(devRepo)); err == nil {
+		if _, serr := os.Stat(dir + "/" + devPlanFile); serr == nil {
+			if exec.Command("git", "-C", dir, "rm", "-q", "--", devPlanFile).Run() == nil {
+				GitCommit(dir, "plan: moved to "+devStateBranch+" (conversations do not read the kernel's state)")
+				if perr := devGitPush(dir, devRepo, branch, 20); perr != nil {
+					log.Printf("dev_plan: plan.json not removed from %s: %v", branch, perr)
+				}
+			}
+		}
+	}
+	if err := gitUseBranchFromRemote(dir, devStateBranch, devNewBranchBase(devRepo)); err != nil {
 		return err
 	}
-	if err := os.WriteFile(dir+"/"+devPlanFile, b, 0o644); err != nil {
+	p := filepath.Join(dir, devStatePlanPath(branch))
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(p, b, 0o644); err != nil {
 		return err
 	}
 	GitCommit(dir, msg)
-	return devGitPush(dir, devRepo, branch, 20)
+	return devGitPush(dir, devRepo, devStateBranch, 20)
 }
 
 // devPlanSave records the plan in memory and (best effort) on the branch.

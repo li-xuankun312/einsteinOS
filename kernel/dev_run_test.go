@@ -168,9 +168,14 @@ func TestDevFromTheorems_HappyPath_KernelVerifiesAndPushes(t *testing.T) {
 		t.Fatalf("verified code not on the dev branch: %q", got)
 	}
 	// the plan is stored on the branch, with the module marked pass
-	plan := bareShow(env.bare, branch+":"+devPlanFile)
+	plan := bareShow(env.bare, devStateBranch+":"+devStatePlanPath(branch))
 	if !strings.Contains(plan, `"pass": true`) || !strings.Contains(plan, "Alpha.lean") {
 		t.Fatalf("plan.json on the branch lacks the pass state:\n%s", plan)
+	}
+	// 11/05 08:52:07: a reviewer read plan.json (it names the reference). The dev branch,
+	// which conversations clone, holds no plan; the state branch does.
+	if got := bareShow(env.bare, branch+":"+devPlanFile); got != "<missing>" {
+		t.Fatalf("the dev branch must not hold the plan: %.120s", got)
 	}
 	// the theory was readable by the child: the mirror was primed from the branch tip
 	if _, err := os.Stat(filepath.Join(env.mirror, ".einsteinOS/theory.md")); err != nil {
@@ -291,7 +296,7 @@ func TestDevFromTheorems_ReentryResumesAndNeverReplans(t *testing.T) {
 	}
 	branch := devBranchFor("ref/proj", "refsha1", pid)
 	for _, u := range []string{"M00", "M04", "M08"} {
-		if !strings.Contains(bareShow(env.bare, branch+":"+devPlanFile), u+".lean") {
+		if !strings.Contains(bareShow(env.bare, devStateBranch+":"+devStatePlanPath(branch)), u+".lean") {
 			t.Fatalf("plan.json lost %s", u)
 		}
 	}
@@ -374,7 +379,7 @@ func TestTheoryPhaseOutputRunsThroughTheDevLoopToAFinishedBranch(t *testing.T) {
 		t.Fatalf("the loop did not close: %v", err)
 	}
 	// the three sandbox files became three modules named by file, in one unit
-	plan := bareShow(env.bare, branch+":"+devPlanFile)
+	plan := bareShow(env.bare, devStateBranch+":"+devStatePlanPath(branch))
 	for _, m := range []string{"ExpertCacheResidency.lean", "ExpertSourceDispatch.lean", "GgufHeaderReader.lean"} {
 		if !strings.Contains(plan, m) {
 			t.Fatalf("module %s missing from the plan:\n%s", m, plan)
@@ -510,7 +515,7 @@ func TestTwoConversationsInARowThatWriteNothingStopTheRunWithoutSplitting(t *tes
 		t.Fatalf("a planner was asked to split a unit whose conversations never started (%d)", planners)
 	}
 	// nothing is lost: the plan is on the branch, ready for a restart
-	if got := bareShow(env.bare, branch+":"+devPlanFile); !strings.Contains(got, "Alpha.lean") {
+	if got := bareShow(env.bare, devStateBranch+":"+devStatePlanPath(branch)); !strings.Contains(got, "Alpha.lean") {
 		t.Fatalf("the plan must be kept:\n%.200s", got)
 	}
 }
