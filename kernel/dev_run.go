@@ -113,7 +113,7 @@ type devRun struct {
 
 // devNothingToBuildFmt: a unit closed without a conversation (args: repo, n, total, id,
 // definitions of its sources, modules no reference file was found for).
-const devNothingToBuildFmt = "dev_from_theorems: %[1]s unit %[2]d/%[3]d id=%[4]s has nothing of its own to build (its sources' %[5]d definitions belong to other units; no GPU source; no ISA path; unmeasured modules %[6]v) — closed without a conversation"
+const devNothingToBuildFmt = "dev_from_theorems: %[1]s unit %[2]d/%[3]d id=%[4]s has nothing of its own to build (definitions of its sources: %[5]d, all ported by other units; modules with no reference file: %[6]v; no GPU source or ISA path of its own) — closed without a conversation"
 
 // definitionOwners assigns every reference definition to exactly one unit, in plan order:
 // the first unit whose sources hold it ports it, the others do not list it. Units split
@@ -202,6 +202,37 @@ func (r *devRun) requirements(unit DevPlanNode) UnitRequirements {
 		log.Printf("dev_requirements: %s unit %s ports %d of its sources' %d definitions; the rest belong to other units", r.repo, unit.ID, len(own), len(req.Symbols))
 	}
 	req.Symbols = own
+	// the GPU and ISA requirements follow the files whose definitions the unit ports: 11/05
+	// u0868e10073 owned none of its 90 and still had to write and run GPU code for its
+	// sources' .cu files, which other units port
+	if len(req.Symbols) != len(r.rawRequirements(unit).Symbols) {
+		ownedFile := map[string]bool{}
+		for _, sym := range own {
+			ownedFile[sym.File] = true
+		}
+		var gpu []string
+		for _, f := range req.GPUSources {
+			if ownedFile[f] {
+				gpu = append(gpu, f)
+			}
+		}
+		req.GPUSources = gpu
+		flagFiles := map[string][]string{}
+		isa := map[string]bool{}
+		for f, fl := range req.FlagFiles {
+			if ownedFile[f] {
+				flagFiles[f] = fl
+				for _, x := range fl {
+					isa[x] = true
+				}
+			}
+		}
+		req.FlagFiles, req.ISAFlags = flagFiles, nil
+		for x := range isa {
+			req.ISAFlags = append(req.ISAFlags, x)
+		}
+		sort.Strings(req.ISAFlags)
+	}
 	r.reqs[unit.ID] = req
 	return req
 }

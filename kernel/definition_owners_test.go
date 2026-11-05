@@ -54,3 +54,22 @@ func TestAnUnreadReferenceDoesNotCloseAUnit(t *testing.T) {
 		t.Fatal("not read")
 	}
 }
+
+// 11/05 u0868e10073 owned 0 of its 90 definitions and still had to write GPU code
+func TestGPUAndISARequirementsFollowTheOwnedFiles(t *testing.T) {
+	p := newDevPlan("ref/proj", "sha", mods("A", "B"), [][]string{{"A"}, {"B"}}, "plan")
+	l := p.Leaves()
+	k := RefSymbol{File: "src/k.cu", Name: "kern"}
+	c := RefSymbol{File: "src/c.cpp", Name: "cpu"}
+	r := &devRun{repo: "o/r", plan: p, raw: map[string]UnitRequirements{
+		l[0].ID: {Sources: []string{"src/k.cu"}, Symbols: []RefSymbol{k}, GPUSources: []string{"src/k.cu"}, RefRead: true},
+		l[1].ID: {Sources: []string{"src/k.cu", "src/c.cpp"}, Symbols: []RefSymbol{k, c}, GPUSources: []string{"src/k.cu"},
+			FlagFiles: map[string][]string{"src/k.cu": {"-mavx2"}}, ISAFlags: []string{"-mavx2"}, RefRead: true},
+	}}
+	if got := r.requirements(l[1]); got.GPU() || len(got.ISAFlags) != 0 || len(got.Symbols) != 1 {
+		t.Fatalf("the .cu belongs to unit 1: %+v", got)
+	}
+	if !r.requirements(l[0]).GPU() {
+		t.Fatal("unit 1 keeps its GPU requirement")
+	}
+}
