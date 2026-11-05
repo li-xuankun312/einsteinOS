@@ -216,7 +216,11 @@ func sameAsSandbox(inputJSON, local, sandbox string) (string, bool) {
 	return fmt.Sprintf(sameAsSandboxFmt, m[1], len(out), hex.EncodeToString(sum[:8])), true
 }
 
-var ownVerifyRe = regexp.MustCompile(`\.einsteinOS/verify/[A-Za-z0-9_-]+/(build|test)\.sh|\$[A-Za-z_]+/(build|test)\.sh`)
+// ownVerifyRe: a command RUNNING a unit's verify script — "bash|sh <path>" or the path
+// itself in command position; a path that is only written, edited or mentioned does not
+// count (11/05 02:09:34 a python edit naming $V/build.sh was taken for a build run, the unit
+// ended without building, and the kernel's build failed)
+var ownVerifyRe = regexp.MustCompile(`(?:^|[;&|(]\s*|\n\s*)(?:(?:bash|sh|source|\.)\s+(?:-\w+\s+)*)?"?(?:\./)?(?:[\w./-]*\.einsteinOS/verify/[A-Za-z0-9_-]+|\$\{?\w+\}?)/(build|test)\.sh"?(?:\s|$|;|&|\||>|\))`)
 
 // ownVerifyScripts: which of the unit's verify scripts a bash command runs.
 func ownVerifyScripts(inputJSON string) (build, test bool) {
@@ -227,7 +231,7 @@ func ownVerifyScripts(inputJSON string) (build, test bool) {
 		return false, false
 	}
 	for _, m := range ownVerifyRe.FindAllStringSubmatch(in.Command, -1) {
-		switch m[1] + m[2] {
+		switch m[1] {
 		case "build":
 			build = true
 		case "test":
