@@ -512,6 +512,22 @@ func GitTwinSync(command, workDir string) []string {
 	if len(acts) == 0 {
 		return nil
 	}
+	// a dev or review conversation that clones the reference: measured and reported, and
+	// not mirrored here (11/05 03:17:40 dev_unit_14 cloned Niko1221/Strata; the kernel then
+	// tried to make a local twin of it)
+	kept := acts[:0]
+	for _, a := range acts {
+		if a.Kind == "clone" && isReferenceURL(a.URL) {
+			log.Printf(refClonedFmt, a.Dir)
+			NoteReferenceCloned()
+			continue
+		}
+		kept = append(kept, a)
+	}
+	acts = kept
+	if len(acts) == 0 {
+		return nil
+	}
 	for _, a := range acts {
 		if a.Kind == "clone" {
 			if _, _, ok := normTwinURL(a.URL); ok && twinDirAllowed(a.Dir) {
@@ -548,6 +564,37 @@ func GitTwinTouches(command string) bool {
 	for d := range twinDirs {
 		if strings.Contains(command, d) {
 			return true
+		}
+	}
+	return false
+}
+
+const refClonedFmt = "git_twin: a conversation cloned the REFERENCE into %[1]s — the dev side is not to know it; not mirrored here, counted (ReferenceClones)"
+
+var (
+	refClonesMu sync.Mutex
+	refClones   int
+)
+
+// NoteReferenceCloned counts a conversation cloning the reference.
+func NoteReferenceCloned() { refClonesMu.Lock(); refClones++; refClonesMu.Unlock() }
+
+// ReferenceClones is how many times conversations cloned the reference in this run.
+func ReferenceClones() int { refClonesMu.Lock(); defer refClonesMu.Unlock(); return refClones }
+
+// isReferenceURL: the clone URL is one of the open PRs' reference repositories.
+func isReferenceURL(raw string) bool {
+	_, key, ok := normTwinURL(raw)
+	if !ok {
+		return false
+	}
+	prMu.Lock()
+	defer prMu.Unlock()
+	for _, pr := range prTable {
+		for _, r := range pr.RefRepos {
+			if strings.EqualFold(key, "github.com/"+r.Owner+"/"+r.Name) {
+				return true
+			}
 		}
 	}
 	return false
