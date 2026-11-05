@@ -320,16 +320,34 @@ func terminalText(text string) string {
 // been persisted (a GET — see kernel/conv_tail.go). The turn can take a moment to
 // become visible after the stream ends, so look a few times before saying no.
 func settledNow(convID string) bool {
+	answered := false
 	for i := 0; i < 4; i++ {
-		if ok, _, err := kernel.ConvSettled(convID); err == nil && ok {
+		ok, _, err := convSettledFn(convID)
+		if err == nil && ok {
 			return true
 		}
-		if i < 3 {
-			time.Sleep(3 * time.Second)
+		if err == nil {
+			answered = true // the server said: not settled yet
 		}
+		if i < 3 {
+			time.Sleep(settleRetryWait)
+		}
+	}
+	if !answered {
+		// no attempt got an answer (11/05 07:57:43–07:58:24: TLS handshake timeouts) — the
+		// stream itself ended with end_turn, so that is what the conversation is judged by;
+		// a verified dev unit went on for another round only because the check could not run
+		log.Printf("claudeweb: could not ask whether %s is settled (no attempt got an answer) — going by the stream's end_turn", truncate(convID, 8))
+		return true
 	}
 	return false
 }
+
+// convSettledFn and settleRetryWait are variables for tests.
+var (
+	convSettledFn   = kernel.ConvSettled
+	settleRetryWait = 3 * time.Second
+)
 
 // shadowExecute runs one tool call on the local machine, EXCEPT `einsteinos …`
 // commands: those are not shell commands but requests to the kernel (start a
