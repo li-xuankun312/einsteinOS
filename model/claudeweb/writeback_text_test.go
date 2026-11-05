@@ -111,3 +111,16 @@ func TestOnlyRunningAVerifyScriptCountsAsRunningIt(t *testing.T) {
 		}
 	}
 }
+
+func TestALocalExitThatDiffersFromTheSandboxIsSaid(t *testing.T) {
+	rc, ok := sandboxExit([]byte(`[{"type":"text","text":"{\"returncode\":0,\"stdout\":\"\",\"stderr\":\"\"}"}]`))
+	if !ok || rc != 0 {
+		t.Fatal("rc read")
+	}
+	if n := divergence("[pid 24 exit=1] Traceback…", 0, true); !strings.Contains(n, "exit 0; this machine ran it with exit 1") {
+		t.Fatalf("%q", n)
+	}
+	if divergence("[pid 24 exit=0] ok", 0, true) != "" || divergence("[pid 24 exit=1] x", 0, false) != "" {
+		t.Fatal("same, or no sandbox result: nothing")
+	}
+}

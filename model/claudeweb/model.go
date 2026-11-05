@@ -173,6 +173,48 @@ const sameAsSandboxFmt = "[pid %[1]s exit=0] same output as your sandbox (%[2]d 
 var localPidRe = regexp.MustCompile(`^\[pid (\d+) exit=0\] `)
 
 // sandboxStdout reads the stdout of a streamed sandbox tool_result ({"returncode":0,"stdout":…}).
+// sandboxExit reads the return code of a streamed sandbox tool_result.
+func sandboxExit(content json.RawMessage) (int, bool) {
+	var parts []struct {
+		Text string `json:"text"`
+	}
+	text := ""
+	if json.Unmarshal(content, &parts) == nil {
+		for _, p := range parts {
+			text += p.Text
+		}
+	} else if json.Unmarshal(content, &text) != nil {
+		return 0, false
+	}
+	var r struct {
+		Returncode *int `json:"returncode"`
+	}
+	if json.Unmarshal([]byte(text), &r) != nil || r.Returncode == nil {
+		return 0, false
+	}
+	return *r.Returncode, true
+}
+
+var localExitRe = regexp.MustCompile(`^\[pid \d+ exit=(-?\d+)\]`)
+
+const divergeFmt = "\n[measured: your sandbox ran this command with exit %[1]d; this machine ran it with exit %[2]d — the two copies of the files differ from here on]"
+
+// divergence: the note appended to a local result whose exit code differs from the sandbox's.
+// 11/04 02:26:36 a python edit exited 1 here (pid 24) while the sandbox went on as if it had
+// worked; nothing said so.
+func divergence(local string, sandboxRC int, haveSandbox bool) string {
+	m := localExitRe.FindStringSubmatch(local)
+	if !haveSandbox || m == nil {
+		return ""
+	}
+	var rc int
+	fmt.Sscanf(m[1], "%d", &rc)
+	if (rc == 0) == (sandboxRC == 0) {
+		return ""
+	}
+	return fmt.Sprintf(divergeFmt, sandboxRC, rc)
+}
+
 func sandboxStdout(content json.RawMessage) (string, bool) {
 	var parts []struct {
 		Text string `json:"text"`
@@ -663,6 +705,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 		_ = parentMsgUUID
 		var stopReason string
 		sandboxOut := map[string]string{} // tool_use id -> the sandbox's stdout, when streamed
+		sandboxRC := map[string]int{}     // tool_use id -> the sandbox's return code, when streamed
 		lastLogTime := time.Now()
 
 		for event := range events {
@@ -700,6 +743,9 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 				if ev.ContentBlock.Type == "tool_result" && ev.ContentBlock.ToolUseID != "" {
 					if out, ok := sandboxStdout(ev.ContentBlock.Content); ok {
 						sandboxOut[ev.ContentBlock.ToolUseID] = out
+					}
+					if rc, ok := sandboxExit(ev.ContentBlock.Content); ok {
+						sandboxRC[ev.ContentBlock.ToolUseID] = rc
 					}
 				}
 				if ev.ContentBlock.Type == "tool_use" {
@@ -956,6 +1002,12 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 			// which is how axle feedback got lost and children entered retry loops.
 			if result == "" {
 				continue // let remote result stand
+			}
+			if rc, have := sandboxRC[tb.id]; have {
+				if note := divergence(result, rc, true); note != "" {
+					log.Printf("claudeweb: %s exit differs: sandbox %d, here %s", truncate(tb.id, 16), rc, localExitRe.FindStringSubmatch(result)[1])
+					result += note
+				}
 			}
 			if same, ok := sameAsSandbox(tb.inputJSON.String(), result, sandboxOut[tb.id]); ok {
 				result = same // a read whose output is the sandbox's: say so instead of sending it again
