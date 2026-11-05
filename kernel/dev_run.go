@@ -319,6 +319,7 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 		PRFeedbackAdd(pid, "- "+serr.Error())
 		return "", serr
 	}
+	devMaskSweep(repo, devRepo, branch)
 
 	plan := dev_get_plan(pid, repo, devRefSHA(repo, step.SHA), theory, branch)
 

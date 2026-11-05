@@ -1,0 +1,94 @@
+package kernel
+
+// dev_mask_sweep.go — the dev branch itself does not name the reference.
+//
+// 11/05 03:17:40 dev_unit_14 cloned Niko1221/Strata into its sandbox: the prompt was masked,
+// but the dev branch it clones held the name — in the repository's own documents
+// (STRATA_FEATURE_TABLE.md, INFCCL_FEATURE_TABLE_v7–v9.md, STRATA_COMMITS_FULL.txt), in
+// comments of src/ix_*.cu, in files earlier units wrote (include/baloon/strata_pack_builder.hpp),
+// and in 17 stored conversation records. Before the units run, every tracked text file of the
+// dev branch goes through the same mask as a prompt, and a path that holds the name is renamed
+// the same way, so references between files stay consistent. Only the dev branch is changed.
+
+import (
+	"bytes"
+	"fmt"
+	"log"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+)
+
+const devMaskSweepMsgFmt = "mask: the reference's name replaced in %[1]d file(s), %[2]d path(s) renamed — dev conversations do not know the reference"
+
+// devMaskTree applies the mask to every tracked text file under dir (git ls-files) and renames
+// paths that hold the name. It returns how many files changed and how many were renamed.
+func devMaskTree(dir string, m *refMasker) (changed, renamed int, err error) {
+	out, err := exec.Command("git", "-C", dir, "ls-files", "-z").Output()
+	if err != nil {
+		return 0, 0, err
+	}
+	for _, f := range strings.Split(strings.TrimRight(string(out), "\x00"), "\x00") {
+		if f == "" || devMaskKeep(f) {
+			continue
+		}
+		p := filepath.Join(dir, f)
+		b, err := os.ReadFile(p)
+		if err != nil || bytes.IndexByte(b, 0) >= 0 { // unreadable or binary
+			continue
+		}
+		if masked := m.Replace(string(b)); masked != string(b) {
+			if err := os.WriteFile(p, []byte(masked), 0o644); err != nil {
+				return changed, renamed, err
+			}
+			changed++
+		}
+		if np := m.Replace(f); np != f {
+			if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, np)), 0o755); err != nil {
+				return changed, renamed, err
+			}
+			if o, err := exec.Command("git", "-C", dir, "mv", "-k", f, np).CombinedOutput(); err != nil {
+				return changed, renamed, fmt.Errorf("git mv %s: %v: %s", f, err, o)
+			}
+			renamed++
+		}
+	}
+	return changed, renamed, nil
+}
+
+// devMaskSweep masks the dev branch once per run and pushes the result when anything changed.
+func devMaskSweep(repo, devRepo, branch string) {
+	cloneDir, err := devRepoLocalDir(devRepo)
+	if err != nil {
+		log.Printf("dev_mask_sweep: %s no local clone: %v", devRepo, err)
+		return
+	}
+	if err := gitUseBranchFromRemote(cloneDir, branch, branch); err != nil {
+		log.Printf("dev_mask_sweep: %s checkout %s: %v", devRepo, branch, err)
+		return
+	}
+	changed, renamed, err := devMaskTree(cloneDir, newRefMask(refMaskIdent, repo))
+	if err != nil {
+		log.Printf("dev_mask_sweep: %s: %v", devRepo, err)
+		return
+	}
+	if changed+renamed == 0 {
+		log.Printf("dev_mask_sweep: %s %s holds no reference name", devRepo, branch)
+		return
+	}
+	exec.Command("git", "-C", cloneDir, "add", "-A").Run()
+	GitCommit(cloneDir, fmt.Sprintf(devMaskSweepMsgFmt, changed, renamed))
+	if err := devGitPush(cloneDir, devRepo, branch, 20); err != nil {
+		log.Printf("dev_mask_sweep: %s push %s: %v", devRepo, branch, err)
+		return
+	}
+	log.Printf("dev_mask_sweep: "+devMaskSweepMsgFmt, changed, renamed)
+}
+
+// devMaskKeep: the kernel's own state on the branch, which names the reference by design
+// (plan.json's "ref" is the plan's identity — masking it would make every restart re-plan).
+// Dev conversations do not need it to work, and it is not what they read.
+func devMaskKeep(f string) bool {
+	return strings.HasPrefix(f, ".einsteinOS/") && strings.HasSuffix(f, ".json")
+}
