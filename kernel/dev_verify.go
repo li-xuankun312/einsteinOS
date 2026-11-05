@@ -31,6 +31,7 @@ package kernel
 // an exit code proves the child's tests passed. That is the reviewer's job.
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -74,6 +75,20 @@ func skipTreeEntry(rel string, isDir bool, size int64) bool {
 	return size > devMaxFileBytes
 }
 
+// hasNULBytes: the file's first 8 KiB hold a NUL byte — a build output or a blob, never
+// source. 11/05 08:07 a unit's build.sh left 42 LLVM bitcode files (*.bc) next to the sources
+// and they were committed with the unit; an extension list cannot know every toolchain's.
+func hasNULBytes(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	buf := make([]byte, 8192)
+	n, _ := f.Read(buf)
+	return bytes.IndexByte(buf[:n], 0) >= 0
+}
+
 func digestFile(path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -109,7 +124,7 @@ func snapshotTree(dir string) (fileDigest, error) {
 			}
 			return nil
 		}
-		if !info.Mode().IsRegular() || skipTreeEntry(rel, false, info.Size()) {
+		if !info.Mode().IsRegular() || skipTreeEntry(rel, false, info.Size()) || hasNULBytes(p) {
 			return nil
 		}
 		dg, derr := digestFile(p)
