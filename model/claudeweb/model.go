@@ -704,6 +704,8 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 		var parentMsgUUID string
 		_ = parentMsgUUID
 		var stopReason string
+		eager := newEagerRunner(func(name, input string) string { return m.shadowExecute(convID, name, input) })
+		defer eager.close()
 		sandboxOut := map[string]string{} // tool_use id -> the sandbox's stdout, when streamed
 		sandboxRC := map[string]int{}     // tool_use id -> the sandbox's return code, when streamed
 		lastLogTime := time.Now()
@@ -792,6 +794,9 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 				if tb, ok := toolBlocks[ev.Index]; ok {
 					collectedTools = append(collectedTools, *tb)
 					delete(toolBlocks, ev.Index)
+					if m.Shadow != nil && st.isChild {
+						eager.submit(tb.id, tb.name, tb.inputJSON.String()) // runs now, in order
+					}
 				}
 				if len(collectedTools)+st.totalTools >= mainConvToolBudget && !st.usedServices && !st.isChild {
 					log.Printf("claudeweb: tool count %d mid-stream, stopping response",
@@ -987,7 +992,10 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 				st.ledger.record(tb.id, "")
 				continue
 			}
-			result := m.shadowExecute(convID, tb.name, tb.inputJSON.String())
+			result, ran := eager.result(tb.id)
+			if !ran {
+				result = m.shadowExecute(convID, tb.name, tb.inputJSON.String())
+			}
 			if b, t := ownVerifyScripts(tb.inputJSON.String()); (b || t) && strings.Contains(result, " exit=0] ") {
 				ranBuild, ranTest = ranBuild || b, ranTest || t
 			}
@@ -1187,6 +1195,9 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 				log.Printf("claudeweb: SSE recovery: %v", rerr)
 			} else {
 				log.Printf("claudeweb: SSE recovery downloaded %d tools from conversation", len(tools))
+				for id, res := range eager.finished() {
+					st.ledger.record(id, res) // what already ran while the stream was alive
+				}
 				rr := recoveredResults(st.ledger, tools, func(name, input string) string {
 					return m.shadowExecute(convID, name, input)
 				})
