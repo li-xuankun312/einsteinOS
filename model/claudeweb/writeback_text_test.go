@@ -117,7 +117,7 @@ func TestALocalExitThatDiffersFromTheSandboxIsSaid(t *testing.T) {
 	if !ok || rc != 0 {
 		t.Fatal("rc read")
 	}
-	if n := divergence("[pid 24 exit=1] Traceback…", 0, true); !strings.Contains(n, "exit 0; this machine ran it with exit 1") {
+	if n := divergence("[pid 24 exit=1] Traceback…", 0, true); !strings.Contains(n, "exit 0; this machine ran it with exit 1 — this machine's result is the one that counts") {
 		t.Fatalf("%q", n)
 	}
 	if divergence("[pid 24 exit=0] ok", 0, true) != "" || divergence("[pid 24 exit=1] x", 0, false) != "" {

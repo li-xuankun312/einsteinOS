@@ -197,7 +197,7 @@ func sandboxExit(content json.RawMessage) (int, bool) {
 
 var localExitRe = regexp.MustCompile(`^\[pid \d+ exit=(-?\d+)\]`)
 
-const divergeFmt = "\n[measured: your sandbox ran this command with exit %[1]d; this machine ran it with exit %[2]d — the two copies of the files differ from here on]"
+const divergeFmt = "\n[measured: your sandbox ran this command with exit %[1]d; this machine ran it with exit %[2]d — this machine's result is the one that counts (its files, its toolchain, its GPUs)]"
 
 // divergence: the note appended to a local result whose exit code differs from the sandbox's.
 // 11/04 02:26:36 a python edit exited 1 here (pid 24) while the sandbox went on as if it had
