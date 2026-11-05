@@ -514,6 +514,19 @@ type UnitVerifyOutcome struct {
 //	baseRef   the branch whose tip the mirror was primed from (dev branch, or the
 //	          unit's wip branch when this is a fix attempt)
 func devVerifyAndPush(cloneDir, mirror, devRepo, branch, baseRef, unitID, unitDesc, gpuUsable string, base fileDigest, req UnitRequirements) UnitVerifyOutcome {
+	out := devVerifyOnly(cloneDir, mirror, branch, baseRef, unitID, gpuUsable, base, req)
+	if !out.Verified || out.Err != nil || out.Status["existing_code"] == "true" {
+		return out
+	}
+	out.msg = fmt.Sprintf("unit %s: %s [compile=%s smoke=%s gate=%s, verified by the kernel]", unitID, truncStr(unitDesc, 120), out.Result.Compile, out.Result.Smoke, gateOrNone(out.Result.Gate))
+	out.Pushed, out.Err = devPushVerdict(cloneDir, mirror, devRepo, branch, baseRef, unitID, out.Changed, out.Removed, out.msg, out.Result.Passed())
+	return out
+}
+
+// devVerifyOnly runs the kernel's verification of the mirror's delta on the real machine —
+// build, test, gates, /proc measurement — without pushing anything. It is what decides a
+// unit, and what a conversation is told before it is allowed to end (dev_preverify.go).
+func devVerifyOnly(cloneDir, mirror, branch, baseRef, unitID, gpuUsable string, base fileDigest, req UnitRequirements) UnitVerifyOutcome {
 	out := UnitVerifyOutcome{}
 
 	changed, removed, err := treeDelta(mirror, base)
@@ -552,9 +565,7 @@ func devVerifyAndPush(cloneDir, mirror, devRepo, branch, baseRef, unitID, unitDe
 		unitID, out.Result.Compile, out.Result.BuildExit, out.Result.Smoke, out.Result.TestExit, out.Result.Elapsed.Round(time.Second),
 		out.Result.Gate, out.Result.Test.Devices)
 
-	out.msg = fmt.Sprintf("unit %s: %s [compile=%s smoke=%s gate=%s, verified by the kernel]", unitID, truncStr(unitDesc, 120), out.Result.Compile, out.Result.Smoke, gateOrNone(out.Result.Gate))
 	out.Verified = true
-	out.Pushed, out.Err = devPushVerdict(cloneDir, mirror, devRepo, branch, baseRef, unitID, out.Changed, out.Removed, out.msg, out.Result.Passed())
 	return out
 }
 
