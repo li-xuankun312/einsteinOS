@@ -964,7 +964,11 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 			// conversations ended "one round of work, one round that says done".
 			if len(collectedTools) > 0 && stopReason == "end_turn" && kernel.HasDoneMarker(textBuf.String()) &&
 				(doneInToolRound(childRole, toolResults, ranBuild && ranTest) || reviewDone) && settledNow(convID) {
-				log.Printf("claudeweb: done marker in tool round %d and every local result exited 0 — ending without an extra round", st.rounds)
+				if reviewDone {
+					log.Printf("claudeweb: review verdict and done marker in tool round %d, which only read files — ending without an extra round", st.rounds)
+				} else {
+					log.Printf("claudeweb: done marker in tool round %d; build.sh and test.sh ran here and every local result exited 0 — ending without an extra round", st.rounds)
+				}
 				kernel.StoreSignal(kernel.GetLastForkedPid(), &kernel.StopSignal{Reason: "done_marker"})
 				if t := terminalText(textBuf.String()); t != "" {
 					kernel.NoteRoundText(convID, t, len(collectedTools), st.localDelivered)
