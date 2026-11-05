@@ -52,3 +52,14 @@ func TestMaskingTheTheoryKeepsItsLines(t *testing.T) {
 		t.Fatalf("%q", out)
 	}
 }
+
+// 11/05 07:09:54 three occurrences inside longer identifiers were left
+func TestALongNameIsMaskedInsideIdentifiersAShortOneIsNot(t *testing.T) {
+	out := maskShownPrompt("Niko1221/Strata", "StrataPackBuilder libstrata_core STRATAX Niko1221/Strata")
+	if strings.Contains(strings.ToLower(out), "strata") || strings.Contains(out, "Niko1221") {
+		t.Fatalf("%q", out)
+	}
+	if got := newRefMask(refMaskIdent, "o/r").Replace("error r rr"); got != "error Ref rr" {
+		t.Fatalf("a short name stays whole-word: %q", got)
+	}
+}

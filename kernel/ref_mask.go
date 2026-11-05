@@ -38,9 +38,13 @@ var (
 // refMasker replaces whole occurrences only: a name is not replaced inside a longer word
 // (a repository called "r" must not turn every r into a label).
 type refMasker struct {
-	re   *regexp.Regexp
-	repl map[string]string
+	re    *regexp.Regexp
+	inner *regexp.Regexp // names masked inside longer identifiers too
+	repl  map[string]string
 }
+
+// refMaskInnerMin: names at least this long are masked inside longer identifiers as well.
+const refMaskInnerMin = 4
 
 // Replace masks s.
 func (m *refMasker) Replace(s string) string {
@@ -52,9 +56,12 @@ func (m *refMasker) Replace(s string) string {
 	for i := 0; i < 4; i++ {
 		n := m.replaceOnce(s)
 		if n == s {
-			return n
+			break
 		}
 		s = n
+	}
+	if m.inner != nil {
+		s = m.inner.ReplaceAllStringFunc(s, func(w string) string { return m.repl[w] })
 	}
 	return s
 }
@@ -106,7 +113,20 @@ func newRefMask(labels map[string]string, refs ...string) *refMasker {
 		alts = append(alts, regexp.QuoteMeta(f))
 	}
 	re := regexp.MustCompile(`(?:^|[^A-Za-z0-9])(?:` + strings.Join(alts, "|") + `)(?:[^A-Za-z0-9]|$)`)
-	return &refMasker{re: re, repl: repl}
+	// a name long enough to be unambiguous is also masked inside a longer identifier
+	// (StrataPack, libstrata): 11/05 07:09:54 three such occurrences were left in the theory.
+	// A short name (a repository called "r") stays whole-word only.
+	var inner []string
+	for _, f := range froms {
+		if len(f) >= refMaskInnerMin {
+			inner = append(inner, regexp.QuoteMeta(f))
+		}
+	}
+	m := &refMasker{re: re, repl: repl}
+	if len(inner) > 0 {
+		m.inner = regexp.MustCompile(strings.Join(inner, "|"))
+	}
+	return m
 }
 
 // maskRequirements returns req with every reference name in what a conversation is given
