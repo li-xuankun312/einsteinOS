@@ -250,9 +250,12 @@ func (r *devRun) rawRequirements(unit DevPlanNode) UnitRequirements {
 	}
 	var req UnitRequirements
 	if unit.Integration {
-		tests, cuda := refIntegrationTests(r.repo, sha)
+		tests, excluded, cuda := refIntegrationTestsWithExcluded(r.repo, sha)
 		req = UnitRequirements{Tests: tests, RequireGPU: cuda, Repo: r.repo, SHA: sha}
-		log.Printf("dev_requirements: %s integration unit %s: %d registered test(s) of the reference; GPU required=%v", r.repo, unit.ID, len(tests), cuda)
+		log.Printf("dev_requirements: %s integration unit %s: %d registered test(s) of the reference required, %d not (they need what the reference does not contain); GPU required=%v", r.repo, unit.ID, len(tests), len(excluded), cuda)
+		for name, why := range excluded {
+			log.Printf("dev_requirements:   %s not required: %s", name, why)
+		}
 		r.raw[unit.ID] = req
 		return req
 	} else if len(unit.Sources) > 0 {

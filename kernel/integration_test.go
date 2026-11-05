@@ -25,14 +25,21 @@ func TestTheReferencesRegisteredTestsAreMeasured(t *testing.T) {
 	for _, x := range tests {
 		byName[x.Name] = x.Command
 	}
-	for _, n := range []string{"cuda_device_selftest", "kv_q8_parity", "expert_arena_load", "native_mmvq_parity", "native_qsa_score_parity", "ple_reader_selftest"} {
+	for _, n := range []string{"cuda_device_selftest", "kv_q8_parity", "ple_reader_selftest"} {
 		if byName[n] == "" {
 			t.Errorf("%s not measured (%d tests)", n, len(tests))
 		}
 	}
-	if byName["native_mmvq_parity"] != "native_mmvq_parity --selftest" || !cuda {
-		t.Fatalf("foreach expansion / cuda: %q %v", byName["native_mmvq_parity"], cuda)
+	if !cuda {
+		t.Fatal("the reference builds CUDA")
 	}
+	// the oracle parity tests need a llama.cpp checkout passed in by path; the expert-arena
+	// test needs pack/full/experts.bin — neither is in the reference
+	_, excl, _ := refIntegrationTestsWithExcluded("Niko1221/Strata", "01529aaa82b9")
+	if !strings.Contains(excl["native_mmvq_parity"], "STRATA_ORACLE_SOURCE_DIR") || byName["native_mmvq_parity"] != "" {
+		t.Fatalf("oracle parity: %q", excl["native_mmvq_parity"])
+	}
+	t.Logf("%d required, %d excluded: %v", len(tests), len(excl), excl)
 	for n := range byName {
 		if strings.Contains(n, "${") {
 			t.Fatalf("unexpanded: %s", n)

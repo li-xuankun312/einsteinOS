@@ -14,6 +14,7 @@ package kernel
 
 import (
 	"fmt"
+	"path"
 	"regexp"
 	"sort"
 	"strings"
@@ -53,13 +54,30 @@ func expandCMakeForeach(s string) string {
 }
 
 // refIntegrationTests measures the tests registered by the reference's CMakeLists.txt files
-// at sha, and whether it builds CUDA.
+// at sha, and whether it builds CUDA. A test the reference's own build only registers when
+// given something it does not contain is not required (cmakeExcluded): 11/04 the 16
+// native_*_parity tests sit under if(STRATA_ORACLE_SOURCE_DIR AND …) — a llama.cpp checkout
+// passed in by path, empty by default — and could never pass here.
 func refIntegrationTests(repo, sha string) (tests []RefTest, cuda bool) {
+	tests, _, cuda = refIntegrationTestsWithExcluded(repo, sha)
+	return tests, cuda
+}
+
+// refIntegrationTestsWithExcluded also returns the registered tests left out, with why.
+func refIntegrationTestsWithExcluded(repo, sha string) (tests []RefTest, excluded map[string]string, cuda bool) {
 	bare := refBareDir(repo)
 	ls, err := refGitFn(bare, "ls-tree", "-r", "--name-only", sha)
 	if err != nil {
-		return nil, false
+		return nil, nil, false
 	}
+	tree := map[string]bool{}
+	for _, f := range strings.Split(ls, "\n") {
+		f = strings.TrimSpace(f)
+		for p := f; p != "." && p != "/" && p != ""; p = path.Dir(p) {
+			tree[p] = true
+		}
+	}
+	excluded = map[string]string{}
 	seen := map[string]bool{}
 	for _, f := range strings.Split(ls, "\n") {
 		if !strings.HasSuffix(f, "CMakeLists.txt") || refNotSourceRe.MatchString(f) && !strings.HasPrefix(f, "CMakeLists") {
@@ -72,17 +90,103 @@ func refIntegrationTests(repo, sha string) (tests []RefTest, cuda bool) {
 		if cmakeCudaRe.MatchString(text) {
 			cuda = true
 		}
-		for _, m := range cmakeAddTestRe.FindAllStringSubmatch(expandCMakeForeach(text), -1) {
-			name, cmd := m[1], strings.Join(strings.Fields(m[2]), " ")
+		text = expandCMakeForeach(text)
+		dir := path.Dir(f)
+		gate := cmakeExcluded(text, func(rel string) bool { return tree[path.Clean(path.Join(dir, rel))] })
+		for _, m := range cmakeAddTestRe.FindAllStringSubmatchIndex(text, -1) {
+			name, cmd := text[m[2]:m[3]], strings.Join(strings.Fields(text[m[4]:m[5]]), " ")
 			if strings.Contains(name, "${") || seen[name] {
 				continue
 			}
 			seen[name] = true
+			if why := gate(m[0]); why != "" {
+				excluded[name] = why
+				continue
+			}
 			tests = append(tests, RefTest{Name: name, Command: cmd})
 		}
 	}
 	sort.Slice(tests, func(i, j int) bool { return tests[i].Name < tests[j].Name })
-	return tests, cuda
+	return tests, excluded, cuda
+}
+
+var (
+	cmakeCondRe     = regexp.MustCompile(`(?mi)^[ \t]*(if|elseif|else|endif)[ \t]*\(([^)]*)\)`)
+	cmakeExtPathRe  = regexp.MustCompile(`(?i)set\s*\(\s*(\w+)\s+""\s+CACHE\s+(PATH|FILEPATH|STRING)`)
+	cmakeExistsRe   = regexp.MustCompile(`EXISTS\s+"?\$\{CMAKE_CURRENT_SOURCE_DIR\}/([^\s")]+)"?`)
+	cmakeIdentRe    = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]*`)
+	cmakeNeedPathFm = "registered only when %[1]s (a path the build is given, empty by default) is set"
+	cmakeNeedFileFm = "registered only when %[1]s exists, and the reference does not contain it"
+)
+
+// cmakeExcluded returns, for an offset in text, why a statement there is not part of the
+// reference's own build ("" when it is): it sits in an if() branch that needs an external
+// path (a CACHE PATH/STRING variable empty by default) or a file the reference does not
+// contain. Every other condition (options) is taken as on — the port builds everything the
+// reference can build.
+func cmakeExcluded(text string, inTree func(rel string) bool) func(off int) string {
+	ext := map[string]bool{}
+	for _, m := range cmakeExtPathRe.FindAllStringSubmatch(text, -1) {
+		ext[m[1]] = true
+	}
+	why := func(cond string) string {
+		if m := cmakeExistsRe.FindStringSubmatch(cond); m != nil && !inTree(m[1]) && !strings.Contains(cond, "NOT") {
+			return fmt.Sprintf(cmakeNeedFileFm, m[1])
+		}
+		for _, id := range cmakeIdentRe.FindAllString(cond, -1) {
+			if ext[id] && !strings.Contains(cond, "NOT "+id) {
+				return fmt.Sprintf(cmakeNeedPathFm, id)
+			}
+		}
+		return ""
+	}
+	type frame struct{ excl, ownExcl string }
+	type mark struct {
+		off   int
+		stack []frame
+	}
+	var marks []mark
+	var stack []frame
+	for _, m := range cmakeCondRe.FindAllStringSubmatchIndex(text, -1) {
+		kw, cond := strings.ToLower(text[m[2]:m[3]]), text[m[4]:m[5]]
+		switch kw {
+		case "if":
+			stack = append(stack, frame{ownExcl: why(cond)})
+		case "elseif":
+			if len(stack) > 0 {
+				stack[len(stack)-1].ownExcl = why(cond)
+			}
+		case "else":
+			if len(stack) > 0 {
+				top := &stack[len(stack)-1]
+				if top.ownExcl != "" {
+					top.ownExcl = "" // the branch taken when the external input is absent
+				} else {
+					top.ownExcl = "the else-branch of a condition the port builds as on"
+				}
+			}
+		case "endif":
+			if len(stack) > 0 {
+				stack = stack[:len(stack)-1]
+			}
+		}
+		marks = append(marks, mark{m[1], append([]frame(nil), stack...)})
+	}
+	return func(off int) string {
+		var st []frame
+		for _, mk := range marks {
+			if mk.off > off {
+				break
+			}
+			st = mk.stack
+		}
+		for _, f := range st {
+			if f.ownExcl != "" {
+				return f.ownExcl
+			}
+		}
+		return ""
+	}
 }
 
 const (
