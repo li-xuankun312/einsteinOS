@@ -167,6 +167,9 @@ type UnitRequirements struct {
 	Tests      []RefTest
 	RequireGPU bool
 	Repo, SHA  string
+	// RefRead: the reference commit could be read here, so an empty measurement means the
+	// reference really holds nothing for the unit (not that it was not looked at)
+	RefRead bool
 }
 
 // GPU: the unit's sources include CUDA.
@@ -185,6 +188,9 @@ func measureUnitRequirements(repo, sha, unitTheory string) UnitRequirements {
 		return fs
 	}
 	req := UnitRequirements{FlagFiles: map[string][]string{}, Evidence: map[string][]string{}}
+	if _, err := refGitFn(bare, "cat-file", "-e", sha+"^{commit}"); err == nil {
+		req.RefRead = true
+	}
 	seen := map[string]bool{}
 	mods := splitTheoryModules(unitTheory)
 	names := make([]string, 0, len(mods))
@@ -306,6 +312,9 @@ func finishRequirements(bare, sha string, req *UnitRequirements) {
 // than found from theory identifiers.
 func requirementsForSources(repo, sha string, sources []string) UnitRequirements {
 	req := UnitRequirements{Sources: append([]string(nil), sources...), FlagFiles: map[string][]string{}, Evidence: map[string][]string{}}
+	if _, err := refGitFn(refBareDir(repo), "cat-file", "-e", sha+"^{commit}"); err == nil {
+		req.RefRead = true
+	}
 	finishRequirements(refBareDir(repo), sha, &req)
 	return req
 }

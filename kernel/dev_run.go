@@ -111,6 +111,10 @@ type devRun struct {
 	ownersFor                   string                      // the leaves the owners were computed for
 }
 
+// devNothingToBuildFmt: a unit closed without a conversation (args: repo, n, total, id,
+// definitions of its sources, modules no reference file was found for).
+const devNothingToBuildFmt = "dev_from_theorems: %[1]s unit %[2]d/%[3]d id=%[4]s has nothing of its own to build (its sources' %[5]d definitions belong to other units; no GPU source; no ISA path; unmeasured modules %[6]v) — closed without a conversation"
+
 // definitionOwners assigns every reference definition to exactly one unit, in plan order:
 // the first unit whose sources hold it ports it, the others do not list it. Units split
 // from one node divide its sources between them (file i to sibling i mod k). 11/05
@@ -415,6 +419,15 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 		baseRef = fail.BaseRef
 	}
 
+	// a unit with nothing measured to build: no definition of its own (every one belongs to
+	// another unit, or its theory names no reference file), no GPU source, no ISA path. 11/05
+	// u208dfb4222 ("sources []; definitions to port 0") would have passed on anything written.
+	if req := r.requirements(unit); !unit.Integration && req.RefRead && len(req.Symbols) == 0 && !req.GPU() && len(req.ISAFlags) == 0 {
+		log.Printf(devNothingToBuildFmt, r.repo, idx+1, total, unit.ID, len(r.rawRequirements(unit).Symbols), req.Unmeasured)
+		plan.MarkUnitPass(unit)
+		devPlanSave(r.repo, r.devRepo, r.branch, plan, fmt.Sprintf("plan: unit %s has nothing of its own to build", unit.ID))
+		return "", true, false
+	}
 	if st, ok := plan.ReviewPending[unit.ID]; ok {
 		log.Printf("dev_from_theorems: %s unit %d/%d id=%s was verified and pushed before the run stopped — resuming with its review",
 			r.repo, idx+1, total, unit.ID)

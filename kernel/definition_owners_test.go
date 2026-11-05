@@ -32,3 +32,25 @@ func TestEveryDefinitionIsPortedByExactlyOneUnit(t *testing.T) {
 		t.Fatalf("siblings divide the files: %v", got)
 	}
 }
+
+// 11/05 u208dfb4222: "sources []; definitions to port 0" — nothing measured, so anything
+// written would have passed. It is closed without a conversation instead.
+func TestAUnitWithNothingOfItsOwnToBuildIsClosedWithoutAConversation(t *testing.T) {
+	p := newDevPlan("ref/proj", "sha", mods("A"), [][]string{{"A"}}, "plan")
+	u := p.Leaves()[0]
+	r := &devRun{repo: "o/r", plan: p, raw: map[string]UnitRequirements{u.ID: {Unmeasured: []string{"GatedResidual"}, RefRead: true}}}
+	_, passed, requeue := r.runUnit(u, 0, 1)
+	if !passed || requeue || !p.UnitPass(u) {
+		t.Fatalf("closed: passed=%v requeue=%v", passed, requeue)
+	}
+}
+
+// a reference that could not be read is not "nothing to build"
+func TestAnUnreadReferenceDoesNotCloseAUnit(t *testing.T) {
+	p := newDevPlan("ref/proj", "sha", mods("A"), [][]string{{"A"}}, "plan")
+	u := p.Leaves()[0]
+	r := &devRun{repo: "o/r", plan: p, raw: map[string]UnitRequirements{u.ID: {Unmeasured: []string{"A"}}}}
+	if req := r.requirements(u); req.RefRead {
+		t.Fatal("not read")
+	}
+}
