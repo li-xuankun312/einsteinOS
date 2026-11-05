@@ -57,3 +57,38 @@ func TestTheDevBranchIsMaskedFilesAndPaths(t *testing.T) {
 		t.Fatal("a second sweep finds nothing")
 	}
 }
+
+// 11/05 08:07: 42 *.bc build outputs were committed with a unit
+func TestBuildOutputsStayOutOfTheDeltaAndAreRemovedFromTheBranch(t *testing.T) {
+	m := t.TempDir()
+	os.WriteFile(filepath.Join(m, "a.cu"), []byte("__global__ void k(){}\n"), 0o644)
+	os.WriteFile(filepath.Join(m, "a.bc"), []byte("BC\xc0\xde\x00\x01"), 0o644)
+	snap, err := snapshotTree(m)
+	if err != nil || snap["a.cu"] == "" || snap["a.bc"] != "" {
+		t.Fatalf("binary files are not part of a unit's tree: %v %v", snap, err)
+	}
+
+	dir := t.TempDir()
+	run := func(args ...string) {
+		c := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		c.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+		if o, err := c.CombinedOutput(); err != nil {
+			t.Fatalf("%v %s", err, o)
+		}
+	}
+	run("init", "-q", "-b", "main")
+	os.WriteFile(filepath.Join(dir, "logo.png"), []byte("PNG\x00"), 0o644)
+	run("add", "-A")
+	run("commit", "-qm", "main")
+	run("checkout", "-q", "-b", "dev")
+	os.WriteFile(filepath.Join(dir, "k.bc"), []byte("BC\x00"), 0o644)
+	os.WriteFile(filepath.Join(dir, "k.cu"), []byte("x"), 0o644)
+	run("add", "-A")
+	run("commit", "-qm", "unit")
+	if n := devRemoveUnitBinaries(dir, "main"); n != 1 {
+		t.Fatalf("only the unit's binary: %d", n)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "logo.png")); err != nil {
+		t.Fatal("the repository's own binary stays")
+	}
+}

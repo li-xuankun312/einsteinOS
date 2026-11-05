@@ -73,6 +73,12 @@ func devMaskSweep(repo, devRepo, branch string) {
 		log.Printf("dev_mask_sweep: %s: %v", devRepo, err)
 		return
 	}
+	// build outputs earlier units committed: binary files the dev branch has and main does not
+	removed := devRemoveUnitBinaries(cloneDir, "origin/"+devDefaultBase)
+	if removed > 0 {
+		log.Printf("dev_mask_sweep: %d binary build output(s) committed by earlier units removed from %s", removed, branch)
+	}
+	changed += removed
 	if changed+renamed == 0 {
 		log.Printf("dev_mask_sweep: %s %s holds no reference name", devRepo, branch)
 		return
@@ -91,4 +97,28 @@ func devMaskSweep(repo, devRepo, branch string) {
 // Dev conversations do not need it to work, and it is not what they read.
 func devMaskKeep(f string) bool {
 	return strings.HasPrefix(f, ".einsteinOS/") && strings.HasSuffix(f, ".json")
+}
+
+// devRemoveUnitBinaries removes tracked binary files that base does not have (build outputs a
+// unit committed — 11/05 08:07: 42 *.bc files with u12d8dd5102). The repository's own
+// binaries, on base, are kept.
+func devRemoveUnitBinaries(dir, base string) int {
+	out, err := exec.Command("git", "-C", dir, "ls-files", "-z").Output()
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, f := range strings.Split(strings.TrimRight(string(out), "\x00"), "\x00") {
+		if f == "" || devMaskKeep(f) || !hasNULBytes(filepath.Join(dir, f)) {
+			continue
+		}
+		if exec.Command("git", "-C", dir, "cat-file", "-e", base+":"+f).Run() == nil {
+			continue // the repository's own
+		}
+		if exec.Command("git", "-C", dir, "rm", "-q", "--cached", "--", f).Run() == nil {
+			os.Remove(filepath.Join(dir, f))
+			n++
+		}
+	}
+	return n
 }
