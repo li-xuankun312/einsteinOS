@@ -858,6 +858,8 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 		}
 
 		var toolResults []ToolResult
+		var preRan, preOK bool
+		var preReport string
 		// a dev unit may end in the round of its done marker only when this round ran its own
 		// build.sh and test.sh HERE and both exited 0: 11/05 the conversations that skipped them
 		// (6 fix attempts, 1 round each) never saw the real compiler or GPU and all failed; the
@@ -962,8 +964,19 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 			// a done marker in a round that ran tools: when every local result exited 0 there
 			// is nothing the extra round would learn. 11/04: 12 of the 16 dev/review
 			// conversations ended "one round of work, one round that says done".
+			// a dev unit's done line is checked by the kernel's own verification first
+			// (kernel/dev_preverify.go): pass → it may end; fail → the verdict goes back with the
+			// results and the conversation continues
+			preRan, preOK, preReport = false, false, ""
+			if len(collectedTools) > 0 && stopReason == "end_turn" && kernel.HasDoneMarker(textBuf.String()) && strings.HasPrefix(childRole, "dev_") {
+				preRan, preOK, preReport = kernel.PreVerify(childRole)
+			}
+			devEnds := doneInToolRound(childRole, toolResults, ranBuild && ranTest)
+			if preRan {
+				devEnds = preOK
+			}
 			if len(collectedTools) > 0 && stopReason == "end_turn" && kernel.HasDoneMarker(textBuf.String()) &&
-				(doneInToolRound(childRole, toolResults, ranBuild && ranTest) || reviewDone) && settledNow(convID) {
+				(devEnds || reviewDone) && settledNow(convID) {
 				if reviewDone {
 					log.Printf("claudeweb: review verdict and done marker in tool round %d, which only read files — ending without an extra round", st.rounds)
 				} else {
@@ -993,6 +1006,15 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 				if kernel.HasDoneMarker(event.Text) {
 					event.Settled = settledNow(convID)
 					log.Printf("claudeweb: done marker seen in round %d, settled=%v", st.rounds, event.Settled)
+					if strings.HasPrefix(childRole, "dev_") {
+						if ran, ok, report := kernel.PreVerify(childRole); ran && !ok {
+							// the kernel's verification failed: the done line does not end it
+							log.Printf("claudeweb: done line in round %d not accepted — the kernel's verification failed; sent back", st.rounds)
+							webReq.Prompt = report
+							webReq.CreateConversationParams = nil
+							continue
+						}
+					}
 				}
 				if sig := termCond.Check(event); sig != nil {
 					log.Printf("claudeweb: termination fired (text round): %s", sig.Reason)
@@ -1114,6 +1136,9 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 
 		var localDiff strings.Builder
 		localDiff.WriteString(writebackText(toolResults))
+		if preRan && !preOK {
+			localDiff.WriteString(preReport)
+		}
 		// measured facts the kernel adds to this writeback (theory: the sorry state of
 		// the files, so a chunk learns it with the Axle answer, not in an extra round)
 		if len(toolResults) > 0 {

@@ -496,11 +496,25 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 
 	cond := devUnitCondition()
 	var child int64
+	var pre *preVerifyResult // the last verification run at a done line (dev_preverify.go)
 	var convID string
 	var status map[string]string
 	for try := 1; try <= 5; try++ {
 		var ferr error
+		RegisterPreVerify(role, func() (bool, string) {
+			o := devVerifyOnly(cloneDir, mirror, r.branch, baseRef, unit.ID, r.gpuUsable(), base, r.shown(unit))
+			passed := o.Err == nil && o.Verified && o.Result.Passed()
+			changed, removed, _ := treeDelta(mirror, base)
+			pre = &preVerifyResult{ok: passed, digest: deltaDigest(mirror, changed, removed), out: o}
+			log.Printf("dev_preverify: %s unit %s (%s): compile=%s smoke=%s gate=%q — %s", r.repo, unit.ID, role,
+				o.Result.Compile, o.Result.Smoke, o.Result.Gate, map[bool]string{true: "the conversation may end", false: "sent back to the conversation"}[passed])
+			if passed {
+				return true, ""
+			}
+			return false, preVerifyReport(o)
+		})
 		child, ferr = ForkWithTermination(prompt, ".", role, cond)
+		UnregisterPreVerify(role)
 		if ferr != nil {
 			log.Printf("dev_from_theorems: %s unit %s fork failed (try %d/5): %v", r.repo, unit.ID, try, ferr)
 			continue
@@ -550,7 +564,15 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 		if out.Verified {
 			out = devRetryPush(cloneDir, mirror, r.devRepo, r.branch, baseRef, unit.ID, out)
 		} else {
-			out = devVerifyAndPush(cloneDir, mirror, r.devRepo, r.branch, baseRef, unit.ID, nodeDesc(unit), r.gpuUsable(), base, r.shown(unit))
+			if changed, removed, _ := treeDelta(mirror, base); try == 1 && pre != nil && pre.ok && pre.digest == deltaDigest(mirror, changed, removed) {
+				// the tree the conversation ended on is the one the kernel just verified
+				log.Printf("dev_verify: unit %s: the tree is the one verified at the done line — that verification is used", unit.ID)
+				out = pre.out
+				out.msg = fmt.Sprintf("unit %s: %s [compile=%s smoke=%s gate=%s, verified by the kernel]", unit.ID, truncStr(nodeDesc(unit), 120), out.Result.Compile, out.Result.Smoke, gateOrNone(out.Result.Gate))
+				out = devRetryPush(cloneDir, mirror, r.devRepo, r.branch, baseRef, unit.ID, out)
+			} else {
+				out = devVerifyAndPush(cloneDir, mirror, r.devRepo, r.branch, baseRef, unit.ID, nodeDesc(unit), r.gpuUsable(), base, r.shown(unit))
+			}
 		}
 		if out.Err == nil {
 			break
