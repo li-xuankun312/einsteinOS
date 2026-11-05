@@ -36,3 +36,16 @@ func TestTheDoneLineIsCheckedByTheKernelsOwnVerification(t *testing.T) {
 		t.Fatal("a changed file changes the digest: the verification is not reused")
 	}
 }
+
+// the check is registered for as long as the conversation runs, not until the fork returns
+func TestThePreVerifyCheckOutlivesTheForkCall(t *testing.T) {
+	src, err := os.ReadFile("dev_run.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(src)
+	fork := strings.Index(s, "child, ferr = ForkWithTermination(prompt")
+	if fork < 0 || !strings.Contains(s[fork:], "Wait(child)\n\t\tUnregisterPreVerify(role)") {
+		t.Fatal("UnregisterPreVerify must come after Wait(child)")
+	}
+}

@@ -518,12 +518,16 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 			return false, preVerifyReport(o)
 		})
 		child, ferr = ForkWithTermination(prompt, ".", role, cond)
-		UnregisterPreVerify(role)
 		if ferr != nil {
+			UnregisterPreVerify(role)
 			log.Printf("dev_from_theorems: %s unit %s fork failed (try %d/5): %v", r.repo, unit.ID, try, ferr)
 			continue
 		}
+		// the fork returns at once and the conversation runs until Wait returns: the check
+		// stays registered for all of it (11/05 07:14:08 dev_fix_1 of u12d8dd5102 ended with no
+		// check at all — it had been unregistered the moment the fork returned)
 		Wait(child)
+		UnregisterPreVerify(role)
 		if m := getMeta(child); m != nil && m.ConvID != "" {
 			convID = m.ConvID
 			RegisterConv(r.pid, convID, r.repo, role, idx+1)
