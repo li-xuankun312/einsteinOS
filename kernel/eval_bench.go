@@ -16,9 +16,9 @@ import (
 
 // EvalBench is one runnable benchmark of a repository.
 type EvalBench struct {
-	File    string // where it is declared (CMakeLists.txt, or the script itself)
-	Kind    string // cmake_test, cmake_target, script
-	Name    string // target / test / script name
+	File    string   // where it is declared (CMakeLists.txt, or the script itself)
+	Kind    string   // cmake_test, cmake_target, script
+	Name    string   // target / test / script name
 	Command string   // for cmake_test: the COMMAND of its add_test
 	Sources []string // for CMake targets: the files the repository builds it from
 }

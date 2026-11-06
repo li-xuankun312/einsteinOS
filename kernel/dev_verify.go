@@ -465,6 +465,11 @@ func runUnitVerifyWith(ws, unitID, gpuUsable string, req UnitRequirements, chang
 			PortMissing: portMissing(ws, unitID, req.Symbols), Kernels: unitKernels(ws, changed), KernelsMeasured: true,
 			NoToolchain: res.NoToolchain, Includers: cuhIncluders(ws, changed), IncludersMeasured: true,
 			RepoKernels: integrationRepoKernels(ws, req)})
+		// the integration unit: the port against the reference and the integration before,
+		// on this machine (eval_integration.go)
+		if fn := integrationEval(unitID); fn != nil && res.Gate == "" {
+			res.Gate, res.GateText = fn(ws, req.Benches)
+		}
 	}
 	return finish()
 }

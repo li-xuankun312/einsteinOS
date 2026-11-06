@@ -515,6 +515,11 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 	log.Printf("dev_from_theorems: %s unit %d/%d id=%s attempt %d forking %s (prompt %d bytes, base %s, modules: %s)",
 		r.repo, idx+1, total, unit.ID, attempt, role, len(prompt), baseRef, nodeDesc(unit))
 
+	if unit.Integration {
+		raw := r.rawRequirements(unit)
+		RegisterIntegrationEval(unit.ID, evalIntegration(r.repo, raw.SHA, r.devRepo, raw.Benches, newRefMask(refMaskIdent, r.repo).Replace))
+		defer UnregisterIntegrationEval(unit.ID)
+	}
 	cond := devUnitCondition()
 	var child int64
 	var pre *preVerifyResult // the last verification run at a done line (dev_preverify.go)
