@@ -67,7 +67,8 @@ func SetEvalTask(task string) {
 
 // evalDiscover runs the sealed search: up to MAX_REFS candidates the child names that clone,
 // excluding the dev repositories and the ones in exclude (the reference itself is evaluated
-// as the baseline, not as a candidate). accept measures what a clone must hold.
+// as the baseline, not as a candidate). accept measures what a clone must hold
+// (evalAcceptRepo: a benchmark the kernel can run).
 func evalDiscover(task string, exclude []string, accept func(repo string) (bool, string)) []RefRepo {
 	skip := map[string]bool{}
 	for _, e := range exclude {
