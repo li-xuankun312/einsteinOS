@@ -124,6 +124,14 @@ func ref_clone(owner, name string) {
 
 const MAX_REFS = 3
 
+// refDiscoverPromptFmt: the search for repositories beyond the ones a task names (%[1]s the
+// task, %[2]d how many). ref_discover only runs it when the task names none; the integration
+// unit's evaluation (eval_discover.go) runs it every time.
+const refDiscoverPromptFmt = "[USER TASK]\n%[1]s\n\n" +
+	"based on the task above, list %[2]d relevant open-source " +
+	"reference repositories on github.\n" +
+	"reply with ONLY owner/name lines, one per line, nothing else.\n"
+
 var (
 	dev_repos    = make(map[string]string) // key=owner/name, value=branch (empty="main")
 	dev_repos_mu sync.Mutex
@@ -247,11 +255,7 @@ func ref_discover(task string) []RefRepo {
 
 	need := MAX_REFS
 
-	prompt := fmt.Sprintf("[USER TASK]\n%s\n\n"+
-		"based on the task above, list %d relevant open-source "+
-		"reference repositories on github.\n"+
-		"reply with ONLY owner/name lines, one per line, nothing else.\n",
-		truncDiff(task, 3000), need)
+	prompt := fmt.Sprintf(refDiscoverPromptFmt, truncDiff(task, 3000), need)
 
 	var tried int
 	for tried < 3 && len(good) < MAX_REFS {

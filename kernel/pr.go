@@ -56,6 +56,7 @@ var (
 
 func PRSetup(task string) []RefRepo {
 	writeGHToken(task) // write token early so all children can use it
+	SetEvalTask(task)
 	refs := ref_discover(task)
 	log.Printf("pr_setup: %d refs", len(refs))
 	return refs
