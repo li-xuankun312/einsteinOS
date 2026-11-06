@@ -238,18 +238,28 @@ func prefetchCommitBlobs(cloneDir, sha string) {
 	if len(oids) == 0 {
 		return
 	}
-	fetch := exec.CommandContext(ctx, "git", "--git-dir", cloneDir, "-c", "fetch.negotiationAlgorithm=noop",
-		"fetch", "-q", "origin", "--no-tags", "--no-write-fetch-head", "--stdin")
-	fetch.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
-	fetch.Stdin = strings.NewReader(strings.Join(oids, "\n") + "\n")
-	if fo, err := fetch.CombinedOutput(); err != nil {
-		log.Printf("ref_prefetch: %s: %d blob(s) not fetched in one request (%v: %s) — files will be fetched one by one", short_sha(sha), len(oids), err, strings.TrimSpace(string(fo)))
-		return
+	// object ids as arguments, in batches: --stdin and --no-write-fetch-head need git 2.29,
+	// and 11/06 the machine's git (2.25) refused them
+	for i := 0; i < len(oids); i += refPrefetchBatch {
+		end := i + refPrefetchBatch
+		if end > len(oids) {
+			end = len(oids)
+		}
+		args := append([]string{"--git-dir", cloneDir, "-c", "fetch.negotiationAlgorithm=noop", "fetch", "-q", "origin", "--no-tags"}, oids[i:end]...)
+		fetch := exec.CommandContext(ctx, "git", args...)
+		fetch.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+		if fo, err := fetch.CombinedOutput(); err != nil {
+			log.Printf("ref_prefetch: %s: %d blob(s) not fetched in one request (%v: %s) — files will be fetched one by one", short_sha(sha), end-i, err, strings.TrimSpace(string(fo)))
+			return
+		}
 	}
 	log.Printf("ref_prefetch: %s: %d blob(s) fetched in one request in %s", short_sha(sha), len(oids), time.Since(start).Round(time.Millisecond))
 }
 
-const refPrefetchTimeout = 5 * time.Minute
+const (
+	refPrefetchTimeout = 5 * time.Minute
+	refPrefetchBatch   = 200 // object ids per fetch command line
+)
 
 func RefTreeAt(owner, name, sha string) ([]string, error) {
 	key := owner + "/" + name
