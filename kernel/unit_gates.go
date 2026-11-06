@@ -36,6 +36,10 @@ type GateInput struct {
 	KernelsMeasured bool
 	// NoToolchain: build.sh run again with the toolchain hidden (build_without_toolchain.go)
 	NoToolchain NoToolchainBuild
+	// Includers: per changed .cuh, the .cu files of the workspace that #include it
+	// (IncludersMeasured says the workspace was read; a hand-built input leaves both empty)
+	Includers         map[string][]string
+	IncludersMeasured bool
 	// RepoKernels: for the integration unit, the kernels the whole working tree defines
 	RepoKernels map[string]bool
 }
@@ -96,7 +100,11 @@ func unitGates(in GateInput) (kind, text string) {
 	// what the unit wrote must be what its build compiled for the GPU — not only the
 	// repository's existing src/*.cu, which is all the 11/03 builds compiled
 	if in.Req.GPU() && len(gpuFiles) > 0 {
-		if missing := notCudaCompiled(gpuFiles, in.Build.Cmdlines); len(missing) > 0 {
+		missing := notCudaCompiled(gpuFiles, in.Build.Cmdlines)
+		if in.IncludersMeasured {
+			missing = append(missing, cuhNotCompiled(gpuFiles, in.Includers, in.Build.Cmdlines)...)
+		}
+		if len(missing) > 0 {
 			fail("gpu_not_compiled", fmt.Sprintf(gateGPUNotCompiledFmt, strings.Join(missing, ", "), cudaCompilesSeen(in.Build.Cmdlines)))
 		}
 	}
@@ -379,4 +387,26 @@ func ranFrom(exes, dirs []string) bool {
 		}
 	}
 	return false
+}
+
+// cuhNotCompiled: the changed .cuh files no CUDA compile reached — none of the .cu files that
+// include them was named by a CUDA compile command line. 11/03 "corex compile" was the
+// repository's existing src/*.cu, and a unit that changed only headers passed on any of them.
+func cuhNotCompiled(gpuFiles []string, includers map[string][]string, cmdlines []string) []string {
+	var missing []string
+	for _, f := range gpuFiles {
+		if path.Ext(f) != ".cuh" {
+			continue
+		}
+		reached := false
+		for _, cu := range includers[f] {
+			if len(notCudaCompiled([]string{cu}, cmdlines)) == 0 {
+				reached = true
+			}
+		}
+		if !reached {
+			missing = append(missing, f+" (included by: "+strings.Join(append([]string{"none"}, includers[f]...)[min(1, len(includers[f])):], " ")+")")
+		}
+	}
+	return missing
 }

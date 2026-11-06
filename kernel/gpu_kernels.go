@@ -8,7 +8,9 @@ package kernel
 // __global__ function; this is what the unit's CUDA files are measured for.
 
 import (
+	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -112,3 +114,42 @@ func repoKernels(ws string) map[string]bool {
 	})
 	return set
 }
+
+// cuhIncluders: for each changed .cuh, the .cu files of ws whose #include names it.
+func cuhIncluders(ws string, changed []string) map[string][]string {
+	out := map[string][]string{}
+	var cuh []string
+	for _, f := range changedGPUFiles(changed) {
+		if path.Ext(f) == ".cuh" {
+			cuh = append(cuh, f)
+			out[f] = nil
+		}
+	}
+	if len(cuh) == 0 {
+		return out
+	}
+	filepath.WalkDir(ws, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() && d.Name() == ".git" {
+			return filepath.SkipDir
+		}
+		if d.IsDir() || filepath.Ext(p) != ".cu" {
+			return nil
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return nil
+		}
+		rel, _ := filepath.Rel(ws, p)
+		for _, m := range cudaIncludeRe.FindAllStringSubmatch(string(b), -1) {
+			for _, h := range cuh {
+				if path.Base(m[1]) == path.Base(h) {
+					out[h] = append(out[h], filepath.ToSlash(rel))
+				}
+			}
+		}
+		return nil
+	})
+	return out
+}
+
+var cudaIncludeRe = regexp.MustCompile(`(?m)^[ \t]*#[ \t]*include[ \t]*["<]([^">]+)[">]`)
