@@ -335,6 +335,11 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 	}
 	// every code file of the reference commit has a unit: the ones no theory unit's measured
 	// sources include get port units, one per directory
+	// the measurements below grep and read the reference commit; a blobless clone that still
+	// lacks some of its blobs would fetch them one at a time (11/06: 35 minutes between the
+	// plan and the first measured unit, nothing pushed in between)
+	prefetchCommitBlobs(refBareDir(repo), plan.RefSHA)
+	measureStart := time.Now()
 	if all := refPortSources(repo, plan.RefSHA); len(all) > 0 {
 		covered := map[string]bool{}
 		for _, l := range plan.Leaves() {
@@ -348,6 +353,7 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 			log.Printf("dev_plan: %s the reference registers %d tests: integration unit %s is the last unit", repo, len(tests), IntegrationUnitID(plan.RefSHA))
 			devPlanSave(repo, devRepo, branch, plan, "plan: integration unit")
 		}
+		log.Printf("dev_requirements: %s %d unit(s) measured against the reference in %s", repo, len(plan.Leaves()), time.Since(measureStart).Round(time.Second))
 		if n := plan.AddPortUnits(all, covered); n > 0 {
 			log.Printf("dev_plan: %s reference has %d code files; theory units cover %d; %d port unit(s) added for the rest", repo, len(all), len(covered), n)
 			devPlanSave(repo, devRepo, branch, plan, fmt.Sprintf("plan: %d port units", n))
