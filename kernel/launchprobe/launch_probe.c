@@ -103,6 +103,15 @@ probe_err_t cudaLaunchKernelExC(const void *cfg, const void *f, void **a) {
   return real_cudaLaunchKernelExC ? real_cudaLaunchKernelExC(cfg, f, a) : 1;
 }
 
+// the pre-9.2 runtime launch (cudaConfigureCall/cudaSetupArgument/cudaLaunch), which some
+// CUDA-compatible toolchains still emit
+typedef probe_err_t (*legacy_launch_fn)(const void *);
+probe_err_t cudaLaunch(const void *f) {
+  PROBE_REAL(cudaLaunch, legacy_launch_fn);
+  probe_record("cudaLaunch", f);
+  return real_cudaLaunch ? real_cudaLaunch(f) : 1;
+}
+
 // CUDA driver API: the function is an opaque handle, logged without a name
 typedef int (*cu_launch_fn)(void *, unsigned, unsigned, unsigned, unsigned, unsigned, unsigned, unsigned,
                             void *, void **, void **);

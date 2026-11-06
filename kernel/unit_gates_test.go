@@ -153,8 +153,13 @@ func TestGPUUseIsMeasuredFromTheTestProcesses(t *testing.T) {
 	write(t, ws, build, "bin/clang++ -x cuda --cuda-gpu-arch=ivcore10 -c src/baloon/k.cu")
 	write(t, ws, test, "( exec 3<"+dev+"; sleep 0.3 )")
 	r := runUnitVerifyWith(ws, "u6", "0", gpuReq, []string{"src/baloon/k.cu"}, time.Minute, time.Minute)
-	if !r.Passed() || len(r.Test.Devices) != 1 || r.Status()["gpu_devices_opened"] != dev {
+	// the device is measured from the child process; a shell holding it open launched no
+	// kernel, which the launch gates (not gpu_unused) now judge
+	if len(r.Test.Devices) != 1 || r.Status()["gpu_devices_opened"] != dev || r.Gate == "gpu_unused" {
 		t.Fatalf("%+v", r)
+	}
+	if r.Passed() || r.Gate != "gpu_launch_unmeasured" {
+		t.Fatalf("a device held by a shell passed or failed the wrong gate: %q %q", r.Gate, r.GateText)
 	}
 	write(t, ws, test, "sleep 0.3")
 	r = runUnitVerifyWith(ws, "u6", "0", gpuReq, []string{"src/baloon/k.cu"}, time.Minute, time.Minute)

@@ -132,3 +132,29 @@ func TestLaunchRecordInStatus(t *testing.T) {
 		t.Fatalf("LaunchSummary = %q", got)
 	}
 }
+
+// a toolchain whose binaries launch through a function the probe does not watch is
+// reported as unmeasured, with what they import, not as "no kernel ran"
+func TestLaunchUnmeasuredUnknownLaunchPath(t *testing.T) {
+	dir := t.TempDir()
+	src := `int ixLaunchSomething(const void*); int cudaSetDevice(int);
+void k(void) {}
+int main(void) { cudaSetDevice(0); return ixLaunchSomething((const void*)&k); }`
+	writeFileAll(t, dir+"/m.c", src)
+	writeFileAll(t, dir+"/rt.c", "int ixLaunchSomething(const void* f) { return 0; } int cudaSetDevice(int d) { return 0; }")
+	if out, err := execCC("-shared", "-fPIC", "-o", dir+"/libixrt.so", dir+"/rt.c"); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if out, err := execCC("-o", dir+"/t", dir+"/m.c", "-L"+dir, "-lixrt", "-Wl,-rpath,"+dir); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	got := launchUnmeasured(ProcTrace{ProbeLoaded: []string{dir + "/t"}, Devices: []string{"/dev/iluvatar0"}})
+	if !strings.Contains(got, "no probed executable imports") || !strings.Contains(got, "cudaSetDevice") {
+		t.Fatalf("launchUnmeasured = %q", got)
+	}
+	// the fake CUDA program imports cudaLaunchKernel: nothing launched there is "not launched"
+	prog := fakeCudaProgram(t, t.TempDir())
+	if got := launchUnmeasured(ProcTrace{ProbeLoaded: []string{prog}, Devices: []string{"/dev/iluvatar0"}}); got != "" {
+		t.Fatalf("an executable importing cudaLaunchKernel was judged unmeasured: %q", got)
+	}
+}

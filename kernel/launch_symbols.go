@@ -211,7 +211,60 @@ func launchUnmeasured(t ProcTrace) string {
 	if len(static) > 0 {
 		return fmt.Sprintf("%s link the CUDA runtime statically, so their launches never pass through the probe; link the shared runtime (clang: -lcudart, nvcc: -cudart shared)", shortList(static, 6))
 	}
+	// nothing launched and nothing could have been seen: no probed executable imports a
+	// launch function the probe watches — a toolchain with another launch path is not
+	// taken for "no kernel ran"
+	var cudaImports []string
+	importsProbed := false
+	for _, exe := range t.ProbeLoaded {
+		for _, sym := range importedFuncs(exe) {
+			if probedLaunchAPIs[sym] {
+				importsProbed = true
+			}
+			if strings.HasPrefix(sym, "cuda") || strings.HasPrefix(sym, "cu") && len(sym) > 2 && sym[2] >= 'A' && sym[2] <= 'Z' {
+				cudaImports = append(cudaImports, sym)
+			}
+		}
+	}
+	if !importsProbed {
+		sort.Strings(cudaImports)
+		return fmt.Sprintf("a GPU device was opened but no probed executable imports a launch function the probe watches (%s); the CUDA functions they import: %s",
+			setText(probedLaunchAPIs), shortList(dedupe(cudaImports), 12))
+	}
 	return ""
+}
+
+// probedLaunchAPIs are the launch functions launch_probe.c interposes.
+var probedLaunchAPIs = map[string]bool{"cudaLaunchKernel": true, "cudaLaunchKernel_ptsz": true,
+	"cudaLaunchCooperativeKernel": true, "cudaLaunchKernelExC": true, "cudaLaunch": true, "cuLaunchKernel": true}
+
+// importedFuncs: the undefined (imported) symbols of an ELF file, nil when it is not one.
+func importedFuncs(path string) []string {
+	f, err := elf.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	syms, err := f.ImportedSymbols()
+	if err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(syms))
+	for _, s := range syms {
+		out = append(out, s.Name)
+	}
+	return out
+}
+
+// dedupe drops repeats from a sorted list.
+func dedupe(xs []string) []string {
+	var out []string
+	for i, x := range xs {
+		if i == 0 || x != xs[i-1] {
+			out = append(out, x)
+		}
+	}
+	return out
 }
 
 // definesFunc: the ELF file defines (not only imports) the named function.
