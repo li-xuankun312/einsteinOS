@@ -144,3 +144,5 @@ func TestGPUUnitTestRunsUnderTheLaunchProbe(t *testing.T) {
 		t.Fatalf("CPU unit ran under the probe: %+v", cpu.Test)
 	}
 }
+
+func execCC(args ...string) ([]byte, error) { return exec.Command("cc", args...).CombinedOutput() }

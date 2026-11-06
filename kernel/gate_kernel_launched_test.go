@@ -49,3 +49,34 @@ func TestLaunchesText(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+func TestLaunchUnmeasured(t *testing.T) {
+	if got := launchUnmeasured(ProcTrace{ProbeErr: "no C compiler"}); !strings.Contains(got, "no C compiler") {
+		t.Fatalf("probe error: %q", got)
+	}
+	if got := launchUnmeasured(ProcTrace{}); got != "" {
+		t.Fatalf("unprobed trace judged: %q", got)
+	}
+	if got := launchUnmeasured(ProcTrace{ProbeLoaded: []string{"/bin/true"}, Devices: []string{"/dev/iluvatar0"}, Launches: []KernelLaunch{{Name: "k"}}}); got != "" {
+		t.Fatalf("measured launches judged unmeasured: %q", got)
+	}
+}
+
+// a test binary with the runtime linked in: its launches never reach the probe
+func TestGateLaunchUnmeasuredStaticRuntime(t *testing.T) {
+	dir := t.TempDir()
+	fakeCudaProgram(t, dir) // writes rt.c and main.c
+	static := dir + "/static_test"
+	if out, err := execCC("-o", static, dir+"/main.c", dir+"/rt.c"); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	in := launchGateInput()
+	in.Test.ProbeLoaded = []string{"/usr/bin/bash", static}
+	kind, text := unitGates(in)
+	if kind != "gpu_launch_unmeasured" || !strings.Contains(text, "static_test") || !strings.Contains(text, "statically") {
+		t.Fatalf("kind=%q text=%q", kind, text)
+	}
+	if strings.Contains(text, "gpu_kernel_not_launched") {
+		t.Fatalf("an unmeasured test was also judged as launching nothing: %q", text)
+	}
+}

@@ -189,3 +189,41 @@ func launchesText(ls []KernelLaunch) string {
 	}
 	return txt
 }
+
+// launchUnmeasured says why a GPU test's launches could not be seen, "" when they could
+// (or when the test opened no device, which gpu_unused judges). Called on traces taken with
+// the probe (ProbeErr or ProbeLoaded set); a trace without either was not probed.
+func launchUnmeasured(t ProcTrace) string {
+	switch {
+	case t.ProbeErr != "":
+		return "the launch probe could not be built on this machine: " + t.ProbeErr
+	case len(t.ProbeLoaded) == 0:
+		return ""
+	case len(t.Devices) == 0 || len(t.Launches) > 0:
+		return ""
+	}
+	var static []string
+	for _, exe := range t.ProbeLoaded {
+		if definesFunc(exe, "cudaLaunchKernel") {
+			static = append(static, exe)
+		}
+	}
+	if len(static) > 0 {
+		return fmt.Sprintf("%s link the CUDA runtime statically, so their launches never pass through the probe; link the shared runtime (clang: -lcudart, nvcc: -cudart shared)", shortList(static, 6))
+	}
+	return ""
+}
+
+// definesFunc: the ELF file defines (not only imports) the named function.
+func definesFunc(path, name string) bool {
+	syms, _, err := elfFuncSymbols(path)
+	if err != nil {
+		return false
+	}
+	for _, n := range syms {
+		if n == name {
+			return true
+		}
+	}
+	return false
+}

@@ -62,6 +62,7 @@ const (
 	gateToolchainUnusedFmt = "toolchain_unused: the unit is GPU work but no process of build.sh ran a program from %[1]s (programs that ran: %[2]s) — a build that skips the toolchain proves nothing"
 	gateGPUKernelMissingFmt = "gpu_kernel_missing: the unit's modules come from CUDA sources in the reference (%[1]s) but its CUDA files define no __global__ kernel: %[2]s — a host header about a kernel is not the kernel"
 	gateKernelNotLaunchedFmt = "gpu_kernel_not_launched: test.sh exited 0 but launched none of the unit's kernels (%[1]s); kernels its processes launched: %[2]s; executables the launch probe was in: %[3]s — a test that opens the device and checks on the CPU proves nothing about the kernels"
+	gateLaunchUnmeasuredFmt = "gpu_launch_unmeasured: whether the unit's kernels ran on the device could not be measured: %[1]s"
 	gateToolchainFmt      = "toolchain_missing: the unit's sources are CUDA but none of %[1]s exists in %[2]s on this machine; a build that skips the GPU here proves nothing"
 )
 
@@ -100,9 +101,16 @@ func unitGates(in GateInput) (kind, text string) {
 		fail("gpu_unused", fmt.Sprintf(gateGPUUnusedFmt, in.Test.Procs, gpuDeviceRe().String(), shortList(in.Test.Exes, 8)))
 	}
 
+	// no measurement is not a pass: say why the launches could not be seen
+	unmeasured := ""
+	if in.Req.GPU() || in.Req.RequireGPU {
+		if unmeasured = launchUnmeasured(in.Test); unmeasured != "" {
+			fail("gpu_launch_unmeasured", fmt.Sprintf(gateLaunchUnmeasuredFmt, unmeasured))
+		}
+	}
 	// the unit's own kernels must have run on the device: the launch probe names every
 	// kernel the test's processes launched (launch_probe.go, launch_symbols.go)
-	if in.Req.GPU() && in.KernelsMeasured && probeMeasured(in.Test) {
+	if in.Req.GPU() && in.KernelsMeasured && probeMeasured(in.Test) && unmeasured == "" {
 		own := kernelSet(in.Kernels)
 		if len(own) > 0 && !anyLaunched(own, in.Test.Launches) {
 			fail("gpu_kernel_not_launched", fmt.Sprintf(gateKernelNotLaunchedFmt, setText(own), launchesText(in.Test.Launches), shortList(in.Test.ProbeLoaded, 8)))
