@@ -30,6 +30,7 @@ const (
 	portNoLineFmt       = "  %[1]s %[2]s %[3]s: no line in %[4]s"
 	portNoFileFmt       = "  %[1]s %[2]s → %[3]s: no such file"
 	portNotDefinedFmt   = "  %[1]s %[2]s → %[3]s:%[4]s: not defined in that file"
+	portNotKernelFmt    = "  %[1]s kernel %[2]s → %[3]s:%[4]s: defined there, but not as a __global__ kernel of a .cu/.cuh file — a host function about a kernel is not its port"
 	portChecklistHead   = "[PORT — measured from %[1]s at %[2]s] the unit passes only when every definition below has a counterpart, listed in %[3]s as:\n<reference file>\\t<reference name>\\t<file in this repo>\\t<name defined there>\n"
 	portChecklistLine   = "%[1]s\t%[2]s\t%[3]s\n"
 	portChecklistFooter = "%[1]d definitions. the kernel reads every line and checks the name is defined in the file it names.\n"
@@ -59,6 +60,7 @@ func readPortMap(ws, unitID string) map[string]portEntry {
 func portMissing(ws, unitID string, syms []RefSymbol) []string {
 	pm := readPortMap(ws, unitID)
 	defined := map[string]map[string]bool{} // file -> base names it defines
+	kernels := map[string]map[string]bool{} // file -> base names of its __global__ kernels
 	definedIn := func(file, name string) (exists, ok bool) {
 		d, seen := defined[file]
 		if !seen {
@@ -68,10 +70,15 @@ func portMissing(ws, unitID string, syms []RefSymbol) []string {
 				return false, false
 			}
 			d = map[string]bool{}
+			k := map[string]bool{}
 			for _, s := range SymbolsOf(file, string(b)) {
 				d[symbolBase(s.Name)] = true
+				if s.Kind == "kernel" {
+					k[symbolBase(s.Name)] = true
+				}
 			}
 			defined[file] = d
+			kernels[file] = k
 		}
 		if d == nil {
 			return false, false
@@ -90,6 +97,8 @@ func portMissing(ws, unitID string, syms []RefSymbol) []string {
 				out = append(out, fmt.Sprintf(portNoFileFmt, s.File, s.Name, e.file))
 			} else if !def {
 				out = append(out, fmt.Sprintf(portNotDefinedFmt, s.File, s.Name, e.file, e.name))
+			} else if s.Kind == "kernel" && !kernels[e.file][symbolBase(e.name)] {
+				out = append(out, fmt.Sprintf(portNotKernelFmt, s.File, s.Name, e.file, e.name))
 			}
 		}
 	}

@@ -36,9 +36,9 @@ func TestTheDefinitionsOfAReferenceFileAreMeasured(t *testing.T) {
 		}
 	}
 	dev := symNames(SymbolsOf("src/core/device.cu", read("device.cu")))
-	for _, n := range []string{"poison_kernel", "DeviceArena::alloc", "device_info"} {
-		if dev[n] != "func" {
-			t.Errorf("device.cu: %s not measured", n)
+	for n, kind := range map[string]string{"poison_kernel": "kernel", "DeviceArena::alloc": "func", "device_info": "func"} {
+		if dev[n] != kind {
+			t.Errorf("device.cu: %s want %s, got %q", n, kind, dev[n])
 		}
 	}
 	py := symNames(SymbolsOf("ref/ngram.py", "import x\nclass Hash:\n    def inner(self): pass\ndef selftest():\n    pass\n"))

@@ -18,7 +18,7 @@ import (
 // RefSymbol is one top-level definition of a file.
 type RefSymbol struct {
 	File string // repo-relative path
-	Kind string // type, func, const, macro, alias
+	Kind string // type, func, kernel (a __global__ function of a .cu/.cuh), const, macro, alias
 	Name string // as written: "PleTable", "ngram_rows", "Engine::step"
 }
 
@@ -39,6 +39,31 @@ var (
 
 // SymbolsOf measures the top-level definitions of one file's text.
 func SymbolsOf(file, text string) []RefSymbol {
+	out := symbolsOfText(file, text)
+	// a __global__ function of a CUDA file is a kernel, not a host function: its counterpart
+	// must be a kernel too (port_gate.go). 11/03 FusedGdnKernels, QsaDecodeAttention and
+	// PrefillGpuKernels were ported as host headers of index arithmetic "about" the kernels.
+	if isCUDAFile(file) {
+		kern := map[string]bool{}
+		for _, k := range kernelNamesIn(text) {
+			kern[k] = true
+		}
+		for i := range out {
+			if out[i].Kind == "func" && kern[symbolBase(out[i].Name)] {
+				out[i].Kind = "kernel"
+			}
+		}
+	}
+	return out
+}
+
+// isCUDAFile: a .cu or .cuh path.
+func isCUDAFile(file string) bool {
+	ext := strings.ToLower(path.Ext(file))
+	return ext == ".cu" || ext == ".cuh"
+}
+
+func symbolsOfText(file, text string) []RefSymbol {
 	ext := strings.ToLower(path.Ext(file))
 	var out []RefSymbol
 	seen := map[string]bool{}
