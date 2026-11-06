@@ -34,6 +34,8 @@ type GateInput struct {
 	// KernelsMeasured says the files were read (a hand-built input leaves both empty)
 	Kernels         map[string][]string
 	KernelsMeasured bool
+	// NoToolchain: build.sh run again with the toolchain hidden (build_without_toolchain.go)
+	NoToolchain NoToolchainBuild
 	// RepoKernels: for the integration unit, the kernels the whole working tree defines
 	RepoKernels map[string]bool
 }
@@ -154,6 +156,14 @@ func unitGates(in GateInput) (kind, text string) {
 	// exited 0: whether the toolchain was used is measured from the build's processes
 	if (in.Req.GPU() || in.Req.RequireGPU) && len(in.Compilers) > 0 && !toolchainRan(in.Build) {
 		fail("toolchain_unused", fmt.Sprintf(gateToolchainUnusedFmt, strings.Join(toolchainDirs, ":"), shortList(in.Build.Exes, 8)))
+	}
+	// and its exit code must depend on the toolchain: the same build.sh with the toolchain
+	// hidden has to fail, or "BUILD OK" is printed either way
+	// (a hand-built input without the run leaves NoToolchain zero, like KernelsMeasured)
+	if (in.Req.GPU() || in.Req.RequireGPU) && len(in.Compilers) > 0 && (in.NoToolchain.Measured || in.NoToolchain.Err != "") {
+		if k, t := noToolchainGate(in.NoToolchain); k != "" {
+			fail(k, t)
+		}
 	}
 	if len(in.PortMissing) > 0 {
 		fail("port_incomplete", fmt.Sprintf(gatePortFmt, len(in.PortMissing), len(in.Req.Symbols), strings.Join(in.PortMissing, "\n")))

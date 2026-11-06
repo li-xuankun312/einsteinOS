@@ -285,6 +285,9 @@ type VerifyResult struct {
 	GateText string
 	Build    ProcTrace
 	Test     ProcTrace
+	// NoToolchain: build.sh run again with the toolchain hidden, for GPU units
+	// (build_without_toolchain.go)
+	NoToolchain NoToolchainBuild
 }
 
 // Status renders the result as the status map the rest of dev_* reads.
@@ -421,6 +424,9 @@ func runUnitVerifyWith(ws, unitID, gpuUsable string, req UnitRequirements, chang
 		return finish()
 	}
 	res.Compile = "pass"
+	if (req.GPU() || req.RequireGPU) && len(presentGPUCompilers()) > 0 {
+		res.NoToolchain = buildWithoutToolchain(ws, build, buildTimeout)
+	}
 
 	if _, err := os.Stat(filepath.Join(ws, filepath.FromSlash(test))); err != nil {
 		return finish() // Smoke stays "missing"
@@ -457,6 +463,7 @@ func runUnitVerifyWith(ws, unitID, gpuUsable string, req UnitRequirements, chang
 		res.Smoke = "pass"
 		res.Gate, res.GateText = unitGates(GateInput{Req: req, Changed: changed, Build: res.Build, Test: res.Test, Compilers: presentGPUCompilers(),
 			PortMissing: portMissing(ws, unitID, req.Symbols), Kernels: unitKernels(ws, changed), KernelsMeasured: true,
+			NoToolchain: res.NoToolchain,
 			RepoKernels: integrationRepoKernels(ws, req)})
 	}
 	return finish()
