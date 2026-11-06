@@ -245,7 +245,10 @@ func prefetchCommitBlobs(cloneDir, sha string) {
 		if end > len(oids) {
 			end = len(oids)
 		}
-		args := append([]string{"--git-dir", cloneDir, "-c", "fetch.negotiationAlgorithm=noop", "fetch", "-q", "origin", "--no-tags"}, oids[i:end]...)
+		// --filter=blob:none makes it a promisor fetch: the pack is kept as a promisor pack and
+		// the connectivity check accepts what it does not hold (11/06 git 2.25 without it:
+		// "bad revision … did not send all necessary objects")
+		args := append([]string{"--git-dir", cloneDir, "-c", "fetch.negotiationAlgorithm=noop", "fetch", "-q", "origin", "--no-tags", "--filter=blob:none"}, oids[i:end]...)
 		fetch := exec.CommandContext(ctx, "git", args...)
 		fetch.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 		if fo, err := fetch.CombinedOutput(); err != nil {
