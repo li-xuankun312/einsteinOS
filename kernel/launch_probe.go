@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -137,4 +138,18 @@ func readProbeLog(path string) probeLog {
 // launchProbeEnv is the shell prelude that preloads the probe and names its log.
 func launchProbeEnv(lib, logPath string) string {
 	return fmt.Sprintf("export EINSTEINOS_LAUNCH_LOG=%s LD_PRELOAD=%s${LD_PRELOAD:+:$LD_PRELOAD}; ", shq(logPath), shq(lib))
+}
+
+// probeLoadedExes: the distinct executables the probe was loaded into, sorted.
+func probeLoadedExes(pl probeLog) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, exe := range pl.Loaded {
+		if !seen[exe] {
+			seen[exe] = true
+			out = append(out, exe)
+		}
+	}
+	sort.Strings(out)
+	return out
 }

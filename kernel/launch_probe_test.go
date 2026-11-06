@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeCudaProgram builds, in dir, a stand-in libcudart.so whose cudaLaunchKernel does
@@ -107,5 +108,39 @@ func TestReadProbeLogSkipsBadLines(t *testing.T) {
 	}
 	if empty := readProbeLog(filepath.Join(t.TempDir(), "none")); len(empty.Loaded) != 0 || len(empty.Launches) != 0 {
 		t.Fatalf("missing log: %+v", empty)
+	}
+}
+
+// a GPU unit's test.sh runs under the probe and its launches come back in the trace
+func TestGPUUnitTestRunsUnderTheLaunchProbe(t *testing.T) {
+	withProbeDir(t)
+	realRunner(t)
+	withFakeToolchain(t)
+	ws := t.TempDir()
+	prog := fakeCudaProgram(t, t.TempDir())
+	build, test := devVerifyScripts("ug1")
+	os.MkdirAll(filepath.Join(ws, filepath.Dir(build)), 0o755)
+	os.WriteFile(filepath.Join(ws, build), []byte("exit 0\n"), 0o755)
+	os.WriteFile(filepath.Join(ws, test), []byte(shq(prog)+"\n"), 0o755)
+	req := UnitRequirements{Sources: []string{"src/k.cu"}, GPUSources: []string{"src/k.cu"}}
+	res := runUnitVerifyWith(ws, "ug1", "", req, nil, time.Minute, time.Minute)
+	if res.Smoke != "pass" {
+		t.Fatalf("smoke=%s out=%s", res.Smoke, res.TestOut)
+	}
+	if !launchedNames(res.Test.Launches)["my_kernel"] {
+		t.Fatalf("launches not measured: %+v (probe err %q)", res.Test.Launches, res.Test.ProbeErr)
+	}
+	found := false
+	for _, e := range res.Test.ProbeLoaded {
+		found = found || e == prog
+	}
+	if !found {
+		t.Fatalf("ProbeLoaded = %v, want it to include %s", res.Test.ProbeLoaded, prog)
+	}
+
+	// a CPU unit's test runs without the probe
+	cpu := runUnitVerifyWith(ws, "ug1", "", UnitRequirements{Sources: []string{"src/a.cpp"}}, nil, time.Minute, time.Minute)
+	if len(cpu.Test.Launches) != 0 || len(cpu.Test.ProbeLoaded) != 0 {
+		t.Fatalf("CPU unit ran under the probe: %+v", cpu.Test)
 	}
 }

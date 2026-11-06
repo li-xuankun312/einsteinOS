@@ -422,7 +422,27 @@ func runUnitVerifyWith(ws, unitID, gpuUsable string, req UnitRequirements, chang
 	if _, err := os.Stat(filepath.Join(ws, filepath.FromSlash(test))); err != nil {
 		return finish() // Smoke stays "missing"
 	}
-	code, out, ttrace, err := runWatched(env+"bash "+test+" 2>&1", ws, testTimeout)
+	// a GPU unit's test runs with the launch probe preloaded: which kernels ran is measured
+	testEnv, probeLog, probeErr := env, "", ""
+	if req.GPU() || req.RequireGPU {
+		if lib, err := launchProbeLib(); err != nil {
+			probeErr = err.Error()
+		} else if f, err := os.CreateTemp("", "einsteinos-launch-*.log"); err != nil {
+			probeErr = err.Error()
+		} else {
+			probeLog = f.Name()
+			f.Close()
+			defer os.Remove(probeLog)
+			testEnv += launchProbeEnv(lib, probeLog)
+		}
+	}
+	code, out, ttrace, err := runWatched(testEnv+"bash "+test+" 2>&1", ws, testTimeout)
+	ttrace.ProbeErr = probeErr
+	if probeLog != "" {
+		pl := readProbeLog(probeLog)
+		ttrace.Launches = resolveLaunches(pl)
+		ttrace.ProbeLoaded = probeLoadedExes(pl)
+	}
 	res.Test = ttrace
 	res.TestExit, res.TestOut = code, tailText(out, 3000)
 	switch {

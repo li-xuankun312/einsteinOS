@@ -42,6 +42,12 @@ type ProcTrace struct {
 	Exes     []string
 	Cmdlines []string
 	Procs    int // distinct processes seen
+	// the kernel launch probe (launch_probe.go), for a GPU unit's test.sh: the kernels its
+	// processes launched, the executables the probe was loaded into, and why there is no
+	// measurement when the probe could not be built
+	Launches    []KernelLaunch
+	ProbeLoaded []string
+	ProbeErr    string
 }
 
 type procWatcher struct {
