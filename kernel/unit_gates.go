@@ -34,6 +34,8 @@ type GateInput struct {
 	// KernelsMeasured says the files were read (a hand-built input leaves both empty)
 	Kernels         map[string][]string
 	KernelsMeasured bool
+	// RepoKernels: for the integration unit, the kernels the whole working tree defines
+	RepoKernels map[string]bool
 }
 
 // gpuCompilers are the programs that make a GPU build possible, looked for in toolchainDirs.
@@ -63,6 +65,7 @@ const (
 	gateGPUKernelMissingFmt = "gpu_kernel_missing: the unit's modules come from CUDA sources in the reference (%[1]s) but its CUDA files define no __global__ kernel: %[2]s — a host header about a kernel is not the kernel"
 	gateKernelNotLaunchedFmt = "gpu_kernel_not_launched: test.sh exited 0 but launched none of the unit's kernels (%[1]s); kernels its processes launched: %[2]s; executables the launch probe was in: %[3]s — a test that opens the device and checks on the CPU proves nothing about the kernels"
 	gateLaunchUnmeasuredFmt = "gpu_launch_unmeasured: whether the unit's kernels ran on the device could not be measured: %[1]s"
+	gateIntegrationNoKernelFmt = "integration_kernel_not_launched: the reference builds CUDA and its %[1]d registered tests passed here, but none of them launched a kernel of this repository (it defines %[2]d: %[3]s); kernels launched: %[4]s"
 	gateToolchainFmt      = "toolchain_missing: the unit's sources are CUDA but none of %[1]s exists in %[2]s on this machine; a build that skips the GPU here proves nothing"
 )
 
@@ -115,6 +118,14 @@ func unitGates(in GateInput) (kind, text string) {
 		if len(own) > 0 && !anyLaunched(own, in.Test.Launches) {
 			fail("gpu_kernel_not_launched", fmt.Sprintf(gateKernelNotLaunchedFmt, setText(own), launchesText(in.Test.Launches), shortList(in.Test.ProbeLoaded, 8)))
 		}
+	}
+
+	// the integration unit: the reference's tests, run here, must put this repository's
+	// kernels on the device — 11/06 its 28 "parity" tests opened GPU 0 and ran the units'
+	// own invariant checks
+	if len(in.Req.Tests) > 0 && in.Req.RequireGPU && probeMeasured(in.Test) && unmeasured == "" && len(in.RepoKernels) > 0 &&
+		!anyLaunched(in.RepoKernels, in.Test.Launches) {
+		fail("integration_kernel_not_launched", fmt.Sprintf(gateIntegrationNoKernelFmt, len(in.Req.Tests), len(in.RepoKernels), shortList(sortedKeys(in.RepoKernels), 12), launchesText(in.Test.Launches)))
 	}
 
 	// the reference's per-source ISA flags: the paths they enable must exist in what was

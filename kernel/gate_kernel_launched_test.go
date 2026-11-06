@@ -80,3 +80,36 @@ func TestGateLaunchUnmeasuredStaticRuntime(t *testing.T) {
 		t.Fatalf("an unmeasured test was also judged as launching nothing: %q", text)
 	}
 }
+
+func TestRepoKernelsSkipsGitAndBuild(t *testing.T) {
+	ws := t.TempDir()
+	for f, src := range map[string]string{
+		"src/a.cu":        "__global__ void ka(int*) {}",
+		"include/b.cuh":   "__global__ void kb(int*);",
+		"build/gen.cu":    "__global__ void generated(int*) {}",
+		".git/x.cu":       "__global__ void inside_git(int*) {}",
+		"src/host.cpp":    "__global__ void not_cuda(int*) {}",
+	} {
+		writeFileAll(t, ws+"/"+f, src)
+	}
+	got := repoKernels(ws)
+	if !got["ka"] || !got["kb"] || len(got) != 2 {
+		t.Fatalf("repoKernels = %v", got)
+	}
+}
+
+// 11/06: the integration unit's 28 tests passed with its wrappers running unit invariants
+func TestGateIntegrationKernelNotLaunched(t *testing.T) {
+	in := GateInput{Req: UnitRequirements{Tests: []RefTest{{Name: "gdn_parity"}, {Name: "pool_test"}}, RequireGPU: true},
+		Compilers: corex, Build: ProcTrace{Exes: []string{"/usr/local/corex/bin/clang++"}},
+		Test:        ProcTrace{Devices: []string{"/dev/iluvatar0"}, ProbeLoaded: []string{"/ws/build/gdn_parity"}, Launches: []KernelLaunch{{API: "cuLaunchKernel"}}},
+		RepoKernels: map[string]bool{"gdn_step": true, "rope_apply": true}}
+	kind, text := unitGates(in)
+	if kind != "integration_kernel_not_launched" || !strings.Contains(text, "gdn_step") {
+		t.Fatalf("kind=%q text=%q", kind, text)
+	}
+	in.Test.Launches = append(in.Test.Launches, KernelLaunch{Name: "rope_apply"})
+	if _, text := unitGates(in); strings.Contains(text, "integration_kernel_not_launched") {
+		t.Fatalf("a launched repository kernel still failed: %q", text)
+	}
+}

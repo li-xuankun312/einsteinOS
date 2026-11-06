@@ -227,3 +227,13 @@ func definesFunc(path, name string) bool {
 	}
 	return false
 }
+
+// sortedKeys returns a set's members, sorted.
+func sortedKeys(set map[string]bool) []string {
+	out := make([]string, 0, len(set))
+	for k := range set {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}

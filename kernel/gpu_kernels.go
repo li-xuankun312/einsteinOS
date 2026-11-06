@@ -83,3 +83,32 @@ func kernelFilesText(perFile map[string][]string) string {
 	}
 	return strings.Join(parts, ", ")
 }
+
+// repoKernels: every kernel defined in the CUDA files of the working tree ws (not under
+// .git or a build directory) — what the integration unit's tests have to choose from.
+func repoKernels(ws string) map[string]bool {
+	set := map[string]bool{}
+	_ = filepath.WalkDir(ws, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case ".git", "build", "_build", "cmake-build", "node_modules":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		ext := filepath.Ext(p)
+		if ext != ".cu" && ext != ".cuh" {
+			return nil
+		}
+		if b, err := os.ReadFile(p); err == nil {
+			for _, n := range kernelNamesIn(string(b)) {
+				set[n] = true
+			}
+		}
+		return nil
+	})
+	return set
+}

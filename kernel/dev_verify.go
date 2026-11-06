@@ -453,7 +453,8 @@ func runUnitVerifyWith(ws, unitID, gpuUsable string, req UnitRequirements, chang
 	default:
 		res.Smoke = "pass"
 		res.Gate, res.GateText = unitGates(GateInput{Req: req, Changed: changed, Build: res.Build, Test: res.Test, Compilers: presentGPUCompilers(),
-			PortMissing: portMissing(ws, unitID, req.Symbols), Kernels: unitKernels(ws, changed), KernelsMeasured: true})
+			PortMissing: portMissing(ws, unitID, req.Symbols), Kernels: unitKernels(ws, changed), KernelsMeasured: true,
+			RepoKernels: integrationRepoKernels(ws, req)})
 	}
 	return finish()
 }
@@ -706,4 +707,12 @@ func gateOrNone(g string) string {
 		return "ok"
 	}
 	return g
+}
+
+// integrationRepoKernels: the working tree's kernels, measured for the integration unit only.
+func integrationRepoKernels(ws string, req UnitRequirements) map[string]bool {
+	if len(req.Tests) == 0 {
+		return nil
+	}
+	return repoKernels(ws)
 }

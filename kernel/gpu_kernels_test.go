@@ -81,3 +81,11 @@ func TestGateGPUKernelMissing(t *testing.T) {
 		t.Fatalf("unmeasured kernels failed the gate: %q", text)
 	}
 }
+
+func writeFileAll(t *testing.T, p, s string) {
+	t.Helper()
+	os.MkdirAll(filepath.Dir(p), 0o755)
+	if err := os.WriteFile(p, []byte(s), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
