@@ -256,6 +256,13 @@ func (r *devRun) rawRequirements(unit DevPlanNode) UnitRequirements {
 		// builds them from is the unit's to port (11/06 uintegration01529aaa82b9 passed 28 tests
 		// named like the reference's, each a wrapper running other units' invariant checks)
 		req.Sources, req.Symbols = integrationTestSymbols(refBareDir(r.repo), sha, tests)
+		// and the reference's own benchmarks: their counterparts are built and run by the port,
+		// so the files the reference builds them from are the unit's to port too
+		if b, err := evalBenchmarks(refBareDir(r.repo), sha); err == nil {
+			req.Benches = b
+			req.Sources, req.Symbols = withBenchSources(refBareDir(r.repo), sha, req.Sources, req.Symbols, b)
+		}
+		log.Printf("dev_requirements: %s integration unit %s: %d benchmark(s) of the reference to run here", r.repo, unit.ID, len(req.Benches))
 		log.Printf("dev_requirements: %s integration unit %s: %d registered test(s) of the reference required, %d not (they need what the reference does not contain); GPU required=%v", r.repo, unit.ID, len(tests), len(excluded), cuda)
 		for name, why := range excluded {
 			log.Printf("dev_requirements:   %s not required: %s", name, why)

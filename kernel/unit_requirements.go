@@ -169,6 +169,9 @@ type UnitRequirements struct {
 	// Tests: the reference's registered tests, for the integration unit (integration.go);
 	// RequireGPU: the reference builds CUDA, so they must open a GPU device
 	Tests      []RefTest
+	// Benches: the reference's own benchmarks at the commit (eval_bench.go), for the
+	// integration unit: the port has to build and run their counterparts (eval_port.go)
+	Benches []EvalBench
 	RequireGPU bool
 	Repo, SHA  string
 	// RefRead: the reference commit could be read here, so an empty measurement means the

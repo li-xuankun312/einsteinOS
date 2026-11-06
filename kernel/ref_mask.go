@@ -149,6 +149,14 @@ func maskRequirements(req UnitRequirements, m *refMasker) UnitRequirements {
 			out.Tests[i].Sources = append(out.Tests[i].Sources, m.Replace(f))
 		}
 	}
+	out.Benches = nil
+	for _, b := range req.Benches {
+		mb := EvalBench{File: m.Replace(b.File), Kind: b.Kind, Name: m.Replace(b.Name), Command: m.Replace(b.Command)}
+		for _, f := range b.Sources {
+			mb.Sources = append(mb.Sources, m.Replace(f))
+		}
+		out.Benches = append(out.Benches, mb)
+	}
 	out.Repo = "(reference)"
 	return out
 }

@@ -19,7 +19,8 @@ type EvalBench struct {
 	File    string // where it is declared (CMakeLists.txt, or the script itself)
 	Kind    string // cmake_test, cmake_target, script
 	Name    string // target / test / script name
-	Command string // for cmake_test: the COMMAND of its add_test
+	Command string   // for cmake_test: the COMMAND of its add_test
+	Sources []string // for CMake targets: the files the repository builds it from
 }
 
 var (
@@ -73,7 +74,7 @@ func cmakeBenchmarks(file, text string) []EvalBench {
 			continue
 		}
 		if evalBenchNameRe.MatchString(m[1]) || evalBenchNameRe.MatchString(m[2]) {
-			out = append(out, EvalBench{File: file, Kind: "cmake_target", Name: m[1]})
+			out = append(out, EvalBench{File: file, Kind: "cmake_target", Name: m[1], Sources: cmakeSources(file, m[2])})
 		}
 	}
 	return out
@@ -94,4 +95,16 @@ func evalAcceptRepo(repo string) (bool, string) {
 		names = append(names, x.Kind+":"+x.Name)
 	}
 	return true, fmt.Sprintf("%d runnable benchmark(s): %s", len(b), shortList(names, 8))
+}
+
+// cmakeSources: the source files an add_executable lists, relative to the repository.
+func cmakeSources(cmakeFile, list string) []string {
+	var out []string
+	for _, w := range strings.Fields(list) {
+		if strings.Contains(w, "${") || strings.ToUpper(w) == w {
+			continue
+		}
+		out = append(out, path.Clean(path.Join(path.Dir(cmakeFile), w)))
+	}
+	return out
 }
