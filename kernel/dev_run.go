@@ -252,6 +252,10 @@ func (r *devRun) rawRequirements(unit DevPlanNode) UnitRequirements {
 	if unit.Integration {
 		tests, excluded, cuda := refIntegrationTestsWithExcluded(r.repo, sha)
 		req = UnitRequirements{Tests: tests, RequireGPU: cuda, Repo: r.repo, SHA: sha}
+		// the tests must be the reference's tests: every definition of the files the reference
+		// builds them from is the unit's to port (11/06 uintegration01529aaa82b9 passed 28 tests
+		// named like the reference's, each a wrapper running other units' invariant checks)
+		req.Sources, req.Symbols = integrationTestSymbols(refBareDir(r.repo), sha, tests)
 		log.Printf("dev_requirements: %s integration unit %s: %d registered test(s) of the reference required, %d not (they need what the reference does not contain); GPU required=%v", r.repo, unit.ID, len(tests), len(excluded), cuda)
 		for name, why := range excluded {
 			log.Printf("dev_requirements:   %s not required: %s", name, why)

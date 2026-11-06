@@ -21,9 +21,16 @@ import (
 )
 
 // RefTest is one test the reference registers.
-type RefTest struct{ Name, Command string }
+type RefTest struct {
+	Name, Command string
+	// Sources: the files the reference builds the test's executable from (its
+	// add_executable), repo-relative — what the integration unit has to port, so a test
+	// of the same name is the reference's test and not a wrapper around other checks
+	Sources []string
+}
 
 var (
+	cmakeAddExeRe   = regexp.MustCompile(`(?s)add_executable\s*\(\s*([A-Za-z_][\w.+-]*)\s+([^)]*)\)`)
 	cmakeAddTestRe  = regexp.MustCompile(`(?s)add_test\s*\(\s*NAME\s+(\S+)\s+COMMAND\s+([^)]*)\)`)
 	cmakeForeachRe  = regexp.MustCompile(`(?s)foreach\s*\(\s*(\w+)\s+IN\s+ITEMS\s+([^)]*)\)((?:[^f]|f(?:[^o]|o(?:[^r]|r(?:[^e]|e(?:[^a]|a(?:[^c]|c[^h]))))))*?)endforeach\s*\(\s*\)`)
 	cmakeCudaRe     = regexp.MustCompile(`(?i)enable_language\s*\(\s*CUDA|LANGUAGES[^)]*CUDA|\.cu\b`)
@@ -78,6 +85,7 @@ func refIntegrationTestsWithExcluded(repo, sha string) (tests []RefTest, exclude
 		}
 	}
 	excluded = map[string]string{}
+	exeSources := map[string][]string{}
 	seen := map[string]bool{}
 	for _, f := range strings.Split(ls, "\n") {
 		if !strings.HasSuffix(f, "CMakeLists.txt") || refNotSourceRe.MatchString(f) && !strings.HasPrefix(f, "CMakeLists") {
@@ -92,6 +100,16 @@ func refIntegrationTestsWithExcluded(repo, sha string) (tests []RefTest, exclude
 		}
 		text = expandCMakeForeach(text)
 		dir := path.Dir(f)
+		for _, m := range cmakeAddExeRe.FindAllStringSubmatch(text, -1) {
+			for _, w := range strings.Fields(m[2]) {
+				if strings.Contains(w, "${") || strings.ToUpper(w) == w {
+					continue // a variable, or a keyword (WIN32, EXCLUDE_FROM_ALL)
+				}
+				if p := path.Clean(path.Join(dir, w)); tree[p] {
+					exeSources[m[1]] = append(exeSources[m[1]], p)
+				}
+			}
+		}
 		gate := cmakeExcluded(text, func(rel string) bool { return tree[path.Clean(path.Join(dir, rel))] })
 		for _, m := range cmakeAddTestRe.FindAllStringSubmatchIndex(text, -1) {
 			name, cmd := text[m[2]:m[3]], strings.Join(strings.Fields(text[m[4]:m[5]]), " ")
@@ -104,6 +122,11 @@ func refIntegrationTestsWithExcluded(repo, sha string) (tests []RefTest, exclude
 				continue
 			}
 			tests = append(tests, RefTest{Name: name, Command: cmd})
+		}
+	}
+	for i := range tests {
+		if f := strings.Fields(tests[i].Command); len(f) > 0 {
+			tests[i].Sources = exeSources[path.Base(f[0])]
 		}
 	}
 	sort.Slice(tests, func(i, j int) bool { return tests[i].Name < tests[j].Name })
@@ -224,4 +247,26 @@ func (u UnitRequirements) IntegrationBlock(repo, sha, unitID string) string {
 		b.WriteString(integrationGPULine)
 	}
 	return b.String()
+}
+
+// integrationTestSymbols: the code files the required tests are built from (vendored ones
+// left out) and every definition in them, measured at sha like a unit's sources.
+func integrationTestSymbols(bare, sha string, tests []RefTest) (sources []string, syms []RefSymbol) {
+	seen := map[string]bool{}
+	for _, t := range tests {
+		for _, f := range t.Sources {
+			if seen[f] || refVendoredRe.MatchString(f) {
+				continue
+			}
+			seen[f] = true
+			sources = append(sources, f)
+		}
+	}
+	sort.Strings(sources)
+	for _, f := range sources {
+		if text, err := refGitFn(bare, "show", sha+":"+f); err == nil {
+			syms = append(syms, SymbolsOf(f, text)...)
+		}
+	}
+	return sources, syms
 }

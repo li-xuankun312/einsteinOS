@@ -145,6 +145,9 @@ func maskRequirements(req UnitRequirements, m *refMasker) UnitRequirements {
 	out.Tests = make([]RefTest, len(req.Tests))
 	for i, t := range req.Tests {
 		out.Tests[i] = RefTest{Name: m.Replace(t.Name), Command: m.Replace(t.Command)}
+		for _, f := range t.Sources {
+			out.Tests[i].Sources = append(out.Tests[i].Sources, m.Replace(f))
+		}
 	}
 	out.Repo = "(reference)"
 	return out
