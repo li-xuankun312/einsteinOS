@@ -582,7 +582,7 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 				// the tree the conversation ended on is the one the kernel just verified
 				log.Printf("dev_verify: unit %s: the tree is the one verified at the done line — that verification is used", unit.ID)
 				out = pre.out
-				out.msg = fmt.Sprintf("unit %s: %s [compile=%s smoke=%s gate=%s, verified by the kernel]", unit.ID, truncStr(nodeDesc(unit), 120), out.Result.Compile, out.Result.Smoke, gateOrNone(out.Result.Gate))
+				out.msg = fmt.Sprintf("unit %s: %s [compile=%s smoke=%s gate=%s kernels=%s, verified by the kernel]", unit.ID, truncStr(nodeDesc(unit), 120), out.Result.Compile, out.Result.Smoke, gateOrNone(out.Result.Gate), out.Result.Test.LaunchCount())
 				out = devRetryPush(cloneDir, mirror, r.devRepo, r.branch, baseRef, unit.ID, out)
 			} else {
 				out = devVerifyAndPush(cloneDir, mirror, r.devRepo, r.branch, baseRef, unit.ID, nodeDesc(unit), r.gpuUsable(), base, r.shown(unit))

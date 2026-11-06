@@ -237,3 +237,31 @@ func sortedKeys(set map[string]bool) []string {
 	sort.Strings(out)
 	return out
 }
+
+// LaunchSummary: the kernels the trace's processes launched, for the status and the
+// reviewer ("" when the test was not probed).
+func (t ProcTrace) LaunchSummary() string {
+	if t.ProbeErr != "" {
+		return "not measured: " + t.ProbeErr
+	}
+	if len(t.ProbeLoaded) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d distinct (%s) in %d probed executable(s)", len(t.Launches), launchesText(t.Launches), len(t.ProbeLoaded))
+}
+
+// LaunchSummaryOr is LaunchSummary with a stand-in for an unprobed test.
+func (t ProcTrace) LaunchSummaryOr(none string) string {
+	if s := t.LaunchSummary(); s != "" {
+		return s
+	}
+	return none
+}
+
+// LaunchCount: the number of distinct kernels launched, "-" for an unprobed test.
+func (t ProcTrace) LaunchCount() string {
+	if t.ProbeErr != "" || len(t.ProbeLoaded) == 0 {
+		return "-"
+	}
+	return fmt.Sprint(len(t.Launches))
+}

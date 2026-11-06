@@ -113,3 +113,22 @@ func TestGateIntegrationKernelNotLaunched(t *testing.T) {
 		t.Fatalf("a launched repository kernel still failed: %q", text)
 	}
 }
+
+func TestLaunchRecordInStatus(t *testing.T) {
+	v := VerifyResult{Compile: "pass", Smoke: "pass", Test: ProcTrace{ProbeLoaded: []string{"/ws/build/t"},
+		Launches: []KernelLaunch{{Name: "gdn_step"}, {Name: "rope_apply"}}}}
+	if got := v.Status()["gpu_kernels_launched"]; !strings.Contains(got, "2 distinct") || !strings.Contains(got, "gdn_step rope_apply") {
+		t.Fatalf("status = %q", got)
+	}
+	if got := v.Test.LaunchCount(); got != "2" {
+		t.Fatalf("LaunchCount = %q", got)
+	}
+	cpu := VerifyResult{Compile: "pass", Smoke: "pass"}
+	if _, ok := cpu.Status()["gpu_kernels_launched"]; ok || cpu.Test.LaunchCount() != "-" {
+		t.Fatalf("an unprobed test reported launches: %v", cpu.Status())
+	}
+	bad := ProcTrace{ProbeErr: "no C compiler"}
+	if got := bad.LaunchSummary(); !strings.Contains(got, "not measured") {
+		t.Fatalf("LaunchSummary = %q", got)
+	}
+}

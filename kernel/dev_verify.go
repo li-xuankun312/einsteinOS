@@ -311,6 +311,9 @@ func (v VerifyResult) Status() map[string]string {
 	if len(v.Test.Devices) > 0 {
 		st["gpu_devices_opened"] = strings.Join(v.Test.Devices, " ")
 	}
+	if p := v.Test.LaunchSummary(); p != "" {
+		st["gpu_kernels_launched"] = p
+	}
 	return st
 }
 
@@ -554,7 +557,7 @@ func devVerifyAndPush(cloneDir, mirror, devRepo, branch, baseRef, unitID, unitDe
 	if !out.Verified || out.Err != nil || out.Status["existing_code"] == "true" {
 		return out
 	}
-	out.msg = fmt.Sprintf("unit %s: %s [compile=%s smoke=%s gate=%s, verified by the kernel]", unitID, truncStr(unitDesc, 120), out.Result.Compile, out.Result.Smoke, gateOrNone(out.Result.Gate))
+	out.msg = fmt.Sprintf("unit %s: %s [compile=%s smoke=%s gate=%s kernels=%s, verified by the kernel]", unitID, truncStr(unitDesc, 120), out.Result.Compile, out.Result.Smoke, gateOrNone(out.Result.Gate), out.Result.Test.LaunchCount())
 	out.Pushed, out.Err = devPushVerdict(cloneDir, mirror, devRepo, branch, baseRef, unitID, out.Changed, out.Removed, out.msg, out.Result.Passed())
 	return out
 }
@@ -597,9 +600,9 @@ func devVerifyOnly(cloneDir, mirror, branch, baseRef, unitID, gpuUsable string, 
 		unitID, len(changed), len(removed), ws)
 	out.Result = runUnitVerifyWith(ws, unitID, gpuUsable, req, changed, 60*time.Minute, 60*time.Minute)
 	out.Status = out.Result.Status()
-	log.Printf("dev_verify: unit %s: compile=%s (exit %d) smoke=%s (exit %d) in %s; gate=%q; devices opened %v",
+	log.Printf("dev_verify: unit %s: compile=%s (exit %d) smoke=%s (exit %d) in %s; gate=%q; devices opened %v; kernels launched: %s",
 		unitID, out.Result.Compile, out.Result.BuildExit, out.Result.Smoke, out.Result.TestExit, out.Result.Elapsed.Round(time.Second),
-		out.Result.Gate, out.Result.Test.Devices)
+		out.Result.Gate, out.Result.Test.Devices, out.Result.Test.LaunchSummaryOr("not measured"))
 
 	out.Verified = true
 	return out
@@ -653,9 +656,9 @@ func devVerifyExisting(cloneDir, mirror, branch, baseRef, unitID, gpuUsable stri
 	out.Result = runUnitVerifyWith(ws, unitID, gpuUsable, req, prior, 60*time.Minute, 60*time.Minute)
 	out.Status = out.Result.Status()
 	out.Status["existing_code"] = "true"
-	log.Printf("dev_verify: unit %s (existing code): compile=%s (exit %d) smoke=%s (exit %d) in %s; gate=%q; devices opened %v",
+	log.Printf("dev_verify: unit %s (existing code): compile=%s (exit %d) smoke=%s (exit %d) in %s; gate=%q; devices opened %v; kernels launched: %s",
 		unitID, out.Result.Compile, out.Result.BuildExit, out.Result.Smoke, out.Result.TestExit, out.Result.Elapsed.Round(time.Second),
-		out.Result.Gate, out.Result.Test.Devices)
+		out.Result.Gate, out.Result.Test.Devices, out.Result.Test.LaunchSummaryOr("not measured"))
 	if out.Result.Passed() {
 		out.Pushed = baseRef
 	}
