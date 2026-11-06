@@ -102,7 +102,6 @@ func formatTheorizeInstruction() string {
 		fmt.Sprintf(thi_scope, TheoryOutputsDir, DoneInstruction())
 }
 
-
 var (
 	theorem_table [NR_THEOREMS]theorem_entry
 	nr_theorems   int
@@ -538,6 +537,13 @@ func fileSurvey(owner, name, sha string, files []string) (heavy []string, light 
 	var stats []fstat
 	extCount := make(map[string]int)
 	extLines := make(map[string]int)
+	refMu.Lock()
+	if r := refRepos[owner+"/"+name]; r != nil {
+		refMu.Unlock()
+		prefetchCommitBlobs(r.CloneDir, sha)
+	} else {
+		refMu.Unlock()
+	}
 
 	for _, f := range files {
 		if isBinaryFile(f) || isDocOnlyFile(f) {

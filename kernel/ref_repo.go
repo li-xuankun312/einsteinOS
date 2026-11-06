@@ -199,15 +199,57 @@ func RefFileAt(owner, name, sha, path string) (string, error) {
 	if r == nil {
 		return "", fmt.Errorf("ref repo %s not cloned", key)
 	}
-
-	cmd := exec.Command("git", "--git-dir", r.CloneDir,
-		"show", sha+":"+path)
+	// the clone is blobless: a blob not fetched yet is fetched from the network here, so the
+	// call is bounded and never asks for credentials
+	ctx, cancel := context.WithTimeout(context.Background(), refFileTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", "--git-dir", r.CloneDir, "show", sha+":"+path)
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 	out, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("git show %s:%s: %v", sha, path, err)
 	}
 	return string(out), nil
 }
+
+const refFileTimeout = 60 * time.Second
+
+// prefetchCommitBlobs fetches every blob of commit sha the blobless clone lacks, in ONE
+// request. 11/06 03:08:30 a fresh machine stalled in fileSurvey: its 219 `git show` calls
+// each fetched one blob from GitHub, one after another, with no bound. One batched fetch
+// took 1s for the same 219 blobs.
+func prefetchCommitBlobs(cloneDir, sha string) {
+	start := time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), refPrefetchTimeout)
+	defer cancel()
+	list := exec.CommandContext(ctx, "git", "--git-dir", cloneDir, "rev-list", "--objects", "--missing=print", sha)
+	list.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_NO_LAZY_FETCH=1")
+	out, err := list.Output()
+	if err != nil {
+		log.Printf("ref_prefetch: %s: listing missing objects: %v", short_sha(sha), err)
+		return
+	}
+	var oids []string
+	for _, l := range strings.Split(string(out), "\n") {
+		if strings.HasPrefix(l, "?") {
+			oids = append(oids, strings.TrimPrefix(l, "?"))
+		}
+	}
+	if len(oids) == 0 {
+		return
+	}
+	fetch := exec.CommandContext(ctx, "git", "--git-dir", cloneDir, "-c", "fetch.negotiationAlgorithm=noop",
+		"fetch", "-q", "origin", "--no-tags", "--no-write-fetch-head", "--stdin")
+	fetch.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	fetch.Stdin = strings.NewReader(strings.Join(oids, "\n") + "\n")
+	if fo, err := fetch.CombinedOutput(); err != nil {
+		log.Printf("ref_prefetch: %s: %d blob(s) not fetched in one request (%v: %s) — files will be fetched one by one", short_sha(sha), len(oids), err, strings.TrimSpace(string(fo)))
+		return
+	}
+	log.Printf("ref_prefetch: %s: %d blob(s) fetched in one request in %s", short_sha(sha), len(oids), time.Since(start).Round(time.Millisecond))
+}
+
+const refPrefetchTimeout = 5 * time.Minute
 
 func RefTreeAt(owner, name, sha string) ([]string, error) {
 	key := owner + "/" + name
