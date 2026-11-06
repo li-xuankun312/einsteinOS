@@ -30,6 +30,10 @@ type GateInput struct {
 	Compilers []string
 	// PortMissing: reference definitions without a verified counterpart (port_gate.go)
 	PortMissing []string
+	// Kernels: per changed CUDA file, the __global__ kernels it defines (gpu_kernels.go);
+	// KernelsMeasured says the files were read (a hand-built input leaves both empty)
+	Kernels         map[string][]string
+	KernelsMeasured bool
 }
 
 // gpuCompilers are the programs that make a GPU build possible, looked for in toolchainDirs.
@@ -56,6 +60,7 @@ const (
 	gateISAMissingFmt     = "isa_path_missing: the reference builds %[1]s with %[2]s; no binary the build produced or the test ran contains %[3]s (binaries looked at: %[4]s)"
 	gateISAUnmeasuredFmt  = "isa_unmeasured: the reference builds %[1]s with %[2]s, and the binaries could not be disassembled (%[3]s)"
 	gateToolchainUnusedFmt = "toolchain_unused: the unit is GPU work but no process of build.sh ran a program from %[1]s (programs that ran: %[2]s) — a build that skips the toolchain proves nothing"
+	gateGPUKernelMissingFmt = "gpu_kernel_missing: the unit's modules come from CUDA sources in the reference (%[1]s) but its CUDA files define no __global__ kernel: %[2]s — a host header about a kernel is not the kernel"
 	gateToolchainFmt      = "toolchain_missing: the unit's sources are CUDA but none of %[1]s exists in %[2]s on this machine; a build that skips the GPU here proves nothing"
 )
 
@@ -75,6 +80,11 @@ func unitGates(in GateInput) (kind, text string) {
 	gpuFiles := changedGPUFiles(in.Changed)
 	if in.Req.GPU() && len(gpuFiles) == 0 {
 		fail("gpu_code_missing", fmt.Sprintf(gateGPUCodeMissingFmt, strings.Join(in.Req.GPUSources, ", ")))
+	}
+	// a CUDA file is GPU work only if it holds a kernel: 11/04's FusedGdnKernels,
+	// QsaDecodeAttention and PrefillGpuKernels were host headers of index arithmetic
+	if in.Req.GPU() && in.KernelsMeasured && len(in.Kernels) > 0 && len(kernelSet(in.Kernels)) == 0 {
+		fail("gpu_kernel_missing", fmt.Sprintf(gateGPUKernelMissingFmt, strings.Join(in.Req.GPUSources, ", "), kernelFilesText(in.Kernels)))
 	}
 	// what the unit wrote must be what its build compiled for the GPU — not only the
 	// repository's existing src/*.cu, which is all the 11/03 builds compiled

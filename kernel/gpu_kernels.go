@@ -1,0 +1,85 @@
+package kernel
+
+// gpu_kernels.go — which GPU kernels a unit's CUDA files define.
+//
+// 11/04: modules named after GPU kernels (FusedGdnKernels, QsaDecodeAttention,
+// PrefillGpuKernels) were written as host headers of "index arithmetic … of the … CUDA
+// kernels" — a .cu/.cuh file with no kernel in it passes "wrote a CUDA file". A kernel is a
+// __global__ function; this is what the unit's CUDA files are measured for.
+
+import (
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+)
+
+var (
+	// launchBoundsRe: __launch_bounds__(…) sits between __global__ and the name
+	launchBoundsRe = regexp.MustCompile(`__launch_bounds__\s*\([^)]*\)`)
+	// globalKernelRe: __global__, then the return type and qualifiers, then the name and "("
+	globalKernelRe = regexp.MustCompile(`\b__global__\b[^;{}()]*?\b([A-Za-z_]\w*)\s*\(`)
+	lineCommentRe  = regexp.MustCompile(`//[^\n]*`)
+	blockCommentRe = regexp.MustCompile(`(?s)/\*.*?\*/`)
+)
+
+// kernelNamesIn returns the __global__ functions defined or declared in CUDA source text,
+// sorted and without duplicates. Comments are ignored: a comment that mentions __global__
+// is not a kernel.
+func kernelNamesIn(src string) []string {
+	src = blockCommentRe.ReplaceAllString(src, " ")
+	src = lineCommentRe.ReplaceAllString(src, " ")
+	src = launchBoundsRe.ReplaceAllString(src, " ")
+	seen := map[string]bool{}
+	var out []string
+	for _, m := range globalKernelRe.FindAllStringSubmatch(src, -1) {
+		name := m[1]
+		if name == "void" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// unitKernels reads the unit's changed CUDA files in ws and returns, per file, the kernels
+// it defines. Files that cannot be read are absent from the map.
+func unitKernels(ws string, changed []string) map[string][]string {
+	out := map[string][]string{}
+	for _, f := range changedGPUFiles(changed) {
+		b, err := os.ReadFile(filepath.Join(ws, filepath.FromSlash(f)))
+		if err != nil {
+			continue
+		}
+		out[f] = kernelNamesIn(string(b))
+	}
+	return out
+}
+
+// kernelSet flattens unitKernels' map to the set of kernel names.
+func kernelSet(perFile map[string][]string) map[string]bool {
+	set := map[string]bool{}
+	for _, names := range perFile {
+		for _, n := range names {
+			set[n] = true
+		}
+	}
+	return set
+}
+
+// kernelFilesText lists "file (n kernels)" for the failure text.
+func kernelFilesText(perFile map[string][]string) string {
+	var files []string
+	for f := range perFile {
+		files = append(files, f)
+	}
+	sort.Strings(files)
+	var parts []string
+	for _, f := range files {
+		parts = append(parts, f+" ("+strings.Join(perFile[f], " ")+")")
+	}
+	return strings.Join(parts, ", ")
+}
