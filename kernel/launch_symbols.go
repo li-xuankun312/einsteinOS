@@ -7,6 +7,7 @@ package kernel
 
 import (
 	"debug/elf"
+	"fmt"
 	"sort"
 	"strings"
 	"unicode"
@@ -141,4 +142,50 @@ func launchedNames(ls []KernelLaunch) map[string]bool {
 		}
 	}
 	return set
+}
+
+// probeMeasured: the launch probe ran in at least one process of the trace.
+func probeMeasured(t ProcTrace) bool { return t.ProbeErr == "" && len(t.ProbeLoaded) > 0 }
+
+// anyLaunched: some launch is one of the named kernels.
+func anyLaunched(names map[string]bool, ls []KernelLaunch) bool {
+	for _, l := range ls {
+		if names[l.Name] {
+			return true
+		}
+	}
+	return false
+}
+
+// setText lists a name set, sorted.
+func setText(set map[string]bool) string {
+	var out []string
+	for n := range set {
+		out = append(out, n)
+	}
+	sort.Strings(out)
+	return strings.Join(out, " ")
+}
+
+// launchesText lists the launched kernels for a failure text ("none" when nothing launched;
+// driver-API and unresolved launches are counted).
+func launchesText(ls []KernelLaunch) string {
+	names := launchedNames(ls)
+	unnamed := 0
+	for _, l := range ls {
+		if l.Name == "" {
+			unnamed++
+		}
+	}
+	txt := setText(names)
+	if unnamed > 0 {
+		if txt != "" {
+			txt += " "
+		}
+		txt += fmt.Sprintf("(+%d unnamed)", unnamed)
+	}
+	if txt == "" {
+		return "none"
+	}
+	return txt
 }
