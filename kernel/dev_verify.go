@@ -610,13 +610,35 @@ func devVerifyOnly(cloneDir, mirror, branch, baseRef, unitID, gpuUsable string, 
 
 	log.Printf("dev_verify: unit %s: %d file(s) changed, %d removed; verifying %s on the real machine",
 		unitID, len(changed), len(removed), ws)
-	out.Result = runUnitVerifyWith(ws, unitID, gpuUsable, req, changed, 60*time.Minute, 60*time.Minute)
+	// the gates judge the unit's code, not this attempt's edit of it (unitFiles)
+	out.Result = runUnitVerifyWith(ws, unitID, gpuUsable, req, unitFiles(changed, removed, devUnitPriorFiles(cloneDir, baseRef, unitID)), 60*time.Minute, 60*time.Minute)
 	out.Status = out.Result.Status()
 	log.Printf("dev_verify: unit %s: compile=%s (exit %d) smoke=%s (exit %d) in %s; gate=%q; devices opened %v; kernels launched: %s",
 		unitID, out.Result.Compile, out.Result.BuildExit, out.Result.Smoke, out.Result.TestExit, out.Result.Elapsed.Round(time.Second),
 		out.Result.Gate, out.Result.Test.Devices, out.Result.Test.LaunchSummaryOr("not measured"))
 
 	out.Verified = true
+	return out
+}
+
+// unitFiles: what the gates judge — the files this attempt changed and the files the unit's
+// earlier verified commits put on the base, less what this attempt removed. 11/06 19:24 a fix
+// attempt on the wip branch changed only build.sh and test.sh, and gpu_code_missing said the
+// unit had written no .cu — its 8 files, kernels included, were on the base; the conversation
+// then wrote an "oracle" kernel to have a .cu of its own.
+func unitFiles(changed, removed, prior []string) []string {
+	gone := map[string]bool{}
+	for _, f := range removed {
+		gone[f] = true
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, f := range append(append([]string{}, changed...), prior...) {
+		if !seen[f] && !gone[f] {
+			seen[f] = true
+			out = append(out, f)
+		}
+	}
 	return out
 }
 
