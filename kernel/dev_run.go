@@ -416,8 +416,8 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 		// the cause is outside the unit — stop, say so, keep everything (the plan and the
 		// passed units are on the branch), and leave the decision to a person.
 		// no GPU toolchain on this machine: no retry or split can build a GPU unit here
-		if lf := plan.LastFailure[unit.ID]; !passed && !requeue && lf.Kind == GateToolchainMissing {
-			msg := fmt.Sprintf("unit %s (%s): %s. the code is kept on %s; run on a machine with the toolchain to continue",
+		if lf := plan.LastFailure[unit.ID]; !passed && !requeue && gateIsMachine(lf.Kind) {
+			msg := fmt.Sprintf("unit %s (%s): %s. this is a fact about the machine, not the unit; the code is kept on %s; fix the machine to continue",
 				unit.ID, nodeDesc(unit), lf.Text, lf.BaseRef)
 			log.Printf("dev_from_theorems: %s %s", repo, msg)
 			PRFeedbackAdd(pid, "- dev_from_theorems: "+msg)
@@ -532,9 +532,10 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 			passed := o.Err == nil && o.Verified && o.Result.Passed()
 			changed, removed, _ := treeDelta(mirror, base)
 			pre = &preVerifyResult{ok: passed, digest: deltaDigest(mirror, changed, removed), out: o}
+			end := preverifyMayEnd(passed, o.Result.Gate)
 			log.Printf("dev_preverify: %s unit %s (%s): compile=%s smoke=%s gate=%q — %s", r.repo, unit.ID, role,
-				o.Result.Compile, o.Result.Smoke, o.Result.Gate, map[bool]string{true: "the conversation may end", false: "sent back to the conversation"}[passed])
-			if passed {
+				o.Result.Compile, o.Result.Smoke, o.Result.Gate, map[bool]string{true: "the conversation may end", false: "sent back to the conversation"}[end])
+			if end {
 				return true, ""
 			}
 			return false, preVerifyReport(o)

@@ -78,6 +78,18 @@ const (
 // GateToolchainMissing is the gate a retry cannot fix: the run stops on it (dev_run).
 const GateToolchainMissing = "toolchain_missing"
 
+// gateIsMachine: a gate that measured this machine, not the unit — no toolchain, or no way to
+// hide it. A conversation cannot change it: 11/06 17:57-20:18 unit u5c4a635e52's three
+// conversations spent two hours on build_toolchain_dependence_unmeasured, rewriting build.sh
+// and adding an "oracle" kernel. The conversation is let end and the run stops (dev_run).
+func gateIsMachine(kind string) bool {
+	return kind == GateToolchainMissing || kind == GateToolchainDependenceUnmeasured
+}
+
+// preverifyMayEnd: whether a done line ends the conversation — the unit passed, or what failed
+// is the machine.
+func preverifyMayEnd(passed bool, gate string) bool { return passed || gateIsMachine(gate) }
+
 // unitGates returns the first failed gate's kind and the text of every failed gate.
 func unitGates(in GateInput) (kind, text string) {
 	var kinds, texts []string

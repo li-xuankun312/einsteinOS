@@ -18,6 +18,10 @@ import (
 	"time"
 )
 
+// GateToolchainDependenceUnmeasured: this machine could not hide its toolchain — a fact about
+// the machine, which no conversation can change (gateIsMachine).
+const GateToolchainDependenceUnmeasured = "build_toolchain_dependence_unmeasured"
+
 // NoToolchainBuild is what the hidden-toolchain run measured.
 type NoToolchainBuild struct {
 	Measured bool
@@ -98,7 +102,7 @@ func noToolchainGate(nt NoToolchainBuild) (kind, text string) {
 	hidden := strings.Join(toolchainDirs, ":")
 	switch {
 	case !nt.Measured:
-		return "build_toolchain_dependence_unmeasured", fmt.Sprintf(gateNoToolchainUnmeasuredFmt, hidden, nt.Err)
+		return GateToolchainDependenceUnmeasured, fmt.Sprintf(gateNoToolchainUnmeasuredFmt, hidden, nt.Err)
 	case nt.Exit == 0:
 		return "build_passes_without_toolchain", fmt.Sprintf(gateBuildWithoutToolchainFmt, hidden, nt.Out)
 	}
