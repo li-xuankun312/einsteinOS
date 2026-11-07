@@ -532,6 +532,13 @@ func (p *DevPlan) Fail(id string, f DevFailure) int {
 		p.FailHistory = map[string][]string{}
 	}
 	p.FailHistory[id] = append(p.FailHistory[id], f.Kind)
+	// a failure that measured the machine is not an attempt of the unit's: it does not count
+	// toward the fix attempts that split it. 11/07 12:05 unit u5c4a635e52 was split as "too
+	// big for one session (3 fix attempts used)" — all three were
+	// build_toolchain_dependence_unmeasured, each with compile, smoke and launches passing.
+	if gateIsMachine(f.Kind) {
+		return p.FixAttempts[id]
+	}
 	return p.BumpFix(id)
 }
 

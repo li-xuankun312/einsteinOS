@@ -18,7 +18,12 @@ func TestAMachineGateEndsTheConversationAndStopsTheRun(t *testing.T) {
 	if preverifyMayEnd(false, "gpu_kernel_not_launched") || !preverifyMayEnd(true, "") {
 		t.Fatal("the unit's own result decides otherwise")
 	}
-	if k, _ := noToolchainGate(NoToolchainBuild{Err: "unshare -m: Operation not permitted"}); k != GateToolchainDependenceUnmeasured {
-		t.Fatalf("%q", k)
+	// a machine failure is recorded but is not one of the unit's fix attempts
+	p := &DevPlan{}
+	if n := p.Fail("u5", DevFailure{Kind: GateToolchainMissing}); n != 0 {
+		t.Fatalf("machine failure counted: %d", n)
+	}
+	if n := p.Fail("u5", DevFailure{Kind: "gpu_kernel_not_launched"}); n != 1 || len(p.FailHistory["u5"]) != 2 {
+		t.Fatalf("unit failure: %d, history %v", n, p.FailHistory["u5"])
 	}
 }
