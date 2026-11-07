@@ -31,27 +31,42 @@ const (
 	gateNoToolchainUnmeasuredFmt = "build_toolchain_dependence_unmeasured: build.sh could not be run with %[1]s hidden (%[2]s), so whether it needs the toolchain is not measured"
 )
 
-// hideToolchainRun runs script in dir with every one of dirs replaced by an empty tmpfs.
+// hideNamespaces: the ways to get a private mount namespace, tried in order. 11/06 18:59 on
+// the Iluvatar machine "unshare -m" was refused and "unshare -Urm" (a user namespace mapping
+// root, in which mounting is allowed) worked; every GPU unit had failed
+// build_toolchain_dependence_unmeasured because only the first was tried.
+var hideNamespaces = [][]string{
+	{"-m", "--propagation", "private"},
+	{"-U", "-r", "-m", "--propagation", "unchanged"},
+}
+
+// hideToolchainRun runs script in dir with every one of dirs replaced by an empty tmpfs, in
+// the first of hideNamespaces this machine allows.
 var hideToolchainRun = func(dir, script string, dirs []string, timeout time.Duration) (int, string, error) {
 	var mounts []string
 	for _, d := range dirs {
 		mounts = append(mounts, fmt.Sprintf("mount -t tmpfs -o size=1m none %q", d))
 	}
-	inner := strings.Join(mounts, " && ") + " && cd " + fmt.Sprintf("%q", dir) + " && exec bash " + fmt.Sprintf("%q", script) + " 2>&1"
-	cmd := exec.Command("timeout", fmt.Sprint(int(timeout.Seconds())), "unshare", "-m", "--propagation", "private", "sh", "-c", inner)
-	out, err := cmd.CombinedOutput()
-	if ee, ok := err.(*exec.ExitError); ok {
-		code := ee.ExitCode()
-		// the mount itself failing means nothing was measured
-		if strings.Contains(string(out), "mount:") || strings.Contains(string(out), "unshare:") {
-			return -1, string(out), fmt.Errorf("%s", tailText(string(out), 300))
+	inner := strings.Join(append(mounts, "cd "+fmt.Sprintf("%q", dir), "exec bash "+fmt.Sprintf("%q", script)+" 2>&1"), " && ")
+	var refused []string
+	for _, ns := range hideNamespaces {
+		args := append([]string{fmt.Sprint(int(timeout.Seconds())), "unshare"}, ns...)
+		out, err := exec.Command("timeout", append(args, "sh", "-c", inner)...).CombinedOutput()
+		if ee, ok := err.(*exec.ExitError); ok {
+			// the namespace or the mount failing means nothing was measured: try the next way
+			if strings.HasPrefix(string(out), "unshare:") || strings.Contains(string(out), "mount:") {
+				refused = append(refused, "unshare "+strings.Join(ns, " ")+": "+tailText(string(out), 200))
+				continue
+			}
+			return ee.ExitCode(), string(out), nil
 		}
-		return code, string(out), nil
+		if err != nil {
+			refused = append(refused, "unshare "+strings.Join(ns, " ")+": "+err.Error())
+			continue
+		}
+		return 0, string(out), nil
 	}
-	if err != nil {
-		return -1, string(out), err
-	}
-	return 0, string(out), nil
+	return -1, "", fmt.Errorf("%s", strings.Join(refused, "; "))
 }
 
 // buildWithoutToolchain copies ws and runs build.sh there with the toolchain hidden.

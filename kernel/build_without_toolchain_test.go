@@ -59,3 +59,26 @@ func TestBuildMustFailWithoutToolchain(t *testing.T) {
 		t.Fatalf("gates: %q", k)
 	}
 }
+
+// When the first way to get a mount namespace is refused, the next one is used, and the
+// refusals are what an unmeasured result reports.
+func TestHidingFallsBackToTheNextNamespace(t *testing.T) {
+	if err := exec.Command("unshare", "-m", "--propagation", "private", "true").Run(); err != nil {
+		t.Skipf("no mount namespace here: %v", err)
+	}
+	old := hideNamespaces
+	defer func() { hideNamespaces = old }()
+	hideNamespaces = [][]string{{"--no-such-option"}, {"-m", "--propagation", "private"}}
+	tc := t.TempDir()
+	ws := t.TempDir()
+	os.WriteFile(filepath.Join(ws, "b.sh"), []byte("ls "+tc+" | wc -l\n"), 0o755)
+	os.WriteFile(filepath.Join(tc, "clang++"), []byte("x"), 0o755)
+	code, out, err := hideToolchainRun(ws, "b.sh", []string{tc}, time.Minute)
+	if err != nil || code != 0 || strings.TrimSpace(out) != "0" {
+		t.Fatalf("fallback: code=%d out=%q err=%v", code, out, err)
+	}
+	hideNamespaces = [][]string{{"--no-such-option"}}
+	if _, _, err := hideToolchainRun(ws, "b.sh", []string{tc}, time.Minute); err == nil || !strings.Contains(err.Error(), "--no-such-option") {
+		t.Fatalf("all refused must be an error naming them: %v", err)
+	}
+}
