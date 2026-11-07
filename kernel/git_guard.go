@@ -43,6 +43,12 @@ const (
 	// without ever finishing. Large on purpose: it should practically never fire
 	// for a real push; gitPushStallTimeout is what actually ends a dead one.
 	gitPushMaxRun = 15 * time.Minute
+	// a clone is a single process that cannot resume: killing one that is still moving
+	// throws away everything it received. 11/07 11:29-11:44 the dev repo's clone was at
+	// 22 MiB of ~40 at 25 KiB/s, still moving, when the 15-minute ceiling killed it and the
+	// next attempt started from zero — at that speed no attempt could ever finish. A clone
+	// ends on gitPushStallTimeout (no new progress line); this is only the backstop.
+	gitCloneBackstop = 6 * time.Hour
 	// once a push has shown at least one real progress line, this is how long it
 	// may go with NO NEW distinct progress line before it's considered stalled
 	// (not "never connected" — that's startWindow's job — but "connected, then

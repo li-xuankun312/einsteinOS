@@ -173,7 +173,7 @@ func GitCloneOrReuse(ownerRepo, dir string) error {
 			url, env := gitRemoteFn(ownerRepo, true)
 			cloneCmd = fmt.Sprintf("%sgit clone --progress %q %q && git -C %q remote set-url origin %q", env, url, dir, dir, CloneURL(ownerRepo))
 		}
-		r := gitGuardFn(cloneCmd, "/tmp", gitStartWindow, gitPushMaxRun, gitPushStallTimeout, func(el time.Duration, line string) {
+		r := gitGuardFn(cloneCmd, "/tmp", gitStartWindow, gitCloneBackstop, gitPushStallTimeout, func(el time.Duration, line string) {
 			log.Printf("git_clone_or_reuse: %s attempt %d/%d clone (%s) in progress (%s): %s", ownerRepo, attempt, attempts, transport, el.Round(time.Second), line)
 		})
 		if !r.Started || r.TimedOut || r.Code != 0 {
