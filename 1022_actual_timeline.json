@@ -1,0 +1,382 @@
+{
+  "meta": {
+    "source": "1022_情况.md — real run log from 2026-10-21 16:35 to 2026-10-22 00:15",
+    "pid": 2,
+    "ref_repo": "Niko1221/Strata",
+    "dev_repo": "zeng-bin3123/baloon",
+    "branch": "einsteinOS/dev-2",
+    "total_elapsed": "~7h40m",
+    "conv_id_main": "c2c4891b"
+  },
+
+  "ticks": [
+    {
+      "tick": 0,
+      "t": "16:35:59",
+      "t_abs": "2026-10-21T16:35:59",
+      "phase": "boot",
+      "events": [
+        "einsteinOS v0.11-go booting",
+        "/sync zeng-bin3123/baloon → 3 commits",
+        "user submits task prompt"
+      ],
+      "observation": "正常：boot, 注册 dev repo, 提交任务"
+    },
+    {
+      "tick": 1,
+      "t": "16:36:20 → 16:38:41",
+      "t_abs": "2026-10-21T16:36:20",
+      "phase": "main_conv_runaway",
+      "events": [
+        "主对话 c2c4891b 开始自己跑 tool_use",
+        "30 个 bash_tool + view 在 2 分钟内",
+        "16:38:41: 'tool count 30 mid-stream, stopping response'",
+        "16:38:42: '30 tools without registered services, switching to pr pipeline'"
+      ],
+      "duration_min": 2,
+      "problem": "【违规】主对话自己在做 tool_use 读代码，不是 Proc() 行为。Proc() 应该只 push step，不做实际工作。这 30 个 tool call 浪费了主对话的 token。",
+      "principle_violated": "主对话是 Proc(): 不评判、不交互、不等待。"
+    },
+    {
+      "tick": 2,
+      "t": "16:38:43 → 16:38:45",
+      "t_abs": "2026-10-21T16:38:43",
+      "phase": "boot_recovery",
+      "events": [
+        "fork 191cf670 → child, 35 bytes stdout (empty child)",
+        "ref_discover: Niko1221/Strata cloned",
+        "pr_setup: pid=2, 1 refs, 3 steps",
+        "steps: hw_probe → ref_bind → dev_thms"
+      ],
+      "observation": "恢复正常：切入 PR pipeline, 推了 3 个 step。但浪费了 2 分钟 + 30 个 tool call 的 token"
+    },
+    {
+      "tick": 3,
+      "t": "16:38:45 → 16:39:21",
+      "t_abs": "2026-10-21T16:38:45",
+      "phase": "hw_probe",
+      "events": [
+        "fork 60c1749b, role=hw_probe",
+        "child: 2 tool calls (lspci, cpuinfo), 26s 完成",
+        "gpu_all=0,1,2,3,4,5,6,7",
+        "step 1/3 hw_probe done"
+      ],
+      "duration_min": 0.6,
+      "observation": "正常：hw_probe 快速完成"
+    },
+    {
+      "tick": 4,
+      "t": "16:39:21 → 16:40:03",
+      "t_abs": "2026-10-21T16:39:21",
+      "phase": "ref_bind_survey",
+      "events": [
+        "Strata commit 01529aaa: 219 files (211 source)",
+        "fileSurvey: 151 heavy, 60 light",
+        "dirSurveyChild 70222698: 128 bytes, kept 9 dirs",
+        "fileSurveyChild f42ff3e5: 6608 bytes, refined → 101 heavy, 110 light"
+      ],
+      "duration_min": 0.7,
+      "observation": "正常：两阶段 survey 正确裁剪"
+    },
+    {
+      "tick": 5,
+      "t": "16:40:03 → 17:23:59",
+      "t_abs": "2026-10-21T16:40:03",
+      "phase": "theorize_chunk_1",
+      "events": [
+        "ref_split: 101 files → 3 chunks",
+        "chunk 1/3: fork 6d299176, 34 files",
+        "SSE streaming 多次超时",
+        "polling 10/10: 96873 bytes, 使用 partial",
+        "chunk 1/3 done: 96873 bytes"
+      ],
+      "duration_min": 44,
+      "rate_limit_hit": false,
+      "network_issues": ["TLS handshake timeout on poll 9/10"],
+      "observation": "正常但慢：chunk 1 花了 44 分钟，主要是 create_file 的长 streaming + polling"
+    },
+    {
+      "tick": 6,
+      "t": "17:23:59 → 17:45:28",
+      "t_abs": "2026-10-21T17:23:59",
+      "phase": "theorize_chunk_2",
+      "events": [
+        "chunk 2/3: fork 6e6b8c6a, 34 files",
+        "17:34:34: only 10/34 files covered → ContinueConv",
+        "Continue 补了 25 files",
+        "download-file 71330 bytes (chunk2_theory.md)",
+        "多轮 str_replace 修 theory 文件",
+        "chunk 2/3 done: 242090 bytes"
+      ],
+      "duration_min": 21,
+      "observation": "正常：ContinueConv 补完缺失文件，theory 完整性检查生效"
+    },
+    {
+      "tick": 7,
+      "t": "17:45:28 → 18:02:24",
+      "t_abs": "2026-10-21T17:45:28",
+      "phase": "theorize_chunk_3",
+      "events": [
+        "chunk 3/3: fork e02f4056, 33 files",
+        "子对话大量 bash_tool 读 git show",
+        "多次 [shadow] skip axle verify_proof",
+        "18:02:24: 429 rate limit hit (medium 模型用完)",
+        "sleep 57m32s 等 quota reset"
+      ],
+      "duration_min": 17,
+      "rate_limit_hit": true,
+      "rate_limit_wait_min": 58,
+      "observation": "【问题】chunk 3 还没写完就撞 rate limit。等了将近 1 小时。"
+    },
+    {
+      "tick": 8,
+      "t": "19:00:00 → 19:09:56",
+      "t_abs": "2026-10-21T19:00:00",
+      "phase": "theorize_chunk_3_resume",
+      "events": [
+        "rate limit 解除，chunk 3 继续",
+        "最终 theory 合并完成",
+        "total theory: ~1.28MB (1279965 bytes)",
+        "进入 dev_from_theorems"
+      ],
+      "duration_min": 10,
+      "observation": "恢复后很快完成 theory"
+    },
+    {
+      "tick": 9,
+      "t": "19:09:56",
+      "t_abs": "2026-10-21T19:09:56",
+      "phase": "dev_split",
+      "events": [
+        "dev_split_theory: 1279965 bytes → 6 units",
+        "unit 1: 11730 bytes (/ — 1 file)",
+        "unit 2: 363232 bytes (include/strata/core — 82 files)",
+        "unit 3: 425137 bytes (include/strata/kernels — 100 files)",
+        "unit 4: 35932 bytes (include/strata/kernels/cpu — 4 files)",
+        "unit 5: 419560 bytes (src/core — 63 files)",
+        "unit 6: 682 bytes (malformed section)"
+      ],
+      "observation": "【问题】unit 6 只有 682 bytes，明显是 dev_split_theory 的解析残留。unit 2 (363KB) 和 unit 3 (425KB) 巨大，子对话 context 压力大。"
+    },
+    {
+      "tick": 10,
+      "t": "19:09:56 → 19:16:14",
+      "t_abs": "2026-10-21T19:09:56",
+      "phase": "dev_unit_1",
+      "events": [
+        "fork 6483c359, prompt 19342 bytes",
+        "42 tool calls: clone baloon, read existing code, create files, compile, push",
+        "expert_cache: g++ compile pass, test pass",
+        "git push einsteinOS/dev-2",
+        "unit 1/6 完成"
+      ],
+      "duration_min": 6,
+      "compile": "pass",
+      "files_created": ["include/baloon/core/expert_cache.h", "src/core/expert_cache.cpp", "tests/test_expert_cache.cpp"],
+      "observation": "正常：unit 1 小而快，6 分钟完成，compile pass"
+    },
+    {
+      "tick": 11,
+      "t": "19:16:14 → 19:18:52",
+      "t_abs": "2026-10-21T19:16:14",
+      "phase": "dev_unit_1_push_fight",
+      "events": [
+        "git push --force-with-lease",
+        "429 rate limit (medium 模型用完)",
+        "自动升级到 high+thinking",
+        "多次 push 尝试"
+      ],
+      "duration_min": 3,
+      "rate_limit_hit": true,
+      "observation": "【问题】push 冲突 + rate limit，浪费了几分钟。自动升级 effort 是好的"
+    },
+    {
+      "tick": 12,
+      "t": "19:18:52 → 20:36:37",
+      "t_abs": "2026-10-21T19:18:52",
+      "phase": "dev_unit_2_attempts_1_2",
+      "events": [
+        "attempt 1: fork 48ba0ef2, 大量 create_file (20+ .h/.cpp files)",
+        "SSE broke mid-stream → no status",
+        "polling: 302 bytes → 224953 → 180224 → oscillating",
+        "dev_collect: 'child lost context' → retry",
+        "attempt 2: fork 4ec6c793, 同样大量 create_file (25 files)",
+        "SSE broke again (stop_reason empty)",
+        "polling: 302 → 224953 → 655360 → 224953 stable",
+        "dev_collect: 'child lost context' → retry"
+      ],
+      "duration_min": 78,
+      "compile": "no_response (误判)",
+      "retries": 2,
+      "observation": "【严重问题】unit 2 的 prompt 包含 363KB theory。子对话 20 rounds 内写了 25 个 create_file，但 dev_collect 检测到 'lost context' → 认为失败 → 重试。实际上子对话可能成功编译了（compile=pass in poll），但主对话的检测逻辑误判了。反复重试浪费了 78 分钟和大量 token。"
+    },
+    {
+      "tick": 13,
+      "t": "20:36:37 → 21:28:17",
+      "t_abs": "2026-10-21T20:36:37",
+      "phase": "dev_unit_2_attempt_3",
+      "events": [
+        "attempt 3: fork 0e11cce7",
+        "同样大量文件创建 (24 files)",
+        "polling: oscillating sizes",
+        "stable at 202523 bytes",
+        "compile=pass in poll",
+        "BUT: 'child lost context' → retry AGAIN"
+      ],
+      "duration_min": 52,
+      "observation": "【严重问题】同样的误判。compile=pass 但 lost context 检测覆盖了 pass 判断"
+    },
+    {
+      "tick": 14,
+      "t": "21:28:17 → 22:50:00 (approx)",
+      "t_abs": "2026-10-21T21:28:17",
+      "phase": "dev_unit_2_attempt_4_success",
+      "events": [
+        "attempt 4: fork a7784d07",
+        "子对话读了 existing code on branch",
+        "创建了完整的 core 模块 (20+ files)",
+        "7 CUDA kernels 编译通过",
+        "Axle verify_proof 多次触发 (shadow skip)",
+        "最终 compile=pass, smoke=pass"
+      ],
+      "duration_min": 82,
+      "compile": "pass",
+      "observation": "终于通过，但第 4 次尝试花了 82 分钟。前 3 次总共浪费了 ~210 分钟"
+    },
+    {
+      "tick": 15,
+      "t": "22:50:00 → 00:15:00",
+      "t_abs": "2026-10-21T22:50:00",
+      "phase": "dev_unit_2_debug_loop",
+      "events": [
+        "进入 MMVQ test debugging",
+        "FP16 conversion bug: half_to_float_cpu returns 0",
+        "sandbox vs local machine push 冲突反复发生",
+        "local machine 用旧代码编译",
+        "子对话自己诊断: union type-punning, __host__ annotation, struct alignment",
+        "22:58:25: 429 rate limit (high 模型用完)",
+        "等 1h 到 00:00",
+        "恢复后继续 debug",
+        "最终 00:11:57: do_exit(round_limit) rounds=20"
+      ],
+      "duration_min": 85,
+      "rate_limit_hit": true,
+      "rate_limit_wait_min": 62,
+      "observation": "【关键发现】子对话确实在做成熟的 debug 闭环: FP16 bug → hypothesis → fix → push → test → new hypothesis。但被 sandbox/local divergence + rate limit 打断。这正是你提到的 Axle 验证闭环的体现"
+    }
+  ],
+
+  "timeline_summary": {
+    "total_wall_time_hours": 7.7,
+    "productive_time_hours": 3.5,
+    "rate_limit_wait_hours": 2.0,
+    "wasted_retry_hours": 2.2,
+
+    "theory_phase": {
+      "start": "16:39:21",
+      "end": "19:09:56",
+      "wall_time_min": 151,
+      "productive_min": 92,
+      "rate_limit_wait_min": 58,
+      "theory_bytes": 1279965,
+      "chunks": 3,
+      "files_covered": 264
+    },
+
+    "dev_phase": {
+      "start": "19:09:56",
+      "end": "00:15:00 (+1day)",
+      "wall_time_min": 305,
+      "units_attempted": "2 of 6",
+      "unit_1_time_min": 6,
+      "unit_2_time_min": 299,
+      "unit_2_retries": 4,
+      "unit_2_wasted_retry_min": 210,
+      "files_created_total": 50,
+      "compile_final": "pass"
+    }
+  },
+
+  "violations_against_design_principles": [
+    {
+      "id": "V1",
+      "principle": "主对话是 Proc(): 不评判、不交互、不等待",
+      "violation": "tick 1: 主对话自己跑了 30 个 tool_use，2 分钟后才被 kernel 截停",
+      "severity": "medium",
+      "fix": "主对话第一条消息就应该进 pr_pipeline，不给它做 tool call 的机会"
+    },
+    {
+      "id": "V2",
+      "principle": "子对话是异步 reader，主对话下次 tick 看到",
+      "violation": "dev_collect 的 'lost context' 检测误判了 compile=pass 的子对话。poll 看到 compile=pass 但 stdout 检查覆盖了 poll 结果",
+      "severity": "critical",
+      "fix": "poll 的 compile=pass 应该优先于 stdout 的 context 检测。如果 poll 检测到 compile=pass，就不应该 retry"
+    },
+    {
+      "id": "V3",
+      "principle": "数值不做 gate: benchmark 数值记录但不做 pass/fail",
+      "violation": "N/A — 还没到 benchmark 阶段",
+      "severity": "N/A"
+    },
+    {
+      "id": "V4",
+      "principle": "两个时间尺度并行：pipeline 推进 cursor，PR 在后台验证",
+      "violation": "只跑了 cursor=0 的 dev。unit 2 重试 4 次（210 分钟浪费），期间 cursor 没有前进",
+      "severity": "high",
+      "fix": "如果 unit 2 的 theory 太大（363KB），应该再切细。或者 Proc 层面应该给 dev_from_theorems 一个超时"
+    },
+    {
+      "id": "V5",
+      "principle": "增量累积: [code1+code2+T1+T2+T3]→code3",
+      "violation": "unit 2 的子对话每次重试都从零开始 clone baloon + 创建所有文件。没有利用前一次 attempt 已经 push 的代码",
+      "severity": "high",
+      "fix": "retry 时应该告诉子对话 '你的前辈已经 push 了这些文件到 branch，read them first'"
+    },
+    {
+      "id": "V6",
+      "principle": "如何平衡写数学理论和这个 commit 的思路写代码？要是一直写理论可不行",
+      "violation": "theory 阶段产出 1.28MB 理论，但 dev 阶段只完成了 6 个 unit 中的 2 个。theory:dev 时间比 = 2.5h : 5h+（且 5h 中 2h 是 retry 浪费）。theory 太厚，dev 消化不了",
+      "severity": "critical",
+      "fix_options": [
+        "1. theory 按 commit 增量做，不要一次 theorize 全仓库 2438 commits 的第一个",
+        "2. dev_split 的粒度要更细：unit 2 有 82 files 的 theory，prompt 363KB，对子对话来说太重",
+        "3. 或者 thin theory: LAYER 1 只写接口签名+关键不变量，不写完整 proof。dev 子对话有源码读"
+      ]
+    },
+    {
+      "id": "V7",
+      "principle": "sandbox vs local machine synchronization",
+      "violation": "dev 子对话在 sandbox 写代码 push，local machine 也在 push，反复 diverge。run_mmvq_test.sh 的 git sync 也没解决",
+      "severity": "high",
+      "fix": "einsteinOS 的设计里 local machine 应该只做 compile+run，不做 commit。dev 子对话是唯一的 writer"
+    }
+  ],
+
+  "what_works_well": [
+    {
+      "id": "W1",
+      "description": "子对话 debug 闭环确实成熟",
+      "evidence": "unit 2 attempt 4 的子对话: 发现 FP16 bug → 分析 CoreX clang 的 __host__ behavior → union type-punning → struct alignment → 每步都 commit+push+run test → 看结果调整。完全自主，不需要干预"
+    },
+    {
+      "id": "W2",
+      "description": "theory 完整性检查有效",
+      "evidence": "chunk 2 只覆盖了 10/34 files → ContinueConv 补了 25 files。这个机制工作正常"
+    },
+    {
+      "id": "W3",
+      "description": "rate limit 恢复机制正常",
+      "evidence": "429 → sleep → 准确等到 quota reset → 继续。medium 用完自动升级 high+thinking"
+    },
+    {
+      "id": "W4",
+      "description": "网络重试机制正常",
+      "evidence": "TLS handshake timeout → retry, maxSeen 跟踪防止 API flap 误判"
+    },
+    {
+      "id": "W5",
+      "description": "Axle verify_proof 有触发",
+      "evidence": "多处 [shadow] skip axle verify_proof — 说明 theory 子对话在尝试验证，只是 shadow 环境跳过了实际验证"
+    }
+  ]
+}

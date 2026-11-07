@@ -1,0 +1,220 @@
+{
+  "meta": {
+    "source": "1022_2情况_1.md — two runs: old code 06:37-08:09, new code (cc17ad67) 10:04-ongoing",
+    "old_code_commits": "0508af90 (before probe+planner)",
+    "new_code_commits": "cc17ad67 (probe+planner+conv-address)",
+    "ref_repo": "Niko1221/Strata",
+    "dev_repo": "zeng-bin3123/baloon"
+  },
+
+  "run1_old_code": {
+    "start": "06:37:11",
+    "killed_at": "08:09 (Ctrl-C during chunk 3 streaming)",
+    "summary": "old code, no probe, no planner. same pattern as 10/21 run",
+    "theory_phase": {
+      "chunk_1": {"start":"06:40:52", "end":"07:12:52", "duration_min":32, "bytes":102396, "method":"polling 10 iterations, stable at 102KB"},
+      "chunk_2": {"start":"07:12:52", "end":"08:05:11", "duration_min":52, "bytes":288575, "method":"ContinueConv recovered 10/33→33/33, then polling 10 iter (7 TLS timeouts)"},
+      "chunk_3": {"start":"08:05:11", "killed":"08:09", "bytes":"partial", "method":"user killed to pull new code"}
+    },
+    "observation": "old code works but: no probe (TLS timeouts count as stale), no planner, polling max 10 iterations with hardcoded limit"
+  },
+
+  "run2_new_code": {
+    "start": "10:04:00",
+    "code_version": "cc17ad67",
+
+    "ticks": [
+      {
+        "tick": 0,
+        "t": "10:04:00 → 10:05:57",
+        "phase": "boot + main_conv_runaway",
+        "events": ["main conv 85d4b125 runs 30 tool_use", "stopped at 30, switched to pr pipeline"],
+        "duration_min": 2,
+        "observation": "same V1 violation as before — main conv does 30 tools before kernel cuts it off. not fixed yet."
+      },
+      {
+        "tick": 1,
+        "t": "10:06:00 → 10:06:33",
+        "phase": "hw_probe",
+        "events": ["fork c38ea2bd, 2 tools, 22s done", "gpu_all=0,1,2,3,4,5,6,7"],
+        "duration_min": 0.5,
+        "observation": "normal"
+      },
+      {
+        "tick": 2,
+        "t": "10:06:33 → 10:07:15",
+        "phase": "ref_bind_survey",
+        "events": ["dirSurvey: 9 dirs kept", "fileSurvey: 94 heavy, 117 light", "split 94 files → 3 chunks"],
+        "duration_min": 0.7,
+        "observation": "normal"
+      },
+      {
+        "tick": 3,
+        "t": "10:07:15 → 11:18:37",
+        "phase": "theorize_chunk_1",
+        "events": [
+          "fork 0f110a79, 32 files",
+          "SSE broke mid-stream (stop_reason empty), 272 bytes captured",
+          "polling starts, 272 bytes stale",
+          "poll 1: 272 bytes, probe → 200 (idle, accepted continue) ← PROBE WORKS",
+          "poll 2-3: TLS timeout, stale 2-3/5",
+          "poll 4: 15394 bytes! (probe continue worked, content grew)",
+          "poll 5: 120775 bytes, stale reset to 0",
+          "poll 6: 120775 stable, probe → 200 (another continue)",
+          "poll 9: 121270 bytes (slight growth from probe-continue)",
+          "poll 12: 121382 stable, probe → 200",
+          "poll 13-16: oscillating 16KB-98KB (API instability), stale hits 5",
+          "post-wait download also TLS timeout, using cached 121382 bytes"
+        ],
+        "duration_min": 71,
+        "bytes": 121382,
+        "probe_triggers": 5,
+        "probe_continues_accepted": 5,
+        "observation": "【关键】probe 生效了！poll 1 发现 272 bytes stale → probe → 200 → continue 被接受 → poll 4 涨到 15KB → poll 5 涨到 120KB。没有 probe 的话这个 chunk 会在 poll 5(stale=5) 就放弃重开新对话。但 71 分钟还是太长 — 主要是 TLS timeout 反复出现。"
+      },
+      {
+        "tick": 4,
+        "t": "11:18:38 → 11:38:00 (approx)",
+        "phase": "theorize_chunk_2",
+        "events": [
+          "fork e397820b, 31 files",
+          "TLS timeout on first attempt, retry 1/6 after 1s → succeeded",
+          "create_file streaming 8min",
+          "SSE broke again, writeback + Continue",
+          "download-file chunk2_theory.md: some bytes",
+          "ContinueConv for missing files"
+        ],
+        "duration_min": 20,
+        "observation": "正常模式：SSE 断了但 writeback + Continue 恢复了"
+      },
+      {
+        "tick": 5,
+        "t": "11:38:00 → 11:56:39",
+        "phase": "theorize_chunk_3",
+        "events": [
+          "fork adb83c4a, 31 files",
+          "verify_theorems.sh ran for 9 minutes (11:39:49 → 11:48:54)",
+          "11/31 files covered → ContinueConv for 21 missing",
+          "Continue ran 4 rounds, 15 tools each",
+          "chunk3_continued.md created",
+          "merged 3 children → 623908 bytes total theory"
+        ],
+        "duration_min": 19,
+        "bytes": 327747,
+        "total_theory_bytes": 623908,
+        "observation": "正常。Axle verify_proof 多次触发（shadow skip）。theory 完成。"
+      },
+      {
+        "tick": 6,
+        "t": "11:56:39 → 11:56:47",
+        "phase": "dev_planner",
+        "events": [
+          "【NEW】fork 01ea7a13, role=dev_planner",
+          "planner returned 1538 bytes in 8 seconds",
+          "62 files → 12 units",
+          "unit sizes: 2-10 files each, 4KB-163KB theory each",
+          "4 unclaimed files added to last unit"
+        ],
+        "duration_sec": 8,
+        "units": 12,
+        "unit_breakdown": [
+          {"unit":1, "files":5, "theory_kb":27},
+          {"unit":2, "files":2, "theory_kb":29},
+          {"unit":3, "files":2, "theory_kb":37},
+          {"unit":4, "files":3, "theory_kb":16},
+          {"unit":5, "files":4, "theory_kb":30},
+          {"unit":6, "files":4, "theory_kb":39},
+          {"unit":7, "files":4, "theory_kb":35},
+          {"unit":8, "files":4, "theory_kb":71},
+          {"unit":9, "files":1, "theory_kb":163},
+          {"unit":10, "files":10, "theory_kb":13},
+          {"unit":11, "files":4, "theory_kb":5},
+          {"unit":12, "files":9, "theory_kb":62}
+        ],
+        "observation": "【核心改进】planner 8 秒就出结果。62 files 切成 12 units，大部分 2-5 files。比旧代码的 6 units（最大 82 files）好太多。但 unit 9 只有 1 file 却有 163KB theory — 可能是某个巨大的 .cu kernel 文件。"
+      },
+      {
+        "tick": 7,
+        "t": "11:56:47 → 12:16:30",
+        "phase": "dev_unit_1",
+        "events": [
+          "fork 7aa421f3, prompt 34222 bytes, 5 files",
+          "10 rounds, 110 tools total",
+          "created 14+ files: headers, impls, Makefile, test",
+          "found corex clang, created stubs/cuda_runtime.h",
+          "compile fix cycle: missing includes, Makefile fixes",
+          "tool_use_limit hit at 50 tools → Continue → more fixes",
+          "push to einsteinOS/dev-2 (multiple attempts, TLS issues)",
+          "final: compile=pass, test=pass",
+          "total 19420 stdout, 59571 stderr"
+        ],
+        "duration_min": 20,
+        "compile": "pass",
+        "tools": 110,
+        "rounds": 10,
+        "observation": "【显著改善】unit 1 只有 5 files + 34KB prompt，20 分钟完成，compile=pass。上次 unit 1 也是 ~6 分钟，但上次 unit 2 (82 files) 花了 5+ 小时。这次 unit 2 只有 2 files。"
+      },
+      {
+        "tick": 8,
+        "t": "12:16:30 → ongoing",
+        "phase": "dev_unit_2_start",
+        "events": [
+          "fork d5e23cbe, prompt 36883 bytes, 2 files: expert_cache.hpp + expert_source.hpp",
+          "【验证】prompt 里是 conv 地址而不是全文"
+        ],
+        "observation": "unit 2 prompt = 36KB（包含 hw_info + unit 1 conv 地址 + 自己的 29KB theory）。上次 unit 2 prompt = 363KB。减少了 90%。"
+      }
+    ]
+  },
+
+  "comparison": {
+    "theory_phase": {
+      "old_code_chunk1": {"time_min":32, "bytes":102396},
+      "new_code_chunk1": {"time_min":71, "bytes":121382, "note":"probe saved it but TLS timeouts dragged out"},
+      "old_code_total": "killed at ~85min (2/3 chunks done)",
+      "new_code_total": {"time_min":110, "bytes":623908, "note":"all 3 chunks completed"}
+    },
+    "planner": {
+      "old_code": "dev_split_theory static: 6 units, max 82 files/unit, max 425KB theory/unit",
+      "new_code": "dev_plan planner conv: 12 units, max 10 files/unit, max 163KB theory/unit (most ≤40KB)"
+    },
+    "dev_unit_prompt_size": {
+      "old_code_unit2": "363KB (82 files theory + prior conv full text)",
+      "new_code_unit2": "37KB (2 files theory + conv address lines)"
+    },
+    "dev_unit_1": {
+      "old_code": "6min, 42 tools, compile=pass",
+      "new_code": "20min, 110 tools, compile=pass (more thorough — found corex, made stubs, ran tests)"
+    }
+  },
+
+  "issues_remaining": [
+    {
+      "id": "I1",
+      "issue": "chunk 1 polling took 71 min with new code (vs 32 min old code)",
+      "cause": "probe sends continue → remote accepts → but TLS timeouts prevent downloading the result for several polls. probe is working but the download path is unreliable.",
+      "fix_suggestion": "probe 返回 200 时就意味着远程接受了 continue 且在跑，但下载内容需要另一条 HTTP 路径。也许 probe 成功后应该等更久再下载（5min instead of 3min），或者用 download-file 直接拿 create_file 产出而不是 DownloadConv 全文"
+    },
+    {
+      "id": "I2",
+      "issue": "unit 9 has 1 file but 163KB theory",
+      "cause": "planner 把某个巨大 kernel 文件单独分出来了。theory 本身就很大。",
+      "severity": "medium",
+      "fix_suggestion": "不需要修 — 1 file 的 unit 子对话 context 压力不大，163KB theory 能装下"
+    },
+    {
+      "id": "I3",
+      "issue": "main conv still does 30 tool_use before kernel cuts it off",
+      "severity": "low",
+      "fix_suggestion": "老问题，不影响 pipeline。主对话第一条消息应该直接 pr_pipeline 不给 tool call 机会"
+    }
+  ],
+
+  "what_works": [
+    "W1: ProbeConvBusy 救了 chunk 1 — 272 bytes stale → probe continue → 120KB",
+    "W2: dev_planner 8 秒出结果，62 files → 12 units，大部分 ≤5 files",
+    "W3: conv 地址传递生效 — unit 2 prompt 37KB vs 旧代码 363KB（-90%）",
+    "W4: unit 1 compile=pass，子对话自己找到 corex clang，创建 stubs，修 Makefile",
+    "W5: ContinueConv 在 chunk 2 和 chunk 3 都正常恢复了缺失文件"
+  ]
+}
