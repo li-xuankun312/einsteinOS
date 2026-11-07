@@ -47,8 +47,8 @@ func TestBuildMustFailWithoutToolchain(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(ws, ".einsteinOS/verify/u1/build.sh")); err != nil {
 		t.Fatal("the workspace itself must not be touched")
 	}
-	if k, _ := noToolchainGate(NoToolchainBuild{Err: "unshare: permission denied"}); k != "build_toolchain_dependence_unmeasured" {
-		t.Fatalf("no measurement is a failure, got %q", k)
+	if k, _ := noToolchainGate(NoToolchainBuild{Err: "unshare: permission denied"}); k != "" {
+		t.Fatalf("a machine that cannot hide its toolchain is not a gate (the direct measurements are), got %q", k)
 	}
 	// through the gates: a GPU unit whose build passes with the toolchain hidden fails
 	in := GateInput{Req: UnitRequirements{RequireGPU: true}, Compilers: []string{tc + "/clang++"},

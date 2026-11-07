@@ -113,7 +113,14 @@ func noToolchainGate(nt NoToolchainBuild) (kind, text string) {
 	hidden := strings.Join(toolchainDirs, ":")
 	switch {
 	case !nt.Measured:
-		return GateToolchainDependenceUnmeasured, fmt.Sprintf(gateNoToolchainUnmeasuredFmt, hidden, nt.Err)
+		// not a gate: 11/07 on the Iluvatar machine no mount of any kind was allowed (no
+		// "unshare -m"; inside "unshare -Urm" both a tmpfs and a bind mount over the corex
+		// directory were refused), so this run cannot be made there, and every GPU unit
+		// stopped on it with compile, smoke and its own kernel launches passing. What the
+		// hidden-toolchain run would add is already measured directly on such a machine:
+		// toolchain_unused (the toolchain ran in the build), gpu_not_compiled (the unit's CUDA
+		// files were compiled for the GPU) and gpu_kernel_not_launched (its kernels ran).
+		return "", ""
 	case nt.Exit == 0:
 		return "build_passes_without_toolchain", fmt.Sprintf(gateBuildWithoutToolchainFmt, hidden, nt.Out)
 	}

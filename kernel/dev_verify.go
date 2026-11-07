@@ -426,6 +426,10 @@ func runUnitVerifyWith(ws, unitID, gpuUsable string, req UnitRequirements, chang
 	res.Compile = "pass"
 	if (req.GPU() || req.RequireGPU) && len(presentGPUCompilers()) > 0 {
 		res.NoToolchain = buildWithoutToolchain(ws, build, buildTimeout)
+		if !res.NoToolchain.Measured {
+			log.Printf("dev_verify: unit %s: build.sh could not be run with the toolchain hidden here (%s) — not judged on it; the toolchain's use, the CUDA compiles and the kernel launches are measured directly",
+				unitID, tailText(res.NoToolchain.Err, 300))
+		}
 	}
 
 	if _, err := os.Stat(filepath.Join(ws, filepath.FromSlash(test))); err != nil {
