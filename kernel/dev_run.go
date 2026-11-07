@@ -528,6 +528,11 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 	for try := 1; try <= 5; try++ {
 		var ferr error
 		RegisterPreVerify(role, func() (bool, string) {
+			if changed, removed, err := treeDelta(mirror, base); err == nil && pre.sameRejected(deltaDigest(mirror, changed, removed)) {
+				log.Printf("dev_preverify: %s unit %s (%s): the files are those of the last rejected verification (gate=%q) — its result is sent back, not measured again",
+					r.repo, unit.ID, role, pre.out.Result.Gate)
+				return false, preVerifyReport(pre.out)
+			}
 			o := devVerifyOnly(cloneDir, mirror, r.branch, baseRef, unit.ID, r.gpuUsable(), base, r.shown(unit))
 			passed := o.Err == nil && o.Verified && o.Result.Passed()
 			changed, removed, _ := treeDelta(mirror, base)

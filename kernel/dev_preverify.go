@@ -97,3 +97,10 @@ func deltaDigest(mirror string, changed, removed []string) string {
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }
+
+// sameRejected: the last verification at a done line failed on exactly these files. 11/06
+// 18:19-18:50 four done lines in a row re-ran the same 7.5-minute verification of unchanged
+// files, each with the same result.
+func (p *preVerifyResult) sameRejected(digest string) bool {
+	return p != nil && !p.ok && p.digest != "" && p.digest == digest
+}
