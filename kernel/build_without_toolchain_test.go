@@ -82,3 +82,24 @@ func TestHidingFallsBackToTheNextNamespace(t *testing.T) {
 		t.Fatalf("all refused must be an error naming them: %v", err)
 	}
 }
+
+// When the tmpfs mount is refused, an empty directory bound over the toolchain hides it.
+func TestHidingFallsBackToABindMount(t *testing.T) {
+	if err := exec.Command("unshare", "-m", "--propagation", "private", "true").Run(); err != nil {
+		t.Skipf("no mount namespace here: %v", err)
+	}
+	old := hideMountFmts
+	defer func() { hideMountFmts = old }()
+	hideMountFmts[0] = "false %[1]q" // the tmpfs mount refused
+	tc := t.TempDir()
+	os.WriteFile(filepath.Join(tc, "clang++"), []byte("x"), 0o755)
+	ws := t.TempDir()
+	os.WriteFile(filepath.Join(ws, "b.sh"), []byte("ls "+tc+" | wc -l\n"), 0o755)
+	code, out, err := hideToolchainRun(ws, "b.sh", []string{tc}, time.Minute)
+	if err != nil || code != 0 || strings.TrimSpace(out) != "0" {
+		t.Fatalf("bind fallback: code=%d out=%q err=%v", code, out, err)
+	}
+	if _, err := os.Stat(filepath.Join(tc, "clang++")); err != nil {
+		t.Fatal("the toolchain itself must be untouched outside the namespace")
+	}
+}

@@ -44,12 +44,23 @@ var hideNamespaces = [][]string{
 	{"-U", "-r", "-m", "--propagation", "unchanged"},
 }
 
-// hideToolchainRun runs script in dir with every one of dirs replaced by an empty tmpfs, in
+// hideMountFmts: how a toolchain directory (%[1]q) is replaced — an empty tmpfs, or else an
+// empty directory (%[2]q) bound over it. 11/07 07:26 inside "unshare -Urm" on the Iluvatar
+// machine the tmpfs mount was refused ("cannot mount none read-only": the corex directory is
+// a locked mount there), while the conversation's "mount --bind <empty dir>" had worked.
+var hideMountFmts = [2]string{"mount -t tmpfs -o size=1m none %[1]q", "mount --bind %[2]q %[1]q"}
+
+// hideToolchainRun runs script in dir with every one of dirs replaced by an empty directory, in
 // the first of hideNamespaces this machine allows.
 var hideToolchainRun = func(dir, script string, dirs []string, timeout time.Duration) (int, string, error) {
+	empty, err := os.MkdirTemp("", "einsteinos_empty_")
+	if err != nil {
+		return -1, "", err
+	}
+	defer os.RemoveAll(empty)
 	var mounts []string
 	for _, d := range dirs {
-		mounts = append(mounts, fmt.Sprintf("mount -t tmpfs -o size=1m none %q", d))
+		mounts = append(mounts, fmt.Sprintf("{ %s 2>/dev/null || %s; }", fmt.Sprintf(hideMountFmts[0], d, empty), fmt.Sprintf(hideMountFmts[1], d, empty)))
 	}
 	inner := strings.Join(append(mounts, "cd "+fmt.Sprintf("%q", dir), "exec bash "+fmt.Sprintf("%q", script)+" 2>&1"), " && ")
 	var refused []string
