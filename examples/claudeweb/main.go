@@ -172,11 +172,14 @@ func main() {
 			for _, p := range cleanPaths {
 				os.RemoveAll(p)
 			}
-			// clean /tmp/ref_* except Strata (which takes too long to re-clone)
+			// clean /tmp/ref_* except Strata (which takes too long to re-clone) and the
+			// kernel's own clones of the dev repositories (/tmp/ref_store_<repo>): no child
+			// conversation reads them, every use fetches and resets them to the remote, and
+			// 11/08 07:08 re-cloning the dev repo after /new took ~30 minutes at 25 KiB/s
 			entries, _ := os.ReadDir("/tmp")
 			for _, e := range entries {
 				name := e.Name()
-				if strings.HasPrefix(name, "ref_") && !strings.Contains(name, "Strata") {
+				if strings.HasPrefix(name, "ref_") && !strings.Contains(name, "Strata") && !strings.HasPrefix(name, "ref_store_") {
 					os.RemoveAll("/tmp/" + name)
 				}
 			}
