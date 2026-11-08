@@ -704,6 +704,20 @@ func (r *devRun) reviewUnit(unit DevPlanNode, idx, total int, convID string, st 
 
 	PRFeedbackAdd(r.pid, fmt.Sprintf("- review[%s] unit %d/%d: %s", r.repo, idx+1, total, verdict))
 	reason := strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(verdict, "FAIL"), ":"))
+	// the files the verdict names decide whose failure it is (review_owner.go)
+	if blames := r.reviewBlame(unit, verdict); len(blames) > 0 {
+		for _, id := range blames {
+			plan.MarkReopen(id, DevFailure{Kind: "review_fail", Text: fmt.Sprintf(reopenReasonFmt, reason, unit.ID), BaseRef: r.branch})
+		}
+		log.Printf("dev_from_theorems: %s unit %s: the review faulted files of %s — %s reopened, unit %s is not held to answer for it",
+			r.repo, unit.ID, strings.Join(blames, " "), strings.Join(blames, " "), unit.ID)
+		plan.MarkUnitPass(unit)
+		if convID != "" {
+			plan.SetConv(unit.ID, convID)
+		}
+		devPlanSave(r.repo, r.devRepo, r.branch, plan, fmt.Sprintf("plan: unit %s PASS, %s reopened by its review", unit.ID, strings.Join(blames, " ")))
+		return stdout, true, false
+	}
 	kind := "review_fail"
 	if strings.Contains(verdict, "proof_failed:") {
 		// a proof problem is not a code problem: re-entering re-runs the preflight,
@@ -938,4 +952,33 @@ func reviewStatus(st map[string]string, unitID string, req UnitRequirements) map
 		out["port"] = fmt.Sprintf("every one of the %d definitions has a counterpart defined where the map says (measured by the kernel)", len(req.Symbols))
 	}
 	return out
+}
+
+// reopenReasonFmt: a reopened unit's failure — what the reviewer said (%[1]s) and which unit
+// it was reviewing (%[2]s).
+const reopenReasonFmt = "%[1]s (said by the review of unit %[2]s, whose files these are not)"
+
+// reviewBlame: the other units whose files the verdict named. A unit is blamed only for files
+// it owns and only while this unit owns none of the named ones, so a verdict about its own
+// code stays its own.
+func (r *devRun) reviewBlame(unit DevPlanNode, verdict string) []string {
+	dir, err := devRepoLocalDir(r.devRepo)
+	if err != nil {
+		return nil
+	}
+	sources := map[string][]string{}
+	for _, l := range r.plan.Leaves() {
+		if req := r.rawRequirements(l); len(req.Sources) > 0 {
+			sources[l.ID] = req.Sources
+		}
+	}
+	owners := reviewOwners(verdict, portMapOwners(dir), sources)
+	for _, units := range owners {
+		for _, u := range units {
+			if u == unit.ID {
+				return nil
+			}
+		}
+	}
+	return reviewBlames(unit.ID, owners)
 }
