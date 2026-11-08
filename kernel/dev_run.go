@@ -688,6 +688,9 @@ func (r *devRun) reviewUnit(unit DevPlanNode, idx, total int, convID string, st 
 	plan.TakeReviewPending(unit.ID)
 	st = reviewStatus(st, unit.ID, r.shown(unit))
 	du := devUnitFromNode(unit, r.sections)
+	if convID != "" {
+		st["dev_conv"] = convID
+	}
 	verdict := dev_review_unit(r.pid, r.repo, r.branch, idx+1, total, du, st)
 	log.Printf("dev_from_theorems: %s unit %d/%d id=%s review → %s", r.repo, idx+1, total, unit.ID, verdict)
 	if strings.HasPrefix(verdict, "PASS") {

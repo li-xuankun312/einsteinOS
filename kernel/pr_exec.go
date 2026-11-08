@@ -1289,7 +1289,12 @@ func dev_review_unit_inner(pid int64, repo, branch string, unitNum, totalUnits i
 		&ConsecutiveTextRounds{Threshold: 2}, // reviewer done reading → writes verdict
 		&MaxRounds{Limit: 10},
 	))
-	child, err := ForkWithTermination(maskShownPrompt(repo, prompt.String()), ".", "review_conv", reviewTerm)
+	reviewPrompt := prompt.String()
+	if f, ok := reviewDevConvFile(repo, status); ok {
+		reviewPrompt += fmt.Sprintf(reviewDevConvFmt, localUploadsPath(f.Name))
+		SetForkFiles([]ForkFile{f})
+	}
+	child, err := ForkWithTermination(maskShownPrompt(repo, reviewPrompt), ".", "review_conv", reviewTerm)
 	if err != nil {
 		log.Printf("dev_review_unit: %s unit %d fork failed: %v, using compile status",
 			repo, unitNum, err)
@@ -2240,4 +2245,33 @@ func parse_kv_blocks(text string) []map[string]string {
 		blocks = append(blocks, current)
 	}
 	return blocks
+}
+
+// reviewDevConvFmt: where the reviewer finds the developer's conversation (%[1]s), uploaded
+// into its sandbox as the server recorded it.
+const reviewDevConvFmt = "\n[DEV CONVERSATION] %[1]s\n"
+
+// localUploadsPath: where a file given to a conversation sits in its sandbox.
+func localUploadsPath(name string) string { return "/mnt/user-data/uploads/" + name }
+
+// reviewDevConvFile: the conversation of the attempt under review, downloaded from the server
+// (every message, each tool call's whole input and its result), secrets redacted and masked
+// like a prompt, as a file for the reviewer's sandbox. Nothing is extracted from it: 11/07
+// 18:24 unit u4decb4e657 widened a test tolerance from 2e-3 to 0.5 with one sed, which no
+// file on the branch shows and the reviewer never saw.
+func reviewDevConvFile(repo string, status map[string]string) (ForkFile, bool) {
+	conv := status["dev_conv"]
+	if conv == "" {
+		return ForkFile{}, false
+	}
+	text, err := DownloadConv(conv)
+	if err != nil || strings.TrimSpace(text) == "" {
+		log.Printf("dev_review_unit: %s conversation %s of unit %s not downloaded (%v) — the reviewer reads the branch only", repo, shortID(conv), status["unit_id"], err)
+		return ForkFile{}, false
+	}
+	name := "dev_conversation_" + status["unit_id"] + ".md"
+	if status["unit_id"] == "" {
+		name = "dev_conversation_" + shortID(conv) + ".md"
+	}
+	return ForkFile{Name: name, Data: []byte(maskShownPrompt(repo, redactSecrets(text)))}, true
 }
