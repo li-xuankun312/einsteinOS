@@ -1503,6 +1503,9 @@ func (m *Model) RunConversation(prompt string) (string, string) {
 	kernel.SetForkConvID(convID) // legacy fallback
 
 	webReq.Prompt = fullPrompt
+	if files := kernel.ConsumeForkFiles(); len(files) > 0 {
+		webReq.Files = append(webReq.Files, uploadForkFiles(m.client.UploadFile, convID, files)...)
+	}
 
 	m.toolLog.Reset()
 	var result strings.Builder

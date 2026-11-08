@@ -115,6 +115,31 @@ func SetForkRole(role string) {
 	forkConvMu.Unlock()
 }
 
+// ForkFile is a file given to a forked conversation: uploaded into its sandbox
+// (/mnt/user-data/uploads/<Name>) before its first message, read there with its tools.
+type ForkFile struct {
+	Name string
+	Data []byte
+}
+
+var forkFiles []ForkFile
+
+// SetForkFiles gives files to the next fork, like SetForkRole.
+func SetForkFiles(files []ForkFile) {
+	forkConvMu.Lock()
+	forkFiles = files
+	forkConvMu.Unlock()
+}
+
+// ConsumeForkFiles takes the files set for this fork.
+func ConsumeForkFiles() []ForkFile {
+	forkConvMu.Lock()
+	f := forkFiles
+	forkFiles = nil
+	forkConvMu.Unlock()
+	return f
+}
+
 func ConsumeForkRole() string {
 	forkConvMu.Lock()
 	r := forkRole
