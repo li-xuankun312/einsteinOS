@@ -25,9 +25,11 @@ type EvalRecord struct {
 	Dev       EvalRun    `json:"dev"`       // the port's counterparts of the same benchmarks
 	External  []EvalRun  `json:"external"`  // the repositories eval_discover took
 	Clues     []EvalClue `json:"clues"`
-	Gate      string     `json:"gate"`
-	GateText  string     `json:"gate_text"`
-	When      time.Time  `json:"when"`
+	// Conditions: what the measurements were taken under (eval_conditions.go)
+	Conditions EvalConditions `json:"conditions"`
+	Gate       string         `json:"gate"`
+	GateText   string         `json:"gate_text"`
+	When       time.Time      `json:"when"`
 }
 
 const (

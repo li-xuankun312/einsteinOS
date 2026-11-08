@@ -88,7 +88,8 @@ func evalIntegration(repo, sha, devRepo string, benches []EvalBench, mask func(s
 	return func(ws string, shown []EvalBench) (string, string) {
 		base := evalBaseFor(repo, sha, benches)
 		rec := EvalRecord{Repo: repo, RefSHA: sha, Reference: base.reference, External: base.external,
-			Clues: base.clues, Dev: evalRunPort(ws, shown), When: time.Now().UTC()}
+			Clues: base.clues, Dev: evalRunPort(ws, shown), When: time.Now().UTC(),
+			Conditions: measureEvalConditions(repo, sha)}
 		var prev *EvalRecord
 		if dir, err := evalStateDir(devRepo); err == nil {
 			prev = prevEvalRecord(dir, sha)
