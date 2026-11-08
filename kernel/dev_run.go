@@ -19,9 +19,9 @@ package kernel
 // failing is SPLIT (dev_split_node), not retried forever.
 
 import (
-	"sort"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"time"
 )
@@ -376,13 +376,7 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 	// a backstop against a bug, not a limit anyone should reach.
 	for turn := 0; turn < 400; turn++ {
 		leaves := plan.Leaves()
-		idx := -1
-		for i, l := range leaves {
-			if !plan.UnitPass(l) {
-				idx = i
-				break
-			}
-		}
+		idx := nextUnitIndex(plan, leaves)
 		if idx < 0 {
 			break
 		}
@@ -981,4 +975,24 @@ func (r *devRun) reviewBlame(unit DevPlanNode, verdict string) []string {
 		}
 	}
 	return reviewBlames(unit.ID, owners)
+}
+
+// nextUnitIndex: the unit to run now — the first that has not passed and was not reopened,
+// and only when none of those is left, the first reopened one. A unit another unit's review
+// faulted is extra work queued behind what was already queued, not a step back: 11/08 the
+// units pf7b804cf95's review faulted (u41e2bf114f, u4decb4e657) sit before it in the plan.
+func nextUnitIndex(plan *DevPlan, leaves []DevPlanNode) int {
+	reopened := -1
+	for i, l := range leaves {
+		if plan.UnitPass(l) {
+			continue
+		}
+		if !plan.Reopened(l.ID) {
+			return i
+		}
+		if reopened < 0 {
+			reopened = i
+		}
+	}
+	return reopened
 }

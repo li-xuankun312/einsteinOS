@@ -57,3 +57,35 @@ func TestAVerdictAboutAnotherUnitsFilesDoesNotFailThisUnit(t *testing.T) {
 func fmtReopen(reason, unit string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(reopenReasonFmt, "%[1]s", reason), "%[2]s", unit)
 }
+
+// A reopened unit runs after everything already queued, and its reopen becomes its failure
+// when it does.
+func TestReopenedUnitsRunLast(t *testing.T) {
+	leaves := []DevPlanNode{
+		{ID: "u8", Sources: []string{"a.cu"}},
+		{ID: "u9", Sources: []string{"b.cu"}},
+		{ID: "u20", Sources: []string{"c.hpp"}},
+		{ID: "u21", Sources: []string{"d.hpp"}},
+	}
+	p := &DevPlan{PortPass: map[string]bool{"u8": true, "u9": true, "u20": true}}
+	if got := nextUnitIndex(p, leaves); got != 3 {
+		t.Fatalf("the queued unit first: %d", got)
+	}
+	p.MarkReopen("u8", DevFailure{Kind: "review_fail", Text: "kv_append"})
+	p.MarkReopen("u9", DevFailure{Kind: "review_fail", Text: "gr_norm"})
+	if got := nextUnitIndex(p, leaves); got != 3 {
+		t.Fatalf("still the queued unit: %d", got)
+	}
+	p.PortPass["u21"] = true
+	if got := nextUnitIndex(p, leaves); got != 0 {
+		t.Fatalf("then the reopened ones, in plan order: %d", got)
+	}
+	p.TakeReopen("u8")
+	if got := nextUnitIndex(p, leaves); got != 1 {
+		t.Fatalf("the next reopened one: %d", got)
+	}
+	p.TakeReopen("u9")
+	if got := nextUnitIndex(p, leaves); got != -1 {
+		t.Fatalf("nothing left: %d", got)
+	}
+}
