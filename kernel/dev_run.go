@@ -517,7 +517,7 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 
 	if unit.Integration {
 		raw := r.rawRequirements(unit)
-		RegisterIntegrationEval(unit.ID, evalIntegration(r.repo, raw.SHA, r.devRepo, raw.Benches, newRefMask(refMaskIdent, r.repo).Replace))
+		RegisterIntegrationEval(unit.ID, evalIntegration(r.repo, raw.SHA, r.devRepo, unit.ID, raw.Benches, newRefMask(refMaskIdent, r.repo).Replace))
 		defer UnregisterIntegrationEval(unit.ID)
 	}
 	cond := devUnitCondition()

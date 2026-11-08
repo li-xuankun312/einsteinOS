@@ -219,6 +219,8 @@ const (
 	integrationListHead   = "[INTEGRATION — measured from %[1]s at %[2]s] this unit is done when every test the reference registers passes against the code on this branch, on the real machine.\nwrite %[3]s: it builds the whole project into build/ (executables named as the reference names them). %[4]s is written by the kernel and runs, from build/:\n"
 	integrationListLine   = "  %[1]s: %[2]s\n"
 	integrationGPULine    = "the reference builds CUDA: the tests must open a GPU device.\n"
+	// %[1]s the e2e script, %[2]s the model directory, %[3]s the model's name
+	integrationE2ELine = "after the tests the kernel runs %[1]s with MODEL_DIR=%[2]s (the model on this machine: %[3]s) and reads the prefill and decode tok/s it prints.\n"
 )
 
 // integrationScript is the test.sh the kernel writes for the integration unit.
@@ -246,6 +248,8 @@ func (u UnitRequirements) IntegrationBlock(repo, sha, unitID string) string {
 	if u.RequireGPU {
 		b.WriteString(integrationGPULine)
 	}
+	name, _, _, _ := readModelConditions(evalModelDir)
+	b.WriteString(fmt.Sprintf(integrationE2ELine, devE2EScript(unitID), evalModelDir, name))
 	return b.String()
 }
 

@@ -47,9 +47,15 @@ func TestTheIntegrationIsJudgedAgainstTheReferenceRunHere(t *testing.T) {
 	port := func(v string) {
 		os.WriteFile(filepath.Join(ws, "bench/decode.sh"), []byte("#!/bin/bash\necho '"+mask("strata")+" decode: "+v+" tok/s'\n"), 0o755)
 	}
-	RegisterIntegrationEval("uintegration", evalIntegration("Niko1221/Strata", sha, "o/nodev", benches, mask))
+	RegisterIntegrationEval("uintegration", evalIntegration("Niko1221/Strata", sha, "o/nodev", "uintegration", benches, mask))
 	defer UnregisterIntegrationEval("uintegration")
 
+	// the port's end-to-end run on the model
+	os.MkdirAll(filepath.Join(ws, ".einsteinOS/verify/uintegration"), 0o755)
+	e2e := func(body string) {
+		os.WriteFile(filepath.Join(ws, ".einsteinOS/verify/uintegration/e2e.sh"), []byte(body), 0o755)
+	}
+	e2e("echo \"prefill   3562 tokens in 6611.2 ms  ->  538.75 tok/s\"\necho \"decode   256 tokens in 2706.4 ms  ->  94.59 tok/s\"\n")
 	port("40")
 	if k, txt := integrationEval("uintegration")(ws, shown); k != "integration_below_reference" || !strings.Contains(txt, "50") {
 		t.Fatalf("slower than the reference: %q %s", k, txt)
@@ -57,5 +63,33 @@ func TestTheIntegrationIsJudgedAgainstTheReferenceRunHere(t *testing.T) {
 	port("55")
 	if k, txt := integrationEval("uintegration")(ws, shown); k != "" {
 		t.Fatalf("faster than the reference: %q %s", k, txt)
+	}
+}
+
+// No end-to-end script, a failing one, or one that prints no decode rate fails the
+// integration before any comparison.
+func TestTheIntegrationRunsThePortOnTheModel(t *testing.T) {
+	ws := t.TempDir()
+	if k, _ := e2eGate(evalRunE2E(ws, "u1")); k != "integration_e2e_missing" {
+		t.Fatalf("missing: %q", k)
+	}
+	os.MkdirAll(filepath.Join(ws, ".einsteinOS/verify/u1"), 0o755)
+	put := func(body string) {
+		os.WriteFile(filepath.Join(ws, ".einsteinOS/verify/u1/e2e.sh"), []byte(body), 0o755)
+	}
+	old := evalModelDir
+	defer func() { evalModelDir = old }()
+	evalModelDir = "/tmp/some-model"
+	put("echo \"model=$MODEL_DIR\"; exit 3\n")
+	if k, txt := e2eGate(evalRunE2E(ws, "u1")); k != "integration_e2e_failed" || !strings.Contains(txt, "model=/tmp/some-model") {
+		t.Fatalf("failed: %q %s", k, txt)
+	}
+	put("echo \"prefill  100 tokens in 10.0 ms  ->  10000 tok/s\"\n")
+	if k, txt := e2eGate(evalRunE2E(ws, "u1")); k != "integration_e2e_unmeasured" || !strings.Contains(txt, "decode") {
+		t.Fatalf("no decode: %q %s", k, txt)
+	}
+	put("echo \"prefill  100 tokens in 10.0 ms  ->  10000 tok/s\"\necho \"decode  10 tokens in 100.0 ms  ->  100 tok/s\"\n")
+	if k, txt := e2eGate(evalRunE2E(ws, "u1")); k != "" {
+		t.Fatalf("both rates: %q %s", k, txt)
 	}
 }

@@ -84,7 +84,7 @@ func evalBaseFor(repo, sha string, benches []EvalBench) evalBase {
 }
 
 // evalIntegration is the evaluation dev_run registers for an integration unit.
-func evalIntegration(repo, sha, devRepo string, benches []EvalBench, mask func(string) string) func(string, []EvalBench) (string, string) {
+func evalIntegration(repo, sha, devRepo, unitID string, benches []EvalBench, mask func(string) string) func(string, []EvalBench) (string, string) {
 	return func(ws string, shown []EvalBench) (string, string) {
 		base := evalBaseFor(repo, sha, benches)
 		rec := EvalRecord{Repo: repo, RefSHA: sha, Reference: base.reference, External: base.external,
@@ -99,10 +99,15 @@ func evalIntegration(repo, sha, devRepo string, benches []EvalBench, mask func(s
 		if prev != nil {
 			rec.PrevSHA = prev.RefSHA
 		}
-		rec.Gate, rec.GateText = evalGate(rec, prev, mask)
-		log.Printf("eval: %s %s: reference build=%d %d metric(s); port %d metric(s); %d searched repo(s); %d clue(s); previous %q; gate=%q",
+		rec.E2E = evalRunE2E(ws, unitID)
+		if k, t := e2eGate(rec.E2E); k != "" {
+			rec.Gate, rec.GateText = k, t
+		} else {
+			rec.Gate, rec.GateText = evalGate(rec, prev, mask)
+		}
+		log.Printf("eval: %s %s: reference build=%d %d metric(s); port %d metric(s); end-to-end on %s exit=%d %d metric(s); %d searched repo(s); %d clue(s); previous %q; gate=%q",
 			repo, shortSHA(sha), rec.Reference.BuildExit, len(rec.Reference.Metrics()), len(rec.Dev.Metrics()),
-			len(rec.External), len(rec.Clues), shortSHA(rec.PrevSHA), rec.Gate)
+			rec.Conditions.ModelName, rec.E2E.Exit, len(rec.E2E.Metrics), len(rec.External), len(rec.Clues), shortSHA(rec.PrevSHA), rec.Gate)
 		if err := storeEvalRecord(devRepo, rec); err != nil {
 			log.Printf("eval: %s %s: record NOT stored: %v", repo, shortSHA(sha), err)
 		}

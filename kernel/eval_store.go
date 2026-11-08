@@ -18,13 +18,14 @@ import (
 
 // EvalRecord is one integrated commit's evaluation.
 type EvalRecord struct {
-	Repo      string     `json:"repo"`    // the reference
-	RefSHA    string     `json:"ref_sha"` // the commit integrated
-	PrevSHA   string     `json:"prev_sha,omitempty"`
-	Reference EvalRun    `json:"reference"` // the reference itself, built and benchmarked here
-	Dev       EvalRun    `json:"dev"`       // the port's counterparts of the same benchmarks
-	External  []EvalRun  `json:"external"`  // the repositories eval_discover took
-	Clues     []EvalClue `json:"clues"`
+	Repo      string       `json:"repo"`    // the reference
+	RefSHA    string       `json:"ref_sha"` // the commit integrated
+	PrevSHA   string       `json:"prev_sha,omitempty"`
+	Reference EvalRun      `json:"reference"` // the reference itself, built and benchmarked here
+	Dev       EvalRun      `json:"dev"`       // the port's counterparts of the same benchmarks
+	E2E       EvalBenchRun `json:"e2e"`       // the port run on the model end to end (eval_e2e.go)
+	External  []EvalRun    `json:"external"`  // the repositories eval_discover took
+	Clues     []EvalClue   `json:"clues"`
 	// Conditions: what the measurements were taken under (eval_conditions.go)
 	Conditions EvalConditions `json:"conditions"`
 	Gate       string         `json:"gate"`
