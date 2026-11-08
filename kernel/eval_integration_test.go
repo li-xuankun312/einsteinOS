@@ -47,7 +47,7 @@ func TestTheIntegrationIsJudgedAgainstTheReferenceRunHere(t *testing.T) {
 	port := func(v string) {
 		os.WriteFile(filepath.Join(ws, "bench/decode.sh"), []byte("#!/bin/bash\necho '"+mask("strata")+" decode: "+v+" tok/s'\n"), 0o755)
 	}
-	RegisterIntegrationEval("uintegration", evalIntegration("Niko1221/Strata", sha, "o/nodev", "uintegration", benches, mask))
+	RegisterIntegrationEval("uintegration", evalIntegration(0, "Niko1221/Strata", sha, "o/nodev", "uintegration", benches, mask))
 	defer UnregisterIntegrationEval("uintegration")
 
 	// the port's end-to-end run on the model

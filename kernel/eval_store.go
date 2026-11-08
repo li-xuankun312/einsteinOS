@@ -26,6 +26,8 @@ type EvalRecord struct {
 	E2E       EvalBenchRun `json:"e2e"`       // the port run on the model end to end (eval_e2e.go)
 	External  []EvalRun    `json:"external"`  // the repositories eval_discover took
 	Clues     []EvalClue   `json:"clues"`
+	// Compared: published numbers the planner found comparable, against the port (eval_compare.go)
+	Compared []EvalComparison `json:"compared"`
 	// Conditions: what the measurements were taken under (eval_conditions.go)
 	Conditions EvalConditions `json:"conditions"`
 	Gate       string         `json:"gate"`

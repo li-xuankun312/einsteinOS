@@ -29,6 +29,7 @@ type evalBase struct {
 	reference EvalRun
 	external  []EvalRun
 	clues     []EvalClue
+	docs      map[string]string // "<repo> <file>" → text, the documents the clues are in
 }
 
 // RegisterIntegrationEval makes fn the evaluation of unitID's verification.
@@ -77,6 +78,7 @@ func evalBaseFor(repo, sha string, benches []EvalBench) evalBase {
 		b.external = append(b.external, evalRunRepo(name, bare, head, eb))
 		b.clues = append(b.clues, evalClues(name, bare, head)...)
 	}
+	b.docs = evalClueDocs(b.clues)
 	evalBaseMu.Lock()
 	evalBaseCache[key] = b
 	evalBaseMu.Unlock()
@@ -84,7 +86,7 @@ func evalBaseFor(repo, sha string, benches []EvalBench) evalBase {
 }
 
 // evalIntegration is the evaluation dev_run registers for an integration unit.
-func evalIntegration(repo, sha, devRepo, unitID string, benches []EvalBench, mask func(string) string) func(string, []EvalBench) (string, string) {
+func evalIntegration(pid int64, repo, sha, devRepo, unitID string, benches []EvalBench, mask func(string) string) func(string, []EvalBench) (string, string) {
 	return func(ws string, shown []EvalBench) (string, string) {
 		base := evalBaseFor(repo, sha, benches)
 		rec := EvalRecord{Repo: repo, RefSHA: sha, Reference: base.reference, External: base.external,
@@ -103,7 +105,11 @@ func evalIntegration(repo, sha, devRepo, unitID string, benches []EvalBench, mas
 		if k, t := e2eGate(rec.E2E); k != "" {
 			rec.Gate, rec.GateText = k, t
 		} else {
+			rec.Compared = evalComparisons(pid, repo, rec.Conditions, rec.E2E, rec.Clues, base.docs)
 			rec.Gate, rec.GateText = evalGate(rec, prev, mask)
+			if rec.Gate == "" {
+				rec.Gate, rec.GateText = evalExternalGate(rec.Compared)
+			}
 		}
 		log.Printf("eval: %s %s: reference build=%d %d metric(s); port %d metric(s); end-to-end on %s exit=%d %d metric(s); %d searched repo(s); %d clue(s); previous %q; gate=%q",
 			repo, shortSHA(sha), rec.Reference.BuildExit, len(rec.Reference.Metrics()), len(rec.Dev.Metrics()),
@@ -113,4 +119,23 @@ func evalIntegration(repo, sha, devRepo, unitID string, benches []EvalBench, mas
 		}
 		return rec.Gate, rec.GateText
 	}
+}
+
+// evalClueDocs reads the documents the clues are in, once each.
+func evalClueDocs(clues []EvalClue) map[string]string {
+	docs := map[string]string{}
+	for _, c := range clues {
+		k := c.Repo + " " + c.File
+		if _, ok := docs[k]; ok {
+			continue
+		}
+		bare := evalBareDir(c.Repo)
+		if !fileExists(bare) {
+			bare = refBareDir(c.Repo)
+		}
+		if text, err := refGitFn(bare, "show", c.SHA+":"+c.File); err == nil {
+			docs[k] = text
+		}
+	}
+	return docs
 }
