@@ -412,10 +412,12 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 				continue // the leaves changed; look again
 			}
 			if plan.FixAttempts[unit.ID] >= DevMaxFixAttempts {
-				msg := fmt.Sprintf("unit %s (%s) failed %d attempts and cannot be split further; last failure: %s",
-					unit.ID, nodeDesc(unit), plan.FixAttempts[unit.ID], truncStr(plan.LastFailure[unit.ID].Text, 400))
-				PRFeedbackAdd(pid, "- dev_from_theorems: "+msg)
-				return lastStdout, fmt.Errorf("dev_from_theorems: %s", msg)
+				lf := plan.LastFailure[unit.ID]
+				plan.MarkDeferred(unit.ID, lf)
+				log.Printf("dev_from_theorems: %s unit %s used its %d fix attempts and has nothing to split — the run goes on and its files are left to the integration unit; last review: %s",
+					repo, unit.ID, plan.FixAttempts[unit.ID], truncStr(lf.Text, 300))
+				devPlanSave(repo, devRepo, branch, plan, fmt.Sprintf("plan: unit %s deferred to the integration unit", unit.ID))
+				continue
 			}
 			log.Printf("dev_from_theorems: %s unit %s is over budget (%s) but cannot be split; running it as is", repo, unit.ID, why)
 		}

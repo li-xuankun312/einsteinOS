@@ -157,3 +157,30 @@ func TestStoredReviewFailuresAreAttributedOnResume(t *testing.T) {
 		t.Fatal("the unit whose file it is runs again")
 	}
 }
+
+// A unit that used its fix attempts and has nothing to split is deferred: the run goes on to
+// the units behind it, the unit is recorded with what the review said, and its files are left
+// to the integration unit.
+func TestAnUnsplittableExhaustedUnitIsDeferred(t *testing.T) {
+	leaves := []DevPlanNode{{ID: "pf7b804cf95", Sources: []string{"a.hpp"}}, {ID: "p4fde6588a6", Sources: []string{"b.hpp"}}}
+	p := &DevPlan{
+		FixAttempts: map[string]int{"pf7b804cf95": 3},
+		LastFailure: map[string]DevFailure{"pf7b804cf95": {Kind: "review_fail", Text: "gr_norm normalizes jointly over all 4 streams"}},
+	}
+	if nextUnitIndex(p, leaves) != 0 {
+		t.Fatal("it is the unit in front")
+	}
+	if need, _ := dev_node_needs_split(p, leaves[0]); !need {
+		t.Fatal("the plan asks to split it")
+	}
+	p.MarkDeferred("pf7b804cf95", p.LastFailure["pf7b804cf95"])
+	if got := nextUnitIndex(p, leaves); got != 1 {
+		t.Fatalf("the run goes on to the next unit: %d", got)
+	}
+	if ids := p.DeferredUnits(); len(ids) != 1 || ids[0] != "pf7b804cf95" {
+		t.Fatalf("deferred: %v", ids)
+	}
+	if p.Deferred["pf7b804cf95"].Text == "" {
+		t.Fatal("what the review said is kept")
+	}
+}

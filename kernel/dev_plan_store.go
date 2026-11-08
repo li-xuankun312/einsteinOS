@@ -113,6 +113,10 @@ type DevPlan struct {
 	Reopen map[string]DevFailure `json:"reopen,omitempty"`
 	// ReopenCount: how often each unit has been reopened (devMaxReopens bounds it)
 	ReopenCount map[string]int `json:"reopen_count,omitempty"`
+	// Deferred: units that used their fix attempts and have nothing to split — unit id ->
+	// the last thing a review said about them. They are not done: their files are carried
+	// to the integration unit, which runs the port on the model end to end.
+	Deferred map[string]DevFailure `json:"deferred,omitempty"`
 	// PortUnits: one unit per reference directory whose code files no theory unit covers;
 	// 11/04 the theory covered 58 of the commit's files and the rest had no unit at all.
 	PortUnits []DevPlanNode   `json:"port_units,omitempty"`
@@ -464,6 +468,9 @@ func (p *DevPlan) keysOf(n DevPlanNode) []string {
 func (p *DevPlan) UnitPass(n DevPlanNode) bool {
 	if p.Reopened(n.ID) {
 		return false
+	}
+	if _, deferred := p.Deferred[n.ID]; deferred {
+		return true
 	}
 	if len(n.Sources) > 0 || n.Integration {
 		return p.PortPass[n.ID]
@@ -834,5 +841,26 @@ func (p *DevPlan) ReopenableUnits(ids []string) []string {
 			out = append(out, id)
 		}
 	}
+	return out
+}
+
+// MarkDeferred records that a unit used its fix attempts and has nothing to split: the run
+// goes on to the units behind it and the unit's files are left to the integration unit's
+// end-to-end run. 11/08 unit pf7b804cf95, a port unit of three headers, ended four runs of
+// the pipeline this way, each time before any later unit had been tried.
+func (p *DevPlan) MarkDeferred(id string, f DevFailure) {
+	if p.Deferred == nil {
+		p.Deferred = map[string]DevFailure{}
+	}
+	p.Deferred[id] = f
+}
+
+// DeferredUnits: the deferred units and what a review last said about each, by unit id order.
+func (p *DevPlan) DeferredUnits() []string {
+	var out []string
+	for id := range p.Deferred {
+		out = append(out, id)
+	}
+	sort.Strings(out)
 	return out
 }
