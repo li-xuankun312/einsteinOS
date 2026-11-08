@@ -79,6 +79,10 @@ func devMaskSweep(repo, devRepo, branch string) {
 		log.Printf("dev_mask_sweep: %d binary build output(s) committed by earlier units removed from %s", removed, branch)
 	}
 	changed += removed
+	if n := devRemoveConvRecords(cloneDir); n > 0 {
+		log.Printf("dev_mask_sweep: %d conversation record(s) under %s removed from %s", n, devConvRecordsDir, branch)
+		changed += n
+	}
 	if changed+renamed == 0 {
 		log.Printf("dev_mask_sweep: %s %s holds no reference name", devRepo, branch)
 		return
@@ -119,6 +123,25 @@ func devRemoveUnitBinaries(dir, base string) int {
 			os.Remove(filepath.Join(dir, f))
 			n++
 		}
+	}
+	return n
+}
+
+// devConvRecordsDir: where the kernel used to commit every unit's conversation record. It is
+// no longer written (the conversation stays on the server, under the id the plan keeps), and
+// what earlier units committed is removed: 11/07 54 files, 4.3 MiB on the dev branch, each
+// mostly the heredocs of code that is on the branch anyway, read only as "head -60".
+const devConvRecordsDir = ".einsteinOS/convs"
+
+// devRemoveConvRecords removes the tracked files under devConvRecordsDir and returns how many.
+func devRemoveConvRecords(dir string) int {
+	out, err := exec.Command("git", "-C", dir, "ls-files", "-z", "--", devConvRecordsDir).Output()
+	if err != nil || len(out) == 0 {
+		return 0
+	}
+	n := strings.Count(string(out), "\x00")
+	if exec.Command("git", "-C", dir, "rm", "-r", "-q", "--", devConvRecordsDir).Run() != nil {
+		return 0
 	}
 	return n
 }

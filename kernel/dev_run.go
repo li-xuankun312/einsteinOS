@@ -679,9 +679,6 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 	// ---- verified on the real machine and pushed; now the reviewer reads the real branch -----------------
 	plan.MarkReviewPending(unit.ID, st)
 	devPlanSave(r.repo, r.devRepo, r.branch, plan, fmt.Sprintf("plan: unit %s verified, review pending", unit.ID))
-	if convID != "" {
-		dev_store_conv(convID, r.repo, r.branch, unit.ID, st)
-	}
 	return r.reviewUnit(unit, idx, total, convID, st, stdout)
 }
 
@@ -750,10 +747,10 @@ func (r *devRun) unitPrompt(unit DevPlanNode, idx, total, attempt int, fail DevF
 			if addr == "" {
 				addr = "-"
 			}
-			p.WriteString(fmt.Sprintf("  unit %s: conv=%s modules=[%s]\n    work log: .einsteinOS/convs/%s.md\n", l.ID, shortID(addr), files, l.ID))
+			p.WriteString(fmt.Sprintf("  unit %s: conv=%s modules=[%s]\n", l.ID, shortID(addr), files))
 		}
 		p.WriteString("\nthe code of every prior unit is on that branch. READ it before you write; do NOT rewrite it unless your theory REQUIRES it.\n")
-		p.WriteString("work logs hold each unit's decisions; use grep or view with line ranges, never cat the whole file.\n\n")
+		p.WriteString("\n")
 	}
 
 	// the theory: it is in the repo (the local mirror is primed with it)
