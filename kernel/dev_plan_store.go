@@ -107,6 +107,10 @@ type DevPlan struct {
 	// that stops here (11/04 10:16:54: u9dc1be2eae pushed at 10:16:47, Ctrl+C before its
 	// review) resumes with the review instead of writing and verifying the unit again.
 	ReviewPending map[string]map[string]string `json:"review_pending,omitempty"`
+	// Reopen: a passed unit a later review faulted for one of its files — unit id -> what
+	// the reviewer said and which unit it was reviewing (review_owner.go). The unit runs
+	// again after the units already queued, with that text as its failure.
+	Reopen map[string]DevFailure `json:"reopen,omitempty"`
 	// PortUnits: one unit per reference directory whose code files no theory unit covers;
 	// 11/04 the theory covered 58 of the commit's files and the rest had no unit at all.
 	PortUnits []DevPlanNode   `json:"port_units,omitempty"`
@@ -456,6 +460,9 @@ func (p *DevPlan) keysOf(n DevPlanNode) []string {
 // content is the one that passed (a module whose theory changed has to be done
 // again).
 func (p *DevPlan) UnitPass(n DevPlanNode) bool {
+	if p.Reopened(n.ID) {
+		return false
+	}
 	if len(n.Sources) > 0 || n.Integration {
 		return p.PortPass[n.ID]
 	}
@@ -785,3 +792,25 @@ func (p *DevPlan) RejudgeIfGatesChanged() int {
 	p.Gates = devGateSet
 	return n
 }
+
+// MarkReopen records that a later review faulted a passed unit for one of its files: the unit
+// is to run again, with f as its failure. The unit under review is not held to answer for it.
+func (p *DevPlan) MarkReopen(id string, f DevFailure) {
+	if p.Reopen == nil {
+		p.Reopen = map[string]DevFailure{}
+	}
+	if _, already := p.Reopen[id]; already {
+		return
+	}
+	p.Reopen[id] = f
+}
+
+// TakeReopen returns and clears a unit's reopen, if any.
+func (p *DevPlan) TakeReopen(id string) (DevFailure, bool) {
+	f, ok := p.Reopen[id]
+	delete(p.Reopen, id)
+	return f, ok
+}
+
+// Reopened reports whether a unit is to run again because of another unit's review.
+func (p *DevPlan) Reopened(id string) bool { _, ok := p.Reopen[id]; return ok }
