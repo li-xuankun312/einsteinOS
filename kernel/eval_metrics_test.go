@@ -60,3 +60,17 @@ func TestMetricsFromTablesWhoseUnitIsInTheHeading(t *testing.T) {
 		t.Errorf("8 numbers under unit headings, got %d: %v", len(got), got)
 	}
 }
+
+// The reference's generate prints its figures as "<what>  N tokens in T ms  ->  R tok/s"
+// (src/program/generate.cpp:2694, 2697); the port's counterpart prints the same.
+func TestMetricsFromTheReferencesGenerateLines(t *testing.T) {
+	out := "decode                   256 tokens in 2706.4 ms  ->  94.59 tok/s\n" +
+		"prefill                  3562 tokens in 6611.2 ms  ->  538.75 tok/s  (time to first token 6670.0 ms)\n"
+	got := map[string]float64{}
+	for _, m := range metricsIn(out) {
+		got[m.Label+"|"+m.Unit] = m.Value
+	}
+	if got["decode|tok/s"] != 94.59 || got["prefill|tok/s"] != 538.75 || len(got) != 2 {
+		t.Fatalf("%v", got)
+	}
+}
