@@ -18,7 +18,9 @@ type EvalClue struct {
 	Metric Metric `json:"metric"`
 }
 
-var evalDocRe = regexp.MustCompile(`(?i)(^|/)(readme[^/]*|docs?/.*)\.(md|rst|txt)$`)
+// evalDocRe: documentation and published results (11/08 Strata ships its measured matrix as
+// bench/results/<date>/matrix.md, with no code that produced it).
+var evalDocRe = regexp.MustCompile(`(?i)(^|/)(readme[^/]*|(docs?|bench\w*|benchmarks?|results?)/.*)\.(md|rst|txt)$`)
 
 // evalClues reads the stated numbers of the repository's documentation at sha.
 func evalClues(repo, bare, sha string) []EvalClue {
@@ -29,7 +31,7 @@ func evalClues(repo, bare, sha string) []EvalClue {
 	var out []EvalClue
 	for _, f := range strings.Split(ls, "\n") {
 		f = strings.TrimSpace(f)
-		if !evalDocRe.MatchString(f) || strings.Count(f, "/") > 3 || path.Base(f) == "" {
+		if !evalDocRe.MatchString(f) || strings.Count(f, "/") > 4 || path.Base(f) == "" {
 			continue
 		}
 		text, err := refGitFn(bare, "show", sha+":"+f)

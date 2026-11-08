@@ -38,3 +38,25 @@ layers: 32
 		t.Errorf("extra metrics: %v", got)
 	}
 }
+
+// Strata's published matrix (bench/results/2026-09-24-final/matrix.md): the unit is in the
+// heading, the columns are context lengths.
+func TestMetricsFromTablesWhoseUnitIsInTheHeading(t *testing.T) {
+	md := "### Prompt processing (tok/s)\n\n| Model | 1K | 4K | 32K |\n|---|---:|---:|---:|\n| Q2_0 | 389 | 539 | 571 |\n| IQ3_XXS | 285 | 410 | - |\n\n### Output (tok/s)\n\n| Model | 1K | 4K | 32K |\n|---|---:|---:|---:|\n| Q2_0 | 88.7 | 94.6 | 87.5 |\n\n### Notes\n\n| Model | 1K |\n|---|---|\n| Q2_0 | 7 |\n"
+	got := map[string]float64{}
+	for _, m := range metricsIn(md) {
+		got[m.Label+"|"+m.Unit+"|"+m.Better] = m.Value
+	}
+	want := map[string]float64{
+		"prompt processing q2_0 1k|tok/s|higher": 389, "prompt processing q2_0 32k|tok/s|higher": 571,
+		"prompt processing iq3_xxs 4k|tok/s|higher": 410, "output q2_0 4k|tok/s|higher": 94.6,
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("%s: %v (all %v)", k, got[k], got)
+		}
+	}
+	if len(got) != 8 {
+		t.Errorf("8 numbers under unit headings, got %d: %v", len(got), got)
+	}
+}

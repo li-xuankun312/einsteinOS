@@ -31,6 +31,8 @@ var (
 	evalPPLRe   = regexp.MustCompile(`(?i)\b(PPL|perplexity)\s*[:=]\s*([0-9]+(?:\.[0-9]+)?)`)
 	evalNumRe   = regexp.MustCompile(`^\s*([0-9]+(?:\.[0-9]+)?)`)
 	evalSpaceRe = regexp.MustCompile(`\s+`)
+	// a heading that names the unit of the tables under it: "### Output (tok/s)"
+	evalHeadingUnitRe = regexp.MustCompile(`^#+\s*(.*?)\s*\(([^()]+)\)\s*$`)
 )
 
 func evalLabel(s string) string {
@@ -54,8 +56,19 @@ func metricsIn(output string) []Metric {
 	}
 	lines := strings.Split(output, "\n")
 	var header []string
+	headTitle, headUnit := "", "" // unit named by the last heading (tables without a unit column)
 	for _, l := range lines {
 		t := strings.TrimSpace(l)
+		if strings.HasPrefix(t, "#") {
+			headTitle, headUnit = "", ""
+			if m := evalHeadingUnitRe.FindStringSubmatch(t); m != nil {
+				if _, ok := evalUnits[strings.ToLower(m[2])]; ok {
+					headTitle, headUnit = m[1], m[2]
+				}
+			}
+			header = nil
+			continue
+		}
 		if strings.HasPrefix(t, "|") && strings.HasSuffix(t, "|") {
 			cells := strings.Split(strings.Trim(t, "|"), "|")
 			for i := range cells {
@@ -69,6 +82,28 @@ func metricsIn(output string) []Metric {
 				continue
 			}
 			if len(cells) != len(header) {
+				continue
+			}
+			unitCol := false
+			for _, h := range header {
+				if _, ok := evalUnits[strings.ToLower(h)]; ok {
+					unitCol = true
+				}
+			}
+			if !unitCol && headUnit != "" {
+				// the heading's unit: each numeric cell is a metric named by the heading, the
+				// row's text cells and its column (Output · Q2_0 · 4K)
+				var row []string
+				for _, c := range cells {
+					if !evalNumRe.MatchString(c) && strings.Trim(c, "-–— ") != "" { // "-": no value
+						row = append(row, c)
+					}
+				}
+				for i, c := range cells {
+					if m := evalNumRe.FindStringSubmatch(c); m != nil {
+						add(headTitle+" "+strings.Join(row, " ")+" "+header[i], m[1], headUnit)
+					}
+				}
 				continue
 			}
 			var label []string
