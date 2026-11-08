@@ -124,3 +124,36 @@ func TestReopeningIsBounded(t *testing.T) {
 		t.Fatalf("past the limit: %v", got)
 	}
 }
+
+// A unit that comes back from the plan with review failures about other units' files has
+// those units reopened and its own attempts cleared, instead of being asked to split.
+func TestStoredReviewFailuresAreAttributedOnResume(t *testing.T) {
+	written := map[string][]string{"src/kernels/gpu/gr_core.cu": {"u4decb4e657"}}
+	sources := map[string][]string{"pf7b804cf95": {"include/strata/prefill/kernels.hpp"}}
+	stored := "gr_norm (src/kernels/gpu/gr_core.cu) normalizes jointly over all 4 streams (D=10240) but theory/decode reference norm each stream row separately"
+
+	p := &DevPlan{
+		PortPass:    map[string]bool{"u4decb4e657": true},
+		FixAttempts: map[string]int{"pf7b804cf95": 3},
+		LastFailure: map[string]DevFailure{"pf7b804cf95": {Kind: "review_fail", Text: stored}},
+	}
+	unit := DevPlanNode{ID: "pf7b804cf95", Sources: []string{"include/strata/prefill/kernels.hpp"}}
+	if need, _ := dev_node_needs_split(p, unit); !need {
+		t.Fatal("as it stands the plan asks to split it")
+	}
+	blames := p.ReopenableUnits(reviewBlames(unit.ID, reviewOwners(stored, written, sources)))
+	if len(blames) != 1 || blames[0] != "u4decb4e657" {
+		t.Fatalf("blames: %v", blames)
+	}
+	for _, id := range blames {
+		p.MarkReopen(id, DevFailure{Kind: "review_fail", Text: stored})
+	}
+	delete(p.FixAttempts, unit.ID)
+	delete(p.LastFailure, unit.ID)
+	if need, why := dev_node_needs_split(p, unit); need {
+		t.Fatalf("it starts again instead of splitting: %s", why)
+	}
+	if !p.Reopened("u4decb4e657") || p.UnitPass(DevPlanNode{ID: "u4decb4e657", Sources: []string{"x.cu"}}) {
+		t.Fatal("the unit whose file it is runs again")
+	}
+}

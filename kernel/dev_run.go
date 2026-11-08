@@ -382,6 +382,25 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 		}
 		unit := leaves[idx]
 
+		// a stored review failure whose files belong to other units is theirs, not this
+		// unit's: those units are reopened and this unit's attempts start again. 11/08 unit
+		// pf7b804cf95 came back from the plan with three such failures already counted, so
+		// the run asked to split it before it could run once and stopped on a port unit
+		// that has no modules to split.
+		if lf := plan.LastFailure[unit.ID]; lf.Kind == "review_fail" && plan.FixAttempts[unit.ID] > 0 {
+			if blames := plan.ReopenableUnits(run.reviewBlame(unit, lf.Text)); len(blames) > 0 {
+				for _, id := range blames {
+					plan.MarkReopen(id, DevFailure{Kind: "review_fail", Text: fmt.Sprintf(reopenReasonFmt, lf.Text, unit.ID), BaseRef: branch})
+				}
+				delete(plan.FixAttempts, unit.ID)
+				delete(plan.LastFailure, unit.ID)
+				log.Printf("dev_from_theorems: %s unit %s: its stored review failure is about files of %s — those are reopened and unit %s starts again",
+					repo, unit.ID, strings.Join(blames, " "), unit.ID)
+				devPlanSave(repo, devRepo, branch, plan, fmt.Sprintf("plan: %s reopened, unit %s starts again", strings.Join(blames, " "), unit.ID))
+				continue
+			}
+		}
+
 		// whether to split is the kernel's call, from numbers
 		need, why := dev_node_needs_split(plan, unit)
 		if need && !plan.VerifySeen[unit.ID] && plan.FixAttempts[unit.ID] < 2*DevMaxFixAttempts {
