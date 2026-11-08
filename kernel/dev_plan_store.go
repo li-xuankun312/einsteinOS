@@ -111,6 +111,8 @@ type DevPlan struct {
 	// the reviewer said and which unit it was reviewing (review_owner.go). The unit runs
 	// again after the units already queued, with that text as its failure.
 	Reopen map[string]DevFailure `json:"reopen,omitempty"`
+	// ReopenCount: how often each unit has been reopened (devMaxReopens bounds it)
+	ReopenCount map[string]int `json:"reopen_count,omitempty"`
 	// PortUnits: one unit per reference directory whose code files no theory unit covers;
 	// 11/04 the theory covered 58 of the commit's files and the rest had no unit at all.
 	PortUnits []DevPlanNode   `json:"port_units,omitempty"`
@@ -802,7 +804,11 @@ func (p *DevPlan) MarkReopen(id string, f DevFailure) {
 	if _, already := p.Reopen[id]; already {
 		return
 	}
+	if p.ReopenCount == nil {
+		p.ReopenCount = map[string]int{}
+	}
 	p.Reopen[id] = f
+	p.ReopenCount[id]++
 }
 
 // TakeReopen returns and clears a unit's reopen, if any.
@@ -814,3 +820,19 @@ func (p *DevPlan) TakeReopen(id string) (DevFailure, bool) {
 
 // Reopened reports whether a unit is to run again because of another unit's review.
 func (p *DevPlan) Reopened(id string) bool { _, ok := p.Reopen[id]; return ok }
+
+// devMaxReopens: how often a unit is reopened by other units' reviews before its files are
+// left to the integration unit, which runs the port on the model end to end. Without a limit
+// two units whose reviews fault each other's files would reopen each other without end.
+const devMaxReopens = 2
+
+// ReopenableUnits: of ids, the units that have not reached devMaxReopens.
+func (p *DevPlan) ReopenableUnits(ids []string) []string {
+	var out []string
+	for _, id := range ids {
+		if p.ReopenCount[id] < devMaxReopens {
+			out = append(out, id)
+		}
+	}
+	return out
+}

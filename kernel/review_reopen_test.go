@@ -106,3 +106,21 @@ func TestAReopenBecomesTheUnitsFailure(t *testing.T) {
 		t.Fatal("its next conversation is a fix conversation with that verdict")
 	}
 }
+
+// A unit is reopened at most devMaxReopens times, so two units whose reviews fault each
+// other's files cannot reopen each other without end.
+func TestReopeningIsBounded(t *testing.T) {
+	p := &DevPlan{}
+	for i := 0; i < devMaxReopens; i++ {
+		if got := p.ReopenableUnits([]string{"u8", "u9"}); len(got) != 2 {
+			t.Fatalf("round %d: %v", i, got)
+		}
+		p.MarkReopen("u8", DevFailure{Text: "x"})
+		p.MarkReopen("u9", DevFailure{Text: "y"})
+		p.TakeReopen("u8")
+		p.TakeReopen("u9")
+	}
+	if got := p.ReopenableUnits([]string{"u8", "u9"}); len(got) != 0 {
+		t.Fatalf("past the limit: %v", got)
+	}
+}

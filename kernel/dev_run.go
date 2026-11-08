@@ -708,7 +708,8 @@ func (r *devRun) reviewUnit(unit DevPlanNode, idx, total int, convID string, st 
 	PRFeedbackAdd(r.pid, fmt.Sprintf("- review[%s] unit %d/%d: %s", r.repo, idx+1, total, verdict))
 	reason := strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(verdict, "FAIL"), ":"))
 	// the files the verdict names decide whose failure it is (review_owner.go)
-	if blames := r.reviewBlame(unit, verdict); len(blames) > 0 {
+	if blames := r.reviewBlame(unit, verdict); len(plan.ReopenableUnits(blames)) > 0 {
+		blames = plan.ReopenableUnits(blames)
 		for _, id := range blames {
 			plan.MarkReopen(id, DevFailure{Kind: "review_fail", Text: fmt.Sprintf(reopenReasonFmt, reason, unit.ID), BaseRef: r.branch})
 		}
