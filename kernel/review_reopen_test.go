@@ -89,3 +89,20 @@ func TestReopenedUnitsRunLast(t *testing.T) {
 		t.Fatalf("nothing left: %d", got)
 	}
 }
+
+// Taking a reopen makes it the unit's failure, so its next conversation is a fix conversation
+// that is given the reviewer's words.
+func TestAReopenBecomesTheUnitsFailure(t *testing.T) {
+	p := &DevPlan{PortPass: map[string]bool{"u9": true}, LastFailure: map[string]DevFailure{}, FixAttempts: map[string]int{}}
+	f := DevFailure{Kind: "review_fail", Text: "gr_norm normalizes jointly over all 4 streams", BaseRef: "einsteinOS/dev-x"}
+	p.MarkReopen("u9", f)
+	got, ok := p.TakeReopen("u9")
+	if !ok || got.Text != f.Text || got.BaseRef != f.BaseRef {
+		t.Fatalf("%+v", got)
+	}
+	p.LastFailure["u9"] = got
+	p.FixAttempts["u9"] = 1
+	if p.LastFailure["u9"].Text != f.Text || p.FixAttempts["u9"]+1 != 2 {
+		t.Fatal("its next conversation is a fix conversation with that verdict")
+	}
+}

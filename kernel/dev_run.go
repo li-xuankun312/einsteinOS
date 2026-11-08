@@ -464,6 +464,15 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passed, requeue bool) {
 	plan := r.plan
 	fail := plan.LastFailure[unit.ID]
+	// a unit another unit's review faulted starts from that verdict, as a fix attempt, on
+	// the branch as it stands (its own code is already there)
+	if f, ok := plan.TakeReopen(unit.ID); ok {
+		fail = f
+		plan.LastFailure[unit.ID] = f
+		plan.FixAttempts[unit.ID] = 1
+		log.Printf("dev_from_theorems: %s unit %s runs again on a later review's verdict: %s", r.repo, unit.ID, truncStr(f.Text, 300))
+		devPlanSave(r.repo, r.devRepo, r.branch, plan, fmt.Sprintf("plan: unit %s reopened", unit.ID))
+	}
 	attempt := plan.FixAttempts[unit.ID] + 1
 	baseRef := r.branch
 	if fail.BaseRef != "" {
