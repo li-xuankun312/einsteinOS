@@ -461,7 +461,14 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 		_ = passed
 	}
 
-	// every unit passed verification on the real machine and review on the real branch
+	// every unit passed verification on the real machine and review on the real branch,
+	// except the deferred ones, whose files the integration unit's end-to-end run answers for
+	if ids := plan.DeferredUnits(); len(ids) > 0 {
+		for _, id := range ids {
+			log.Printf("dev_from_theorems: %s unit %s was deferred; the last thing its review said: %s", repo, id, truncStr(plan.Deferred[id].Text, 300))
+		}
+		PRFeedbackAdd(pid, fmt.Sprintf("- dev_from_theorems: %d unit(s) deferred to the integration unit: %s", len(ids), strings.Join(ids, " ")))
+	}
 	leaves := plan.Leaves()
 	var verdicts []string
 	for i, l := range leaves {
