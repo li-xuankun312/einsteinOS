@@ -12,8 +12,8 @@ package kernel
 // measured sources.
 
 import (
-	"os"
-	"path/filepath"
+	"os/exec"
+	"path"
 	"regexp"
 	"sort"
 	"strings"
@@ -35,32 +35,35 @@ func reviewPaths(verdict string) []string {
 	return out
 }
 
-// portMapOwners reads the port maps on the dev branch: written file -> the units whose map
-// claims it.
-func portMapOwners(ws string) map[string][]string {
+// portMapOwners reads the port maps of branch in the dev repository's clone: written file ->
+// the units whose map claims it. They are read from the branch itself (git show), not from
+// the clone's working tree, which between units is checked out on whatever the last git step
+// left there — 11/08 the attribution found no port map at all and faulted nobody.
+func portMapOwners(dir, branch string) map[string][]string {
 	owners := map[string][]string{}
-	dir := filepath.Join(ws, filepath.Dir(PortMapPath("x")))
-	entries, err := os.ReadDir(dir)
+	mapDir := path.Dir(PortMapPath("x"))
+	out, err := exec.Command("git", "-C", dir, "ls-tree", "-r", "--name-only", branch, "--", mapDir).Output()
 	if err != nil {
 		return owners
 	}
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".tsv") {
+	for _, f := range strings.Split(string(out), "\n") {
+		f = strings.TrimSpace(f)
+		if !strings.HasSuffix(f, ".tsv") {
 			continue
 		}
-		unit := strings.TrimSuffix(e.Name(), ".tsv")
-		b, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		unit := strings.TrimSuffix(path.Base(f), ".tsv")
+		b, err := exec.Command("git", "-C", dir, "show", branch+":"+f).Output()
 		if err != nil {
 			continue
 		}
 		seen := map[string]bool{}
 		for _, line := range strings.Split(string(b), "\n") {
-			f := strings.Split(line, "\t")
-			if len(f) < 3 || f[2] == "" || seen[f[2]] {
+			fs := strings.Split(line, "\t")
+			if len(fs) < 3 || fs[2] == "" || seen[fs[2]] {
 				continue
 			}
-			seen[f[2]] = true
-			owners[f[2]] = append(owners[f[2]], unit)
+			seen[fs[2]] = true
+			owners[fs[2]] = append(owners[fs[2]], unit)
 		}
 	}
 	return owners

@@ -989,13 +989,14 @@ func (r *devRun) reviewBlame(unit DevPlanNode, verdict string) []string {
 	if err != nil {
 		return nil
 	}
+	written := portMapOwners(dir, r.branch)
 	sources := map[string][]string{}
 	for _, l := range r.plan.Leaves() {
 		if req := r.rawRequirements(l); len(req.Sources) > 0 {
 			sources[l.ID] = req.Sources
 		}
 	}
-	owners := reviewOwners(verdict, portMapOwners(dir), sources)
+	owners := reviewOwners(verdict, written, sources)
 	for _, units := range owners {
 		for _, u := range units {
 			if u == unit.ID {
