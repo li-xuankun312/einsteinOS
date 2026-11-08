@@ -47,6 +47,11 @@ func TestFilesAreUploadedIntoTheSandboxNotAttached(t *testing.T) {
 	if b, err := os.ReadFile(filepath.Join(localUploadsDir, "dev_conversation_u1.md")); err != nil || !strings.Contains(string(b), "0.5") {
 		t.Fatalf("local copy: %v", err)
 	}
+	// the server's actual response (11/07)
+	real := `{"success":true,"path":"/mnt/user-data/uploads/1104_1情况.zip","sanitized_name":"1104_1情况.zip","file_kind":"blob","file_uuid":"b49844a8-a7cf-4488-9071-3ba501b622ed","file_name":"1104_1情况.zip","created_at":null,"user_uuid":null,"size_bytes":11823,"media_type":"application/zip","uuid":"b49844a8-a7cf-4488-9071-3ba501b622ed"}`
+	if got := uploadedFileID([]byte(real)); got != "b49844a8-a7cf-4488-9071-3ba501b622ed" {
+		t.Fatalf("real response → %q", got)
+	}
 	for body, want := range map[string]string{`{"uuid":"a"}`: "a", `{"file":{"file_uuid":"b"}}`: "b", `{"id":"c"}`: "c", `{"ok":true}`: "", `x`: ""} {
 		if got := uploadedFileID([]byte(body)); got != want {
 			t.Errorf("%s → %q want %q", body, got, want)
