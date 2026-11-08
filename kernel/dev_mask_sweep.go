@@ -79,21 +79,27 @@ func devMaskSweep(repo, devRepo, branch string) {
 		log.Printf("dev_mask_sweep: %d binary build output(s) committed by earlier units removed from %s", removed, branch)
 	}
 	changed += removed
-	if n := devRemoveConvRecords(cloneDir); n > 0 {
-		log.Printf("dev_mask_sweep: %d conversation record(s) under %s removed from %s", n, devConvRecordsDir, branch)
-		changed += n
+	convs := devRemoveConvRecords(cloneDir)
+	if convs > 0 {
+		log.Printf("dev_mask_sweep: %d conversation record(s) under %s removed from %s", convs, devConvRecordsDir, branch)
 	}
-	if changed+renamed == 0 {
+	if changed+renamed+convs == 0 {
 		log.Printf("dev_mask_sweep: %s %s holds no reference name", devRepo, branch)
 		return
 	}
 	exec.Command("git", "-C", cloneDir, "add", "-A").Run()
-	GitCommit(cloneDir, fmt.Sprintf(devMaskSweepMsgFmt, changed, renamed))
+	msg := fmt.Sprintf(devMaskSweepMsgFmt, changed, renamed)
+	if changed+renamed == 0 {
+		msg = fmt.Sprintf("dev_mask_sweep: %d conversation record(s) under %s removed", convs, devConvRecordsDir)
+	}
+	GitCommit(cloneDir, msg)
 	if err := devGitPush(cloneDir, devRepo, branch, 20); err != nil {
 		log.Printf("dev_mask_sweep: %s push %s: %v", devRepo, branch, err)
 		return
 	}
-	log.Printf("dev_mask_sweep: "+devMaskSweepMsgFmt, changed, renamed)
+	if changed+renamed > 0 {
+		log.Printf("dev_mask_sweep: "+devMaskSweepMsgFmt, changed, renamed)
+	}
 }
 
 // devMaskKeep: the kernel's own state on the branch, which names the reference by design
