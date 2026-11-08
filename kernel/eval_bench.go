@@ -35,6 +35,10 @@ func evalBenchmarks(bare, sha string) ([]EvalBench, error) {
 	if err != nil {
 		return nil, err
 	}
+	tree := map[string]bool{}
+	for _, f := range strings.Split(ls, "\n") {
+		tree[strings.TrimSpace(f)] = true
+	}
 	var out []EvalBench
 	for _, f := range strings.Split(ls, "\n") {
 		f = strings.TrimSpace(f)
@@ -42,7 +46,7 @@ func evalBenchmarks(bare, sha string) ([]EvalBench, error) {
 		case path.Base(f) == "CMakeLists.txt":
 			text, err := refGitFn(bare, "show", sha+":"+f)
 			if err == nil {
-				out = append(out, cmakeBenchmarks(f, expandCMakeForeach(text))...)
+				out = append(out, cmakeBenchmarks(f, expandCMakeForeach(text), tree)...)
 			}
 		case evalBenchDirRe.MatchString(f) && (strings.HasSuffix(f, ".sh") || strings.HasSuffix(f, ".py")):
 			text, err := refGitFn(bare, "show", sha+":"+f)
@@ -56,27 +60,48 @@ func evalBenchmarks(bare, sha string) ([]EvalBench, error) {
 }
 
 // cmakeBenchmarks: the add_test and add_executable entries of one CMakeLists.txt that are
-// benchmarks by name or by their sources.
-func cmakeBenchmarks(file, text string) []EvalBench {
+// benchmarks by their target name or test command — not by where their sources sit — and
+// whose sources are all in the tree. 11/08 Strata's CMakeLists declares 20 targets under
+// bench/micro/ (19 of them parity checks) inside an if() on bench/micro existing, which the
+// published source does not contain; matching on the source path counted all 20 as
+// "benchmarks of the reference to run here".
+func cmakeBenchmarks(file, text string, tree map[string]bool) []EvalBench {
 	var out []EvalBench
+	exeSrc := map[string][]string{}
+	for _, m := range cmakeAddExeRe.FindAllStringSubmatch(text, -1) {
+		exeSrc[m[1]] = cmakeSources(file, m[2])
+	}
+	built := func(exe string) bool {
+		srcs, ok := exeSrc[exe]
+		if !ok || len(srcs) == 0 {
+			return false
+		}
+		for _, f := range srcs {
+			if !tree[f] {
+				return false
+			}
+		}
+		return true
+	}
 	tested := map[string]bool{}
 	for _, m := range cmakeAddTestRe.FindAllStringSubmatch(text, -1) {
 		cmd := strings.Join(strings.Fields(m[2]), " ")
-		if evalBenchNameRe.MatchString(m[1]) || evalBenchNameRe.MatchString(cmd) {
-			out = append(out, EvalBench{File: file, Kind: "cmake_test", Name: m[1], Command: cmd})
-			if f := strings.Fields(cmd); len(f) > 0 {
-				tested[f[0]] = true
-			}
-		}
-	}
-	for _, m := range cmakeAddExeRe.FindAllStringSubmatch(text, -1) {
-		if tested[m[1]] {
+		f := strings.Fields(cmd)
+		if len(f) == 0 || !built(path.Base(f[0])) {
 			continue
 		}
-		if evalBenchNameRe.MatchString(m[1]) || evalBenchNameRe.MatchString(m[2]) {
-			out = append(out, EvalBench{File: file, Kind: "cmake_target", Name: m[1], Sources: cmakeSources(file, m[2])})
+		if evalBenchNameRe.MatchString(m[1]) || evalBenchNameRe.MatchString(cmd) {
+			out = append(out, EvalBench{File: file, Kind: "cmake_test", Name: m[1], Command: cmd, Sources: exeSrc[path.Base(f[0])]})
+			tested[path.Base(f[0])] = true
 		}
 	}
+	for exe, srcs := range exeSrc {
+		if tested[exe] || !built(exe) || !evalBenchNameRe.MatchString(exe) {
+			continue
+		}
+		out = append(out, EvalBench{File: file, Kind: "cmake_target", Name: exe, Sources: srcs})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
 }
 
