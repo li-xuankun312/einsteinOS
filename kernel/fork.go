@@ -66,6 +66,13 @@ func CopyProcess(nr int, ebp, edi, esi, gs int32,
 	fs, es, ds int32,
 	eip, cs, eflags, esp, ss int32) int32 {
 
+	// A process is copied from the current one; before Init there is none, and copying
+	// it dereferenced nil (11/09: four eval tests run on their own panicked at this line).
+	// It is refused like any other fork that cannot be made.
+	if include.Current == nil {
+		Printk("copy_process: the kernel has not booted (no current task)\n")
+		return -include.EAGAIN
+	}
 	p := &include.TaskStruct{}
 	*p = *include.Current
 
