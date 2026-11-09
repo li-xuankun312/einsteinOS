@@ -338,9 +338,41 @@ func (t ProcTrace) LaunchSummary() string {
 // LaunchSummaryOr is LaunchSummary with a stand-in for an unprobed test.
 func (t ProcTrace) LaunchSummaryOr(none string) string {
 	if s := t.LaunchSummary(); s != "" {
+		if why := unnamedWhy(t.Launches); why != "" {
+			s += "; unnamed because: " + why
+		}
 		return s
 	}
 	return none
+}
+
+// unnamedWhy: the distinct reasons launches have no name, with how many each — 11/09 14:00
+// unit uf4e6ff5513 logged "moe_combine_rows_kernel (+8 unnamed)" and the gate passed on the
+// one named kernel, leaving why the other eight had no name unrecorded.
+func unnamedWhy(ls []KernelLaunch) string {
+	n := map[string]int{}
+	for _, l := range ls {
+		if l.Name == "" {
+			why := l.Why
+			if why == "" {
+				why = "a " + l.API + " launch without a name"
+			}
+			n[why]++
+		}
+	}
+	var out []string
+	for _, w := range sortedKeys(boolSet(n)) {
+		out = append(out, fmt.Sprintf("%s (%d)", w, n[w]))
+	}
+	return strings.Join(out, "; ")
+}
+
+func boolSet(m map[string]int) map[string]bool {
+	out := map[string]bool{}
+	for k := range m {
+		out[k] = true
+	}
+	return out
 }
 
 // LaunchCount: the number of distinct kernels launched, "-" for an unprobed test.

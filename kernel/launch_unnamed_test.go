@@ -55,3 +55,17 @@ func TestUnnamedLaunchesAreUnmeasuredAndSayWhy(t *testing.T) {
 		t.Fatalf("%s: %s", kind, text)
 	}
 }
+
+// The verification log line says why launches had no name, with a count per reason.
+func TestTheLogSaysWhyLaunchesHadNoName(t *testing.T) {
+	tr := ProcTrace{ProbeLoaded: []string{"/ws/t"}, Launches: []KernelLaunch{
+		{API: "cudaLaunchKernel", Name: "moe_combine_rows_kernel"},
+		{API: "cudaLaunchKernel", Why: "/ws/libk.so has no symbol table (stripped?)"},
+		{API: "cudaLaunchKernel", Why: "/ws/libk.so has no symbol table (stripped?)"},
+		{API: "cuLaunchKernel", Why: "a driver-API launch (cuLaunchKernel) passes a handle, not a function"},
+	}}
+	s := tr.LaunchSummaryOr("not measured")
+	if !strings.Contains(s, "no symbol table (stripped?) (2)") || !strings.Contains(s, "passes a handle, not a function (1)") {
+		t.Fatalf("%s", s)
+	}
+}
