@@ -992,28 +992,34 @@ func (r *devRun) reviewBlame(unit DevPlanNode, verdict string) []string {
 	if err != nil {
 		return nil
 	}
-	written := portMapOwners(dir, r.branch)
 	sources := map[string][]string{}
 	for _, l := range r.plan.Leaves() {
 		if req := r.rawRequirements(l); len(req.Sources) > 0 {
 			sources[l.ID] = req.Sources
 		}
 	}
-	owners := reviewOwners(verdict, written, sources)
+	return blameOnBranch(dir, r.branch, unit.ID, verdict, sources)
+}
+
+// blameOnBranch: the units other than unitID that own what verdict faults, measured on the
+// dev branch in the clone at dir — by the files it names, else by the definitions it names.
+// Nobody, when unitID owns any of it.
+func blameOnBranch(dir, branch, unitID, verdict string, sources map[string][]string) []string {
+	owners := reviewOwners(verdict, portMapOwners(dir, branch), sources)
 	if len(owners) == 0 {
-		owners = reviewSymbolOwners(verdict, portMapEntries(dir, r.branch), func(f string) string {
-			b, _ := exec.Command("git", "-C", dir, "show", r.branch+":"+f).Output()
+		owners = reviewSymbolOwners(verdict, portMapEntries(dir, branch), func(f string) string {
+			b, _ := exec.Command("git", "-C", dir, "show", branch+":"+f).Output()
 			return string(b)
 		})
 	}
 	for _, units := range owners {
 		for _, u := range units {
-			if u == unit.ID {
+			if u == unitID {
 				return nil
 			}
 		}
 	}
-	return reviewBlames(unit.ID, owners)
+	return reviewBlames(unitID, owners)
 }
 
 // resumeStoredReviewFailure: a unit that comes back from the plan with a review failure

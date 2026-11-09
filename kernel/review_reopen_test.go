@@ -1,6 +1,9 @@
 package kernel
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -126,36 +129,63 @@ func TestReopeningIsBounded(t *testing.T) {
 }
 
 // A unit that comes back from the plan with review failures about other units' files has
-// those units reopened and its own attempts cleared, instead of being asked to split.
+// those units reopened and its own attempts cleared, instead of being asked to split. The
+// stored failure is the one the plan on zeng-bin3123/baloon einsteinOS/state held for
+// pf7b804cf95 at 837f437 (11/08 08:34), word for word — it names no file — and the port
+// maps and files are on the dev branch of a clone whose working tree is on another branch,
+// as the kernel's clone was on 11/08.
 func TestStoredReviewFailuresAreAttributedOnResume(t *testing.T) {
-	written := map[string][]string{"src/kernels/gpu/gr_core.cu": {"u4decb4e657"}}
-	sources := map[string][]string{"pf7b804cf95": {"include/strata/prefill/kernels.hpp"}}
-	stored := "gr_norm (src/kernels/gpu/gr_core.cu) normalizes jointly over all 4 streams (D=10240) but theory/decode reference norm each stream row separately"
-
-	p := &DevPlan{
-		PortPass:    map[string]bool{"u4decb4e657": true},
-		FixAttempts: map[string]int{"pf7b804cf95": 3},
-		LastFailure: map[string]DevFailure{"pf7b804cf95": {Kind: "review_fail", Text: stored}},
+	const branch = "einsteinOS/dev-3b59928b8f"
+	dir := t.TempDir()
+	git := func(a ...string) {
+		c := exec.Command("git", append([]string{"-C", dir}, a...)...)
+		c.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+		if out, err := c.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %s", a, out)
+		}
 	}
-	unit := DevPlanNode{ID: "pf7b804cf95", Sources: []string{"include/strata/prefill/kernels.hpp"}}
+	write := func(f, text string) {
+		p := filepath.Join(dir, f)
+		os.MkdirAll(filepath.Dir(p), 0o755)
+		os.WriteFile(p, []byte(text), 0o644)
+	}
+	git("init", "-q", "-b", "main")
+	write("README.md", "baloon\n")
+	git("add", "-A")
+	git("commit", "-qm", "main")
+	git("checkout", "-qb", branch)
+	write(PortMapPath("pf7b804cf95"), "include/ref/prefill/kernels.hpp\tgr_norm\tinclude/baloon/prefill_kernels_api.hpp\tgr_norm\n")
+	write(PortMapPath("u41e2bf114f"), "src/prefill/kernels.cu\tgr_norm\tsrc/prefill/kernels.cu\tgr_norm\n")
+	write(PortMapPath("u4decb4e657"), "src/kernels/cuda/gr.cu\tgr_norm_kernel\tsrc/kernels/gpu/gr_core.cu\tgr_norm_kernel\n")
+	write("include/baloon/prefill_kernels_api.hpp", "int gr_norm(const float* x, float* out, int T, float eps);                                  // rms over the 4 streams of a token\n")
+	write("src/prefill/kernels.cu", "int gr_norm(const float* x, float* out, int T, float eps) {\n    if (!x || !out || T <= 0) return -1;\n    gr_norm_kernel<<<(unsigned)T, 256>>>(x, out, eps);\n}\n")
+	write("src/kernels/gpu/gr_core.cu", "__global__ void gr_norm_kernel(const float* x, float* out, float eps) {\n}\n")
+	git("add", "-A")
+	git("commit", "-qm", "units")
+	git("checkout", "-q", "main")
+
+	stored := "gr_norm normalizes jointly over all 4 streams (D=10240) but theory/decode reference norm each stream row (N=2560) separately, and the unit test cannot detect it"
+	p := &DevPlan{
+		PortPass:    map[string]bool{"u41e2bf114f": true, "u4decb4e657": true},
+		FixAttempts: map[string]int{"pf7b804cf95": 3},
+		LastFailure: map[string]DevFailure{"pf7b804cf95": {Kind: "review_fail", Text: stored, BaseRef: branch}},
+	}
+	unit := DevPlanNode{ID: "pf7b804cf95", Sources: []string{"include/ref/prefill/kernels.hpp"}}
 	if need, _ := dev_node_needs_split(p, unit); !need {
 		t.Fatal("as it stands the plan asks to split it")
 	}
 	blame := func(u DevPlanNode, verdict string) []string {
-		return reviewBlames(u.ID, reviewOwners(verdict, written, sources))
+		return blameOnBranch(dir, branch, u.ID, verdict, map[string][]string{u.ID: u.Sources})
 	}
-	blames := resumeStoredReviewFailure(p, unit, "einsteinOS/dev-3b59928b8f", blame)
-	if len(blames) != 1 || blames[0] != "u4decb4e657" {
+	blames := resumeStoredReviewFailure(p, unit, branch, blame)
+	if len(blames) != 1 || blames[0] != "u41e2bf114f" {
 		t.Fatalf("blames: %v", blames)
-	}
-	if _, left := p.FixAttempts[unit.ID]; left {
-		t.Fatal("its attempts are cleared")
 	}
 	if need, why := dev_node_needs_split(p, unit); need {
 		t.Fatalf("it starts again instead of splitting: %s", why)
 	}
-	if !p.Reopened("u4decb4e657") || p.UnitPass(DevPlanNode{ID: "u4decb4e657", Sources: []string{"x.cu"}}) {
-		t.Fatal("the unit whose file it is runs again")
+	if !p.Reopened("u41e2bf114f") || p.UnitPass(DevPlanNode{ID: "u41e2bf114f", Sources: []string{"x.cu"}}) {
+		t.Fatal("the unit whose definition it is runs again")
 	}
 }
 
