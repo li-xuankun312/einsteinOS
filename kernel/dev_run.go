@@ -406,10 +406,10 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 				continue // the leaves changed; look again
 			}
 			if plan.FixAttempts[unit.ID] >= DevMaxFixAttempts {
-				lf := plan.LastFailure[unit.ID]
+				lf := deferredFailure(plan.LastFailure[unit.ID])
 				plan.MarkDeferred(unit.ID, lf)
-				log.Printf("dev_from_theorems: %s unit %s used its %d fix attempts and has nothing to split — the run goes on and its files are left to the integration unit; last review: %s",
-					repo, unit.ID, plan.FixAttempts[unit.ID], truncStr(lf.Text, 300))
+				log.Printf("dev_from_theorems: %s unit %s used its %d fix attempts and has nothing to split — the run goes on and its files are left to the integration unit; last review: %s; %s",
+					repo, unit.ID, plan.FixAttempts[unit.ID], truncStr(lf.Text, 300), lf.Attribution)
 				devPlanSave(repo, devRepo, branch, plan, fmt.Sprintf("plan: unit %s deferred to the integration unit", unit.ID))
 				continue
 			}
@@ -459,7 +459,7 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 	// except the deferred ones, whose files the integration unit's end-to-end run answers for
 	if ids := plan.DeferredUnits(); len(ids) > 0 {
 		for _, id := range ids {
-			log.Printf("dev_from_theorems: %s unit %s was deferred; the last thing its review said: %s", repo, id, truncStr(plan.Deferred[id].Text, 300))
+			log.Printf("dev_from_theorems: %s unit %s was deferred; the last thing its review said: %s; %s", repo, id, truncStr(plan.Deferred[id].Text, 300), plan.Deferred[id].Attribution)
 		}
 		PRFeedbackAdd(pid, fmt.Sprintf("- dev_from_theorems: %d unit(s) deferred to the integration unit: %s", len(ids), strings.Join(ids, " ")))
 	}

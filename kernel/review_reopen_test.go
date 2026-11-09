@@ -215,3 +215,17 @@ func TestAnUnsplittableExhaustedUnitIsDeferred(t *testing.T) {
 		t.Fatal("what the review said is kept")
 	}
 }
+
+// A unit deferred on a review failure is deferred with the fact that the attribution was
+// measured and found no other unit; a deferral on any other failure claims nothing of the kind.
+func TestADeferredReviewFailureSaysTheAttributionFoundNobody(t *testing.T) {
+	p := &DevPlan{}
+	p.MarkDeferred("pf7b804cf95", deferredFailure(DevFailure{Kind: "review_fail", Text: "gr_norm normalizes jointly over all 4 streams"}))
+	if got := p.Deferred["pf7b804cf95"].Attribution; got != deferredAttribution {
+		t.Fatalf("attribution: %q", got)
+	}
+	p.MarkDeferred("u1", deferredFailure(DevFailure{Kind: "compile_fail", Text: "error"}))
+	if got := p.Deferred["u1"].Attribution; got != "" {
+		t.Fatalf("a compile failure was never attributed: %q", got)
+	}
+}

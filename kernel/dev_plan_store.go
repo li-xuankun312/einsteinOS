@@ -84,6 +84,9 @@ type DevFailure struct {
 	Kind    string `json:"kind"`     // compile_fail | smoke_fail | missing | review_fail | nothing_written
 	Text    string `json:"text"`     // the build/test output tail, or the reviewer's reason
 	BaseRef string `json:"base_ref"` // branch holding the code to continue from (dev branch or the unit's wip branch)
+	// Attribution: for a deferred unit's review failure, what the kernel measured about whose
+	// code it faults (deferredFailure)
+	Attribution string `json:"attribution,omitempty"`
 }
 
 // DevPlan is the persisted plan.
@@ -848,6 +851,23 @@ func (p *DevPlan) ReopenableUnits(ids []string) []string {
 // goes on to the units behind it and the unit's files are left to the integration unit's
 // end-to-end run. 11/08 unit pf7b804cf95, a port unit of three headers, ended four runs of
 // the pipeline this way, each time before any later unit had been tried.
+// deferredAttribution: a deferred unit's review failure was measured against the port maps on
+// the dev branch before it was deferred — dev_from_theorems runs resumeStoredReviewFailure
+// before the split question — and no other unit owns a file or a definition it names.
+const deferredAttribution = "measured on the dev branch: no file and no definition this verdict names is another unit's"
+
+// deferredFailure: the failure a unit is deferred with. A review failure carries the fact that
+// attributing it to another unit was measured and found no one, so a deferral says whether
+// it is this unit's own finding or one nobody could be held to — 11/08 pf7b804cf95 was
+// deferred with a verdict about gr_norm, and only the log of a run could tell that the
+// attribution had found nobody.
+func deferredFailure(lf DevFailure) DevFailure {
+	if lf.Kind == "review_fail" {
+		lf.Attribution = deferredAttribution
+	}
+	return lf
+}
+
 func (p *DevPlan) MarkDeferred(id string, f DevFailure) {
 	if p.Deferred == nil {
 		p.Deferred = map[string]DevFailure{}
