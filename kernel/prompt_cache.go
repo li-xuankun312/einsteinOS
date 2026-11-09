@@ -15,10 +15,10 @@ type CacheEntry struct {
 }
 
 type PromptCache struct {
-	mu       sync.RWMutex
-	entries  map[string]*CacheEntry
-	maxSize  int64
-	curSize  int64
+	mu      sync.RWMutex
+	entries map[string]*CacheEntry
+	maxSize int64
+	curSize int64
 }
 
 var GlobalPromptCache = &PromptCache{

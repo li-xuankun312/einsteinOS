@@ -291,7 +291,7 @@ func (c *ToolSignalCollector) MarshalSignals() string {
 		"files_written": c.filesWritten,
 		"compile_runs":  len(c.compileRuns),
 		"git_pushes":    len(c.gitPushes),
-		"bash_commands":  len(c.bashCommands),
+		"bash_commands": len(c.bashCommands),
 	}
 	b, _ := json.Marshal(data)
 	return string(b)

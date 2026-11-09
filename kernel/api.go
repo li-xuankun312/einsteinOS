@@ -1,9 +1,9 @@
 package kernel
 
 import (
-	"io"
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -81,7 +81,7 @@ var convExecFn func(prompt string) (string, string)
 // to determine child lifecycle (max rounds). follows d2aaf709 architecture.
 // Protected by forkConvMu. Keyed by goroutine — only one writer at a time
 // per convExecFn call since RunConversation is synchronous within the goroutine.
-var forkConvID string               // legacy: used by non-pid-aware callers
+var forkConvID string                // legacy: used by non-pid-aware callers
 var forkConvIDs = map[int64]string{} // per-pid convID: race-free
 var forkRole string
 var forkConvMu sync.Mutex
@@ -915,8 +915,6 @@ func GetStderr(pid int64) string {
 	}
 	return ""
 }
-
-
 
 var (
 	convFiles   = make(map[string][]string)

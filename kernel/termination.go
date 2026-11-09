@@ -47,7 +47,7 @@ func (c *MaxRounds) Check(e ToolEvent) *StopSignal {
 	}
 	return nil
 }
-func (c *MaxRounds) Reset()        { c.current = 0 }
+func (c *MaxRounds) Reset()         { c.current = 0 }
 func (c *MaxRounds) String() string { return fmt.Sprintf("MaxRounds(%d)", c.Limit) }
 
 // --- Timeout: wall-clock limit ---
@@ -66,7 +66,7 @@ func (c *Timeout) Check(_ ToolEvent) *StopSignal {
 	}
 	return nil
 }
-func (c *Timeout) Reset()        { c.started = time.Time{} }
+func (c *Timeout) Reset()         { c.started = time.Time{} }
 func (c *Timeout) String() string { return fmt.Sprintf("Timeout(%v)", c.Duration) }
 
 // --- ConsecutiveTextRounds: agent stopped using tools = done working ---
@@ -90,8 +90,10 @@ func (c *ConsecutiveTextRounds) Check(e ToolEvent) *StopSignal {
 	}
 	return nil
 }
-func (c *ConsecutiveTextRounds) Reset()        { c.count = 0 }
-func (c *ConsecutiveTextRounds) String() string { return fmt.Sprintf("ConsecutiveTextRounds(%d)", c.Threshold) }
+func (c *ConsecutiveTextRounds) Reset() { c.count = 0 }
+func (c *ConsecutiveTextRounds) String() string {
+	return fmt.Sprintf("ConsecutiveTextRounds(%d)", c.Threshold)
+}
 
 // --- BashExitZero: a specific bash command succeeded ---
 // Matches bash tool calls where the command contains `pattern` and
@@ -125,7 +127,7 @@ func (c *BashExitZero) Check(e ToolEvent) *StopSignal {
 	}
 	return c.signal
 }
-func (c *BashExitZero) Reset()        { c.signal = nil }
+func (c *BashExitZero) Reset()         { c.signal = nil }
 func (c *BashExitZero) String() string { return fmt.Sprintf("BashExitZero(%q)", c.Pattern) }
 
 // --- FileWriteCount: expected number of files written via create/edit tools ---
@@ -158,7 +160,7 @@ func (c *FileWriteCount) Check(e ToolEvent) *StopSignal {
 	}
 	return nil
 }
-func (c *FileWriteCount) Reset()        { c.seen = nil }
+func (c *FileWriteCount) Reset()         { c.seen = nil }
 func (c *FileWriteCount) String() string { return fmt.Sprintf("FileWriteCount(%d)", c.Expected) }
 
 // --- CompileResult: extract compile pass/fail from build commands ---
@@ -193,7 +195,7 @@ func (c *CompileResult) Check(e ToolEvent) *StopSignal {
 	}
 	return c.result
 }
-func (c *CompileResult) Reset()        { c.result = nil }
+func (c *CompileResult) Reset()         { c.result = nil }
 func (c *CompileResult) String() string { return fmt.Sprintf("CompileResult(%q)", c.BuildCmd) }
 
 // --- Or: any condition triggers termination ---
@@ -427,8 +429,8 @@ func boolStr(b bool) string {
 // fires and MaxRounds is the safety net.
 
 type AxleVerifyDone struct {
-	verified int  // count of successful Axle verifications
-	postIdle int  // consecutive text-only rounds AFTER at least one verify
+	verified int // count of successful Axle verifications
+	postIdle int // consecutive text-only rounds AFTER at least one verify
 }
 
 func (c *AxleVerifyDone) Check(e ToolEvent) *StopSignal {
@@ -456,7 +458,7 @@ func (c *AxleVerifyDone) Check(e ToolEvent) *StopSignal {
 	}
 	return nil
 }
-func (c *AxleVerifyDone) Reset()        { c.verified = 0; c.postIdle = 0 }
+func (c *AxleVerifyDone) Reset()         { c.verified = 0; c.postIdle = 0 }
 func (c *AxleVerifyDone) String() string { return "AxleVerifyDone" }
 
 // --- preset termination profiles for common roles ---

@@ -96,12 +96,12 @@ func TestAReadWhoseOutputIsTheSandboxsIsSummarisedNotResent(t *testing.T) {
 // 11/05 02:09:34: a python edit naming $V/build.sh was counted as a build run
 func TestOnlyRunningAVerifyScriptCountsAsRunningIt(t *testing.T) {
 	ran := map[string][2]bool{
-		`cd /home/claude/baloon && bash .einsteinOS/verify/u1/build.sh >/tmp/b.log 2>&1; echo build_exit=$?`:  {true, false},
-		`cd x && V=.einsteinOS/verify/u1 && bash $V/test.sh 2>&1 | tail -30`:                                  {false, true},
+		`cd /home/claude/baloon && bash .einsteinOS/verify/u1/build.sh >/tmp/b.log 2>&1; echo build_exit=$?`: {true, false},
+		`cd x && V=.einsteinOS/verify/u1 && bash $V/test.sh 2>&1 | tail -30`:                                 {false, true},
 		`cd x && ./.einsteinOS/verify/u1/build.sh && .einsteinOS/verify/u1/test.sh`:                          {true, true},
-		"cd x && V=.einsteinOS/verify/u1 && python3 - <<'EOF'\np=open('$V/build.sh').read()\nEOF":             {false, false},
-		`cd x && cat > .einsteinOS/verify/u1/build.sh <<'EOF'` + "\nmake\nEOF":                                {false, false},
-		`sed -i 's/a/b/' .einsteinOS/verify/u1/test.sh; cat .einsteinOS/verify/u1/build.sh`:                    {false, false},
+		"cd x && V=.einsteinOS/verify/u1 && python3 - <<'EOF'\np=open('$V/build.sh').read()\nEOF":            {false, false},
+		`cd x && cat > .einsteinOS/verify/u1/build.sh <<'EOF'` + "\nmake\nEOF":                               {false, false},
+		`sed -i 's/a/b/' .einsteinOS/verify/u1/test.sh; cat .einsteinOS/verify/u1/build.sh`:                  {false, false},
 	}
 	for cmd, want := range ran {
 		in, _ := json.Marshal(map[string]string{"command": cmd})

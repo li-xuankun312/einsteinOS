@@ -6,17 +6,17 @@ import (
 )
 
 type AgentSession struct {
-	ID        string
-	LeaderPid int64
-	Pgrp      int32
-	ConvID    string
-	Model     string
-	Effort    uint8
-	CreatedAt time.Time
-	LastActive time.Time
+	ID          string
+	LeaderPid   int64
+	Pgrp        int32
+	ConvID      string
+	Model       string
+	Effort      uint8
+	CreatedAt   time.Time
+	LastActive  time.Time
 	TotalTokens int64
 	TurnCount   int
-	Active     bool
+	Active      bool
 }
 
 type SessionTable struct {

@@ -124,11 +124,11 @@ func (wq *WaitQueue) WakeUpInterruptible() {
 }
 
 var (
-	bufferWait    = NewWaitQueue("buffer_wait")
-	inodeWait     = NewWaitQueue("inode_wait")
-	superWait     = NewWaitQueue("super_wait")
-	keyboardWait  = NewWaitQueue("keyboard_wait")
-	hdWait        = NewWaitQueue("hd_wait")
+	bufferWait   = NewWaitQueue("buffer_wait")
+	inodeWait    = NewWaitQueue("inode_wait")
+	superWait    = NewWaitQueue("super_wait")
+	keyboardWait = NewWaitQueue("keyboard_wait")
+	hdWait       = NewWaitQueue("hd_wait")
 )
 
 func GetBufferWait() *WaitQueue   { return bufferWait }

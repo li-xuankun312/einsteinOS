@@ -25,16 +25,16 @@ type RefRepo struct {
 }
 
 type PRProcess struct {
-	Repo       string
-	Branch     string
-	PRNumber   int
-	Title      string
-	RefRepos   []RefRepo
-	Commits    []PRCommit
-	HWInfo     string
-	GPUAll     string // from hw_probe: "0,1,2,3"
-	GPUUsable  string // computed from P2P test: "1,2"
-	GPUPairsOK string // from child: "1-2,2-3"
+	Repo        string
+	Branch      string
+	PRNumber    int
+	Title       string
+	RefRepos    []RefRepo
+	Commits     []PRCommit
+	HWInfo      string
+	GPUAll      string // from hw_probe: "0,1,2,3"
+	GPUUsable   string // computed from P2P test: "1,2"
+	GPUPairsOK  string // from child: "1-2,2-3"
 	Feedback    []string
 	BenchResult string // last benchmark output text
 	CreateTime  time.Time

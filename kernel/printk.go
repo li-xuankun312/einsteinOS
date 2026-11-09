@@ -387,21 +387,25 @@ var doExitFn func(int32)
 
 func SetDoExitForTrap(fn func(int32)) { doExitFn = fn }
 
-func DoDivideError(frame *TrapFrame, errCode int32)              { die("divide error", frame, errCode) }
-func DoDebug(frame *TrapFrame, errCode int32)                    { die("debug", frame, errCode) }
-func DoNmi(frame *TrapFrame, errCode int32)                      { die("nmi", frame, errCode) }
-func DoInt3(frame *TrapFrame, errCode int32)                     { die("int3 breakpoint", frame, errCode) }
-func DoOverflow(frame *TrapFrame, errCode int32)                 { die("overflow", frame, errCode) }
-func DoBounds(frame *TrapFrame, errCode int32)                   { die("bounds", frame, errCode) }
-func DoInvalidOp(frame *TrapFrame, errCode int32)                { die("invalid operand", frame, errCode) }
-func DoDeviceNotAvailable(frame *TrapFrame, errCode int32)       { die("device not available", frame, errCode) }
-func DoDoubleFault(frame *TrapFrame, errCode int32)              { die("double fault", frame, errCode) }
-func DoCoprocessorSegmentOverrun(frame *TrapFrame, errCode int32) { die("coprocessor segment overrun", frame, errCode) }
-func DoInvalidTSS(frame *TrapFrame, errCode int32)               { die("invalid TSS", frame, errCode) }
-func DoSegmentNotPresent(frame *TrapFrame, errCode int32)        { die("segment not present", frame, errCode) }
-func DoStackSegment(frame *TrapFrame, errCode int32)             { die("stack segment", frame, errCode) }
-func DoGeneralProtection(frame *TrapFrame, errCode int32)        { die("general protection", frame, errCode) }
-func DoPageFault(frame *TrapFrame, errCode int32)                { die("page fault", frame, errCode) }
+func DoDivideError(frame *TrapFrame, errCode int32) { die("divide error", frame, errCode) }
+func DoDebug(frame *TrapFrame, errCode int32)       { die("debug", frame, errCode) }
+func DoNmi(frame *TrapFrame, errCode int32)         { die("nmi", frame, errCode) }
+func DoInt3(frame *TrapFrame, errCode int32)        { die("int3 breakpoint", frame, errCode) }
+func DoOverflow(frame *TrapFrame, errCode int32)    { die("overflow", frame, errCode) }
+func DoBounds(frame *TrapFrame, errCode int32)      { die("bounds", frame, errCode) }
+func DoInvalidOp(frame *TrapFrame, errCode int32)   { die("invalid operand", frame, errCode) }
+func DoDeviceNotAvailable(frame *TrapFrame, errCode int32) {
+	die("device not available", frame, errCode)
+}
+func DoDoubleFault(frame *TrapFrame, errCode int32) { die("double fault", frame, errCode) }
+func DoCoprocessorSegmentOverrun(frame *TrapFrame, errCode int32) {
+	die("coprocessor segment overrun", frame, errCode)
+}
+func DoInvalidTSS(frame *TrapFrame, errCode int32)        { die("invalid TSS", frame, errCode) }
+func DoSegmentNotPresent(frame *TrapFrame, errCode int32) { die("segment not present", frame, errCode) }
+func DoStackSegment(frame *TrapFrame, errCode int32)      { die("stack segment", frame, errCode) }
+func DoGeneralProtection(frame *TrapFrame, errCode int32) { die("general protection", frame, errCode) }
+func DoPageFault(frame *TrapFrame, errCode int32)         { die("page fault", frame, errCode) }
 func DoCoprocessorError(frame *TrapFrame, errCode int32) {
 	if LastTaskUsedMath != Current {
 		return

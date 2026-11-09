@@ -69,4 +69,3 @@ func TestRefPerSourceFlagsFollowsTheReferenceBuild(t *testing.T) {
 		}
 	}
 }
-

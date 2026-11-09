@@ -30,15 +30,15 @@ import (
 )
 
 var (
-	refIdentMaxFiles  = 8  // an identifier in more files says nothing about one module
-	refIdentMax       = 80 // identifiers looked up per module
-	refSourceExts     = []string{"*.cu", "*.cuh", "*.cpp", "*.cc", "*.c", "*.h", "*.hpp"}
-	gpuSourceExts     = []string{".cu", ".cuh"}
-	refNotSourceRe    = regexp.MustCompile(`(_test|_parity|_bench)\.|(^|/)(tests?|bench)/`)
+	refIdentMaxFiles = 8  // an identifier in more files says nothing about one module
+	refIdentMax      = 80 // identifiers looked up per module
+	refSourceExts    = []string{"*.cu", "*.cuh", "*.cpp", "*.cc", "*.c", "*.h", "*.hpp"}
+	gpuSourceExts    = []string{".cu", ".cuh"}
+	refNotSourceRe   = regexp.MustCompile(`(_test|_parity|_bench)\.|(^|/)(tests?|bench)/`)
 	// refVendoredRe: code the reference vendors from elsewhere (third_party/ggml/ggml-common.h
 	// in Strata's first commit, 78 definitions). It is not the reference's own code: a port may
 	// vendor the same file, so its definitions are not a port requirement.
-	refVendoredRe = regexp.MustCompile(`(^|/)(third_party|thirdparty|3rdparty|vendor|vendored|external|extern|deps)/`)
+	refVendoredRe     = regexp.MustCompile(`(^|/)(third_party|thirdparty|3rdparty|vendor|vendored|external|extern|deps)/`)
 	backtickRe        = regexp.MustCompile("`([^`\\n]{1,200})`")
 	cIdentRe          = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]{3,}`)
 	mappingLineRe     = regexp.MustCompile(`->|<-|←|→`)
@@ -168,10 +168,10 @@ type UnitRequirements struct {
 	Symbols []RefSymbol
 	// Tests: the reference's registered tests, for the integration unit (integration.go);
 	// RequireGPU: the reference builds CUDA, so they must open a GPU device
-	Tests      []RefTest
+	Tests []RefTest
 	// Benches: the reference's own benchmarks at the commit (eval_bench.go), for the
 	// integration unit: the port has to build and run their counterparts (eval_port.go)
-	Benches []EvalBench
+	Benches    []EvalBench
 	RequireGPU bool
 	Repo, SHA  string
 	// RefRead: the reference commit could be read here, so an empty measurement means the

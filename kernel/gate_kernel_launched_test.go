@@ -84,11 +84,11 @@ func TestGateLaunchUnmeasuredStaticRuntime(t *testing.T) {
 func TestRepoKernelsSkipsGitAndBuild(t *testing.T) {
 	ws := t.TempDir()
 	for f, src := range map[string]string{
-		"src/a.cu":        "__global__ void ka(int*) {}",
-		"include/b.cuh":   "__global__ void kb(int*);",
-		"build/gen.cu":    "__global__ void generated(int*) {}",
-		".git/x.cu":       "__global__ void inside_git(int*) {}",
-		"src/host.cpp":    "__global__ void not_cuda(int*) {}",
+		"src/a.cu":      "__global__ void ka(int*) {}",
+		"include/b.cuh": "__global__ void kb(int*);",
+		"build/gen.cu":  "__global__ void generated(int*) {}",
+		".git/x.cu":     "__global__ void inside_git(int*) {}",
+		"src/host.cpp":  "__global__ void not_cuda(int*) {}",
 	} {
 		writeFileAll(t, ws+"/"+f, src)
 	}

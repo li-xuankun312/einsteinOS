@@ -29,12 +29,12 @@ import (
 
 // PuppetState tracks one puppet's lifecycle.
 type PuppetState struct {
-	CommitIdx    int       // which commit index this puppet handles
-	CommitSHA   string    // the ref repo commit SHA
-	PRPid       int64     // the PR process pid
-	Branch      string    // PR branch name (einsteinOS/dev-{pid})
-	ConvID      string    // the puppet main conversation ID (if any)
-	Status      string    // "running", "pipeline_done", "tps_check", "merged", "failed"
+	CommitIdx   int    // which commit index this puppet handles
+	CommitSHA   string // the ref repo commit SHA
+	PRPid       int64  // the PR process pid
+	Branch      string // PR branch name (einsteinOS/dev-{pid})
+	ConvID      string // the puppet main conversation ID (if any)
+	Status      string // "running", "pipeline_done", "tps_check", "merged", "failed"
 	StartTime   time.Time
 	EndTime     time.Time
 	CompilePass bool
@@ -63,7 +63,7 @@ type ProcEngine struct {
 	Task   string // the original user task string
 
 	// L1: Go memory state
-	Cursor       int    // next commit index to process
+	Cursor       int // next commit index to process
 	TotalCommits int
 	RefOwner     string
 	RefName      string
@@ -73,8 +73,8 @@ type ProcEngine struct {
 	PriorRun *PriorRun
 
 	// puppet history
-	Puppets    []PuppetState
-	Current    *PuppetState // the currently running puppet (nil if between puppets)
+	Puppets []PuppetState
+	Current *PuppetState // the currently running puppet (nil if between puppets)
 
 	// benchmark history
 	Benchmarks []BenchmarkResult
@@ -679,7 +679,7 @@ func truncateStr(s string, n int) string {
 
 var (
 	engineInstance *ProcEngine
-	engineMu      sync.Mutex
+	engineMu       sync.Mutex
 )
 
 func EngineStart(task string, cfg ProcConfig) *ProcEngine {

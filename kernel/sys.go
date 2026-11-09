@@ -6,18 +6,18 @@ import (
 	. "google.golang.org/adk/v2/include"
 )
 
-func SysFtime() int32   { return -ENOSYS }
-func SysBreak() int32   { return -ENOSYS }
-func SysPtrace() int32  { return -ENOSYS }
-func SysStty() int32    { return -ENOSYS }
-func SysGtty() int32    { return -ENOSYS }
-func SysRename() int32  { return -ENOSYS }
-func SysProf() int32    { return -ENOSYS }
-func SysAcct() int32    { return -ENOSYS }
-func SysPhys() int32    { return -ENOSYS }
-func SysLock() int32    { return -ENOSYS }
-func SysMpx() int32     { return -ENOSYS }
-func SysUlimit() int32  { return -ENOSYS }
+func SysFtime() int32  { return -ENOSYS }
+func SysBreak() int32  { return -ENOSYS }
+func SysPtrace() int32 { return -ENOSYS }
+func SysStty() int32   { return -ENOSYS }
+func SysGtty() int32   { return -ENOSYS }
+func SysRename() int32 { return -ENOSYS }
+func SysProf() int32   { return -ENOSYS }
+func SysAcct() int32   { return -ENOSYS }
+func SysPhys() int32   { return -ENOSYS }
+func SysLock() int32   { return -ENOSYS }
+func SysMpx() int32    { return -ENOSYS }
+func SysUlimit() int32 { return -ENOSYS }
 
 func SysSetregid(rgid, egid int32) int32 {
 	if rgid > 0 {

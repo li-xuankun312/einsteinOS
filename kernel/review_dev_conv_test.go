@@ -32,4 +32,6 @@ func TestTheReviewerGetsTheDevConversationAsAFile(t *testing.T) {
 	}
 }
 
-func fmtReview(f ForkFile) string { return strings.ReplaceAll(reviewDevConvFmt, "%[1]s", localUploadsPath(f.Name)) }
+func fmtReview(f ForkFile) string {
+	return strings.ReplaceAll(reviewDevConvFmt, "%[1]s", localUploadsPath(f.Name))
+}

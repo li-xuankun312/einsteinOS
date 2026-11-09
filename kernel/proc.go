@@ -43,16 +43,16 @@ func (s ProcStatus) String() string {
 type ProcPhase int
 
 const (
-	PHASE_BOOT           ProcPhase = iota
-	PHASE_WAIT                     // noop tick: children running
-	PHASE_DEV_START                // first dev unit launched
-	PHASE_DEV_PROGRESS             // dev units in flight
-	PHASE_DEV_DONE                 // all units pass → open PR, advance cursor
-	PHASE_PARALLEL                 // next round started while prior PR pending
-	PHASE_STEADY_STATE             // repeating pattern
+	PHASE_BOOT         ProcPhase = iota
+	PHASE_WAIT                   // noop tick: children running
+	PHASE_DEV_START              // first dev unit launched
+	PHASE_DEV_PROGRESS           // dev units in flight
+	PHASE_DEV_DONE               // all units pass → open PR, advance cursor
+	PHASE_PARALLEL               // next round started while prior PR pending
+	PHASE_STEADY_STATE           // repeating pattern
 	// PHASE_MILESTONE_BENCH removed — no pipeline benchmark step, main conv handles it
-	PHASE_BENCHMARK_DONE           // benchmark recorded, continue
-	PHASE_EXHAUSTED                // all commits processed
+	PHASE_BENCHMARK_DONE // benchmark recorded, continue
+	PHASE_EXHAUSTED      // all commits processed
 )
 
 func (p ProcPhase) String() string {
@@ -71,13 +71,13 @@ func (p ProcPhase) String() string {
 // ---------------------------------------------------------------------------
 
 type PRQueueEntry struct {
-	Pid       int64
-	Branch    string
-	Repo      string
-	CursorAt  int       // which commit index this PR covers
-	OpenedAt  time.Time
-	Merged    bool
-	MergedAt  time.Time
+	Pid      int64
+	Branch   string
+	Repo     string
+	CursorAt int // which commit index this PR covers
+	OpenedAt time.Time
+	Merged   bool
+	MergedAt time.Time
 }
 
 // ---------------------------------------------------------------------------
@@ -97,14 +97,14 @@ type BenchmarkResult struct {
 // ---------------------------------------------------------------------------
 
 type RepoProgress struct {
-	Owner       string
-	Name        string
+	Owner        string
+	Name         string
 	TotalCommits int
-	Cursor      int  // next commit index to process (0-based)
-	TheoryDone  bool // current cursor's theory finished?
-	DevDone     bool // current cursor's dev units all pass?
-	DevRunning  bool // dev units currently in flight?
-	TheoryBytes int  // how many bytes of theory accumulated
+	Cursor       int  // next commit index to process (0-based)
+	TheoryDone   bool // current cursor's theory finished?
+	DevDone      bool // current cursor's dev units all pass?
+	DevRunning   bool // dev units currently in flight?
+	TheoryBytes  int  // how many bytes of theory accumulated
 }
 
 // ---------------------------------------------------------------------------
@@ -137,7 +137,7 @@ func DefaultProcConfig() ProcConfig {
 type ProcState struct {
 	mu sync.Mutex
 
-	Pid    int64      // the PR process driving this loop
+	Pid    int64 // the PR process driving this loop
 	Config ProcConfig
 
 	Status ProcStatus
@@ -154,8 +154,8 @@ type ProcState struct {
 	Benchmarks []BenchmarkResult
 
 	// timing
-	StartTime  time.Time
-	LastTick   time.Time
+	StartTime time.Time
+	LastTick  time.Time
 
 	// stop channel
 	stopCh chan struct{}
@@ -358,12 +358,12 @@ func (ps *ProcState) tick() ProcTickResult {
 // ---------------------------------------------------------------------------
 
 type tickState struct {
-	convs       []ConvRecord
-	repos       map[string]*RepoProgress
-	prQueue     []PRQueueEntry
-	benchmarks  []BenchmarkResult
-	status      ProcStatus
-	tick        int
+	convs      []ConvRecord
+	repos      map[string]*RepoProgress
+	prQueue    []PRQueueEntry
+	benchmarks []BenchmarkResult
+	status     ProcStatus
+	tick       int
 }
 
 func (ps *ProcState) readState() tickState {

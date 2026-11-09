@@ -20,9 +20,9 @@ type AgentPipe struct {
 }
 
 var (
-	agentPipes   = make(map[int64]*AgentPipe)
-	agentPipeMu  sync.Mutex
-	nextPipeID   int64
+	agentPipes  = make(map[int64]*AgentPipe)
+	agentPipeMu sync.Mutex
+	nextPipeID  int64
 )
 
 func CreateAgentPipe() int64 {

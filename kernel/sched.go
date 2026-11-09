@@ -51,7 +51,7 @@ func Schedule() {
 			p.Signal |= signalBit(include.SIGALRM)
 			p.Alarm = 0
 		}
-		if (p.Signal & ^(blockable & p.Blocked)) != 0 &&
+		if (p.Signal & ^(blockable&p.Blocked)) != 0 &&
 			p.State == include.TASK_INTERRUPTIBLE {
 			p.State = include.TASK_RUNNING
 		}

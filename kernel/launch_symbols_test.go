@@ -8,13 +8,13 @@ import (
 
 func TestKernelIdent(t *testing.T) {
 	for sym, want := range map[string]string{
-		"_Z9my_kernelPf":                "my_kernel",
-		"_Z9my_kernelILi4EEvPf":         "my_kernel",
+		"_Z9my_kernelPf":                 "my_kernel",
+		"_Z9my_kernelILi4EEvPf":          "my_kernel",
 		"_ZN6baloon3gdn8gdn_stepEPKfPfi": "gdn_step",
-		"_ZN2nsL6kernelILi4EEEvPf":      "kernel",
-		"_Z23__device_stub__fused_opPf": "fused_op",
-		"plain_c_kernel":                "plain_c_kernel",
-		"_Zbroken":                      "_Zbroken",
+		"_ZN2nsL6kernelILi4EEEvPf":       "kernel",
+		"_Z23__device_stub__fused_opPf":  "fused_op",
+		"plain_c_kernel":                 "plain_c_kernel",
+		"_Zbroken":                       "_Zbroken",
 	} {
 		if got := kernelIdent(sym); got != want {
 			t.Errorf("kernelIdent(%q) = %q, want %q", sym, got, want)

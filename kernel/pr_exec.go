@@ -1,11 +1,11 @@
 package kernel
 
 import (
-	"path"
-	"regexp"
 	"fmt"
 	"log"
 	"os"
+	"path"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -26,13 +26,13 @@ const (
 	STEP_HW_PROBE
 	STEP_REF_BIND
 	STEP_DEV_FROM_THEOREMS
-	STEP_DEV_FIX    // kernel-driven fix: structured args, not "fix the issues above"
+	STEP_DEV_FIX // kernel-driven fix: structured args, not "fix the issues above"
 	STEP_REF_DIFF
 	// STEP_VLLM_UP and STEP_VLLM_BENCH removed: deployment and benchmarking
 	// are the main conversation's job, not a pipeline step. the main conv runs
 	// on the real machine with shadow+writeback — it probes hardware, builds,
 	// and benchmarks itself by reading the project code.
-	STEP_OPEN_PR    // kernel: git add+commit+push to temp branch, open PR via GitHub API
+	STEP_OPEN_PR // kernel: git add+commit+push to temp branch, open PR via GitHub API
 )
 
 type Step struct {
@@ -434,8 +434,8 @@ func ref_bind_cursor(pid int64, owner, repo string) int {
 // ---------------------------------------------------------------------------
 
 type devUnit struct {
-	Files   []string // file paths assigned to this unit
-	Theory  string   // the theory text for just these files
+	Files  []string // file paths assigned to this unit
+	Theory string   // the theory text for just these files
 }
 
 // dev_proof_preflight makes proof status KERNEL FACT before any dev child runs.
@@ -792,8 +792,6 @@ func dev_split_theory(theory string) []string {
 	return result
 }
 
-
-
 // dev_open_completion_pr opens the ONE PR that marks a dev branch as a complete,
 // reviewed run — the discoverability signal the rest of the pipeline withholds
 // on purpose (ref_store_chunk pushes theory chunk branches with no PR; a FAILED
@@ -895,8 +893,6 @@ func buildCompletionPR(refOwner, refName, refRepo, sha string, unitVerdicts []st
 	return title, b.String()
 }
 
-
-
 // vllm_up and vllm_bench removed.
 //
 // deployment and benchmarking are the main conversation's job.
@@ -917,9 +913,9 @@ func buildCompletionPR(refOwner, refName, refRepo, sha string, unitVerdicts []st
 // no hardcoded GPU IDs, no hardcoded commands, no vllm assumption.
 
 // open_pr: three steps, all kernel-driven.
-//   1. fork verify child: re-run numeric checks, output pass/fail
-//   2. if pass: fresh clone, copy new code in, single squashed commit, push
-//   3. open PR via GitHub API
+//  1. fork verify child: re-run numeric checks, output pass/fail
+//  2. if pass: fresh clone, copy new code in, single squashed commit, push
+//  3. open PR via GitHub API
 //
 // follows ef92bb70: child does the judgment, kernel routes.
 // Step.Command = "tok_s=42.3"
@@ -1026,11 +1022,12 @@ git push origin %s 2>&1`,
 }
 
 // dev_fix: kernel-driven fix step. Step fields carry structured args:
-//   Command = failure type (compile_fail | gpu_fail | smoke_fail | needs_source)
-//   Path    = error message from child's status block
-//   SHA     = comma-separated ref file hints (kernel-selected from compile error)
-//   Result  = files_written by previous attempt
-//   Dir     = attempt number as string
+//
+//	Command = failure type (compile_fail | gpu_fail | smoke_fail | needs_source)
+//	Path    = error message from child's status block
+//	SHA     = comma-separated ref file hints (kernel-selected from compile error)
+//	Result  = files_written by previous attempt
+//	Dir     = attempt number as string
 func dev_fix(pid int64, step *Step) (string, error) {
 	repo := step.Owner + "/" + step.Repo
 	attempt := dev_fix_attempt(step)
@@ -1385,6 +1382,7 @@ func dev_review_unit_inner(pid int64, repo, branch string, unitNum, totalUnits i
 	}
 	return "FAIL: review gave no verdict, compile=" + status["compile"]
 }
+
 // relPath strips absolute prefixes to get a repo-relative path.
 // /home/claude/baloon/include/core/x.hpp → include/core/x.hpp
 // /tmp/work/baloon/src/y.cpp → src/y.cpp

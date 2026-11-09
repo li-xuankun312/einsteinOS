@@ -1,7 +1,6 @@
 package claudeweb
 
 import (
-	"path/filepath"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -11,6 +10,7 @@ import (
 	"log"
 	"os"
 	"path"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"

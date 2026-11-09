@@ -22,7 +22,7 @@ func TestToolCallsRunInOrderAsSoonAsTheyArrive(t *testing.T) {
 	start := time.Now()
 	r.submit("a", "bash_tool", "1")
 	r.submit("b", "bash_tool", "2")
-	r.submit("a", "bash_tool", "1") // a duplicate id runs once
+	r.submit("a", "bash_tool", "1")   // a duplicate id runs once
 	time.Sleep(50 * time.Millisecond) // the stream goes on meanwhile
 	if res, ok := r.result("b"); !ok || res != "[pid 1 exit=0] 2" {
 		t.Fatalf("%q %v", res, ok)

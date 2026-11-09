@@ -62,17 +62,17 @@ func presentGPUCompilers() []string {
 }
 
 const (
-	gateGPUCodeMissingFmt = "gpu_code_missing: the unit's modules come from CUDA sources in the reference (%[1]s) but it wrote no .cu/.cuh file"
-	gateGPUNotCompiledFmt = "gpu_not_compiled: build.sh ran no CUDA compile of %[1]s (CUDA compiles seen: %[2]s)"
-	gateGPUUnusedFmt      = "gpu_unused: test.sh exited 0 but none of its %[1]d process(es) opened a GPU device (%[2]s); executables that ran: %[3]s"
-	gateISAMissingFmt     = "isa_path_missing: the reference builds %[1]s with %[2]s; no binary the build produced or the test ran contains %[3]s (binaries looked at: %[4]s)"
-	gateISAUnmeasuredFmt  = "isa_unmeasured: the reference builds %[1]s with %[2]s, and the binaries could not be disassembled (%[3]s)"
-	gateToolchainUnusedFmt = "toolchain_unused: the unit is GPU work but no process of build.sh ran a program from %[1]s (programs that ran: %[2]s) — a build that skips the toolchain proves nothing"
-	gateGPUKernelMissingFmt = "gpu_kernel_missing: the unit's modules come from CUDA sources in the reference (%[1]s) but its CUDA files define no __global__ kernel: %[2]s — a host header about a kernel is not the kernel"
-	gateKernelNotLaunchedFmt = "gpu_kernel_not_launched: test.sh exited 0 but launched none of the unit's kernels (%[1]s); kernels its processes launched: %[2]s; executables the launch probe was in: %[3]s — a test that opens the device and checks on the CPU proves nothing about the kernels"
-	gateLaunchUnmeasuredFmt = "gpu_launch_unmeasured: whether the unit's kernels ran on the device could not be measured: %[1]s"
+	gateGPUCodeMissingFmt      = "gpu_code_missing: the unit's modules come from CUDA sources in the reference (%[1]s) but it wrote no .cu/.cuh file"
+	gateGPUNotCompiledFmt      = "gpu_not_compiled: build.sh ran no CUDA compile of %[1]s (CUDA compiles seen: %[2]s)"
+	gateGPUUnusedFmt           = "gpu_unused: test.sh exited 0 but none of its %[1]d process(es) opened a GPU device (%[2]s); executables that ran: %[3]s"
+	gateISAMissingFmt          = "isa_path_missing: the reference builds %[1]s with %[2]s; no binary the build produced or the test ran contains %[3]s (binaries looked at: %[4]s)"
+	gateISAUnmeasuredFmt       = "isa_unmeasured: the reference builds %[1]s with %[2]s, and the binaries could not be disassembled (%[3]s)"
+	gateToolchainUnusedFmt     = "toolchain_unused: the unit is GPU work but no process of build.sh ran a program from %[1]s (programs that ran: %[2]s) — a build that skips the toolchain proves nothing"
+	gateGPUKernelMissingFmt    = "gpu_kernel_missing: the unit's modules come from CUDA sources in the reference (%[1]s) but its CUDA files define no __global__ kernel: %[2]s — a host header about a kernel is not the kernel"
+	gateKernelNotLaunchedFmt   = "gpu_kernel_not_launched: test.sh exited 0 but launched none of the unit's kernels (%[1]s); kernels its processes launched: %[2]s; executables the launch probe was in: %[3]s — a test that opens the device and checks on the CPU proves nothing about the kernels"
+	gateLaunchUnmeasuredFmt    = "gpu_launch_unmeasured: whether the unit's kernels ran on the device could not be measured: %[1]s"
 	gateIntegrationNoKernelFmt = "integration_kernel_not_launched: the reference builds CUDA and its %[1]d registered tests passed here, but none of them launched a kernel of this repository (it defines %[2]d: %[3]s); kernels launched: %[4]s"
-	gateToolchainFmt      = "toolchain_missing: the unit's sources are CUDA but none of %[1]s exists in %[2]s on this machine; a build that skips the GPU here proves nothing"
+	gateToolchainFmt           = "toolchain_missing: the unit's sources are CUDA but none of %[1]s exists in %[2]s on this machine; a build that skips the GPU here proves nothing"
 )
 
 // GateToolchainMissing is the gate a retry cannot fix: the run stops on it (dev_run).
