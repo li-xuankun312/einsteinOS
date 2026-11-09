@@ -37,3 +37,17 @@ func TestThePortedKernelsAreTheUnitsOwn(t *testing.T) {
 		t.Fatalf("the ported kernel ran: %s", text)
 	}
 }
+
+// A unit whose port map names kernels it ports, in files the branch already held, is not sent
+// back gpu_kernel_missing because the CUDA files it wrote this time define none.
+func TestPortedKernelsInExistingFilesAreTheUnitsKernels(t *testing.T) {
+	in := GateInput{Req: UnitRequirements{GPUSources: []string{"src/kernels/cuda/native_flash_attn.cu"}},
+		Kernels: map[string][]string{"tests/kucc7_u4/test_ucc7.cu": nil}, KernelsMeasured: true}
+	if _, text := unitGates(in); !strings.Contains(text, "gpu_kernel_missing") {
+		t.Fatalf("no kernel anywhere: %s", text)
+	}
+	in.PortKernels = map[string]bool{"flash_kernel": true, "qsa_attend_kernel": true}
+	if _, text := unitGates(in); strings.Contains(text, "gpu_kernel_missing") {
+		t.Fatalf("its ported kernels are its kernels: %s", text)
+	}
+}

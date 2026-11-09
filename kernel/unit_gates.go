@@ -113,7 +113,11 @@ func unitGates(in GateInput) (kind, text string) {
 	}
 	// a CUDA file is GPU work only if it holds a kernel: 11/04's FusedGdnKernels,
 	// QsaDecodeAttention and PrefillGpuKernels were host headers of index arithmetic
-	if in.Req.GPU() && in.KernelsMeasured && len(in.Kernels) > 0 && len(kernelSet(in.Kernels)) == 0 {
+	// …unless its port map names __global__ kernels as its counterparts of the reference's: 11/09
+	// 15:31 unit ucc74f228b9's port map named flash_kernel, qsa_attend_kernel and the rest, in
+	// files the branch already held, and the gate sent it back until it wrote three new kernels
+	// (geometry_kernel, order_key_kernel, quota_kernel) of its own
+	if in.Req.GPU() && in.KernelsMeasured && len(in.Kernels) > 0 && len(kernelSet(in.Kernels)) == 0 && len(in.PortKernels) == 0 {
 		fail("gpu_kernel_missing", fmt.Sprintf(gateGPUKernelMissingFmt, strings.Join(in.Req.GPUSources, ", "), kernelFilesText(in.Kernels)))
 	}
 	// what the unit wrote must be what its build compiled for the GPU — not only the
