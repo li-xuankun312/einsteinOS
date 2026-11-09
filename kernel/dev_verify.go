@@ -455,6 +455,7 @@ func runUnitVerifyWith(ws, unitID, gpuUsable string, req UnitRequirements, chang
 		pl := readProbeLog(probeLog)
 		ttrace.Launches = resolveLaunches(pl)
 		ttrace.ProbeLoaded = probeLoadedExes(pl)
+		ttrace.Devices = probeGPUDevices(ttrace.Devices, pl)
 	}
 	res.Test = ttrace
 	res.TestExit, res.TestOut = code, tailText(out, 3000)

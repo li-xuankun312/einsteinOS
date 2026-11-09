@@ -99,6 +99,7 @@ type probeLaunch struct {
 type probeLog struct {
 	Loaded   map[int]string // pid → executable the probe was loaded into
 	Launches []probeLaunch
+	Devices  []string // device nodes processes held open right after a launch returned
 }
 
 // readProbeLog parses the probe's log file; a missing file is an empty log.
@@ -118,6 +119,8 @@ func readProbeLog(path string) probeLog {
 			if pid, err := strconv.Atoi(parts[1]); err == nil {
 				pl.Loaded[pid] = parts[2]
 			}
+		case len(parts) == 3 && parts[0] == "device":
+			pl.Devices = append(pl.Devices, parts[2])
 		case len(parts) == 7 && parts[0] == "launch":
 			pid, err1 := strconv.Atoi(parts[1])
 			addr, err2 := strconv.ParseUint(parts[3], 0, 64)
@@ -148,6 +151,23 @@ func probeLoadedExes(pl probeLog) []string {
 		if !seen[exe] {
 			seen[exe] = true
 			out = append(out, exe)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// probeGPUDevices adds to devices the GPU device nodes the launching processes reported
+// holding (probe_devices in launch_probe.c), sorted and without repeats: a process that
+// launched a kernel says which device it held, where sampling /proc every 50 ms can miss it.
+func probeGPUDevices(devices []string, pl probeLog) []string {
+	re := gpuDeviceRe()
+	seen := map[string]bool{}
+	var out []string
+	for _, d := range append(append([]string{}, devices...), pl.Devices...) {
+		if re.MatchString(d) && !seen[d] {
+			seen[d] = true
+			out = append(out, d)
 		}
 	}
 	sort.Strings(out)
