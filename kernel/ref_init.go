@@ -393,7 +393,7 @@ func ref_theorize(parent int64, owner, name, sha, diff string, nfiles int, msg s
 	// step 1: kernel does static survey (wc -l + extensions)
 	heavy, light := fileSurvey(owner, name, sha, files)
 
-	if stored, _, ok := storedTheoryFn(sha); ok {
+	if stored, _, ok := storedTheoryFn(owner+"/"+name, sha); ok {
 		theorem_store(owner+"/"+name, sha, stored, 0)
 		return stored
 	}

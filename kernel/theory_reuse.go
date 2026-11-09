@@ -25,8 +25,8 @@ const theoryBranch = "einsteinOS/theory"
 // storedTheoryFn is a variable for tests.
 var storedTheoryFn = storedTheory
 
-// storedTheory returns the theory text of the most recently completed stored plan for sha.
-func storedTheory(sha string) (string, string, bool) {
+// storedTheory returns the stored theory of sha (storedTheoryIn) for reference repo.
+func storedTheory(repo, sha string) (string, string, bool) {
 	devRepos := GetDevRepos()
 	if len(devRepos) == 0 || len(sha) < 12 {
 		return "", "", false
@@ -39,7 +39,26 @@ func storedTheory(sha string) (string, string, bool) {
 	if _, err := gitFetchRefs(repoDir, devRepos[0], theoryBranch); err != nil {
 		return "", "", false
 	}
-	return storedTheoryIn(repoDir, "origin/"+theoryBranch, sha)
+	return storedTheoryIn(repoDir, "origin/"+theoryBranch, sha, storedPlanModules(devRepos[0], repo, sha))
+}
+
+// storedPlanModules: the modules the plan stored for the dev branch of repo@sha names (its
+// units' and its module states'); none when there is no plan.
+func storedPlanModules(devRepo, repo, sha string) map[string]bool {
+	plan, err := loadDevPlanFromBranch(devRepo, devBranchFor(repo, sha, 0))
+	if err != nil || plan == nil {
+		return nil
+	}
+	out := map[string]bool{}
+	for _, n := range plan.Nodes {
+		for _, m := range n.Modules {
+			out[m] = true
+		}
+	}
+	for m := range plan.State {
+		out[m] = true
+	}
+	return out
 }
 
 func gitIn(dir string, args ...string) (string, error) {
@@ -47,12 +66,65 @@ func gitIn(dir string, args ...string) (string, error) {
 	return string(out), err
 }
 
-// storedTheoryIn reads the newest complete plan for sha under ref in the clone at dir.
-func storedTheoryIn(dir, ref, sha string) (string, string, bool) {
+// storedTheoryIn reads a complete stored theory for sha under ref in the clone at dir: the one
+// that has the most of the modules the dev branch's stored plan names (planMods — the theory
+// the plan was built from), else the newest. 11/09 commit 2 had two complete theories,
+// 61aa998c60 (08:38, the dev plan's) and 3a7c20346e (10:55, made by a second run on the same
+// commit); a restart at 13:49 took the newer, and reconciling the plan with it dropped the
+// units that had passed (ub6cd72ef49, u62b936371e) and the one in progress (ube4f27df84).
+func storedTheoryIn(dir, ref, sha string, planMods map[string]bool) (string, string, bool) {
+	cands := storedTheoryCandidates(dir, ref, sha)
+	if len(cands) == 0 {
+		return "", "", false
+	}
+	best := cands[0]
+	for _, c := range cands {
+		if c.when > best.when {
+			best = c
+		}
+	}
+	why := "the newest"
+	if len(planMods) > 0 {
+		most := 0
+		for _, c := range cands {
+			n := 0
+			for _, m := range devModulesFromSections(dev_extract_file_sections(c.text)) {
+				if planMods[m.Name] {
+					n++
+				}
+			}
+			if n > most {
+				best, most = c, n
+				why = fmt.Sprintf("the one with %d of the %d modules the dev branch's plan names", n, len(planMods))
+			}
+		}
+	}
+	log.Printf("theory_reuse: commit %s has %d complete stored theor(ies); using %s, %s (%d bytes) — not theorized again", shortSHA12(sha), len(cands), best.dir, why, len(best.text))
+	return best.text, best.dir, true
+}
+
+// storedTheoryOneDir reads the stored theory in one plan directory (its last path element).
+func storedTheoryOneDir(dir, ref, sha, planDir string) (string, string, bool) {
+	for _, c := range storedTheoryCandidates(dir, ref, sha) {
+		if path.Base(c.dir) == planDir {
+			return c.text, c.dir, true
+		}
+	}
+	return "", "", false
+}
+
+type theoryCand struct {
+	dir  string
+	when int64
+	text string
+}
+
+// storedTheoryCandidates: every complete stored theory of sha under ref.
+func storedTheoryCandidates(dir, ref, sha string) []theoryCand {
 	root := theoryStoreRoot + "/" + shortSHA12(sha)
 	ls, err := gitIn(dir, "ls-tree", "-r", "--name-only", ref, "--", root)
 	if err != nil {
-		return "", "", false
+		return nil
 	}
 	byDir := map[string][]string{} // chunk dir -> .lean files
 	var plans []string
@@ -64,12 +136,7 @@ func storedTheoryIn(dir, ref, sha string) (string, string, bool) {
 			byDir[path.Dir(f)] = append(byDir[path.Dir(f)], f)
 		}
 	}
-	type cand struct {
-		dir  string
-		when int64
-		text string
-	}
-	var best *cand
+	var out []theoryCand
 	for _, pd := range plans {
 		raw, err := gitIn(dir, "show", ref+":"+pd+"/"+theoryPlanFile)
 		if err != nil {
@@ -113,13 +180,7 @@ func storedTheoryIn(dir, ref, sha string) (string, string, bool) {
 		}
 		t, _ := gitIn(dir, "log", "-1", "--format=%ct", ref, "--", pd)
 		when, _ := strconv.ParseInt(strings.TrimSpace(t), 10, 64)
-		if best == nil || when > best.when {
-			best = &cand{pd, when, strings.Join(parts, "\n\n")}
-		}
+		out = append(out, theoryCand{pd, when, strings.Join(parts, "\n\n")})
 	}
-	if best == nil {
-		return "", "", false
-	}
-	log.Printf("theory_reuse: commit %s has a complete stored theory at %s (%d bytes) — not theorized again", shortSHA12(sha), best.dir, len(best.text))
-	return best.text, best.dir, true
+	return out
 }
