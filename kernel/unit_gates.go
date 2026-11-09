@@ -167,7 +167,7 @@ func unitGates(in GateInput) (kind, text string) {
 	// built and run — 11/03 printed "AVX2 intrinsic path not compiled in this build", and its
 	// "VNNI kernel" was an integer emulation with no VNNI instruction in it
 	if need := attestableISA(in.Req.ISAFlags); len(need) > 0 {
-		bins := isaBinaries(in.Build, in.Test)
+		bins := isaBinaries(in.Build, in.Test, in.Changed)
 		found, err := isaFoundIn(bins, need, in.ISAFuncs)
 		switch {
 		case err != nil:
@@ -322,34 +322,56 @@ var (
 )
 
 // isaBinaries: the outputs the build's compiler command lines named (-o …) that exist, and
-// the non-system executables the test ran.
-func isaBinaries(build, test ProcTrace) []string {
+// the non-system executables the test ran. The outputs of compiles of the unit's own changed
+// files come first and are all kept; the rest fill up to isaObjdumpMax. 11/09 12:43 the build
+// of unit ube4f27df84 named more binaries than the cap, its own objects were not among the
+// first 24 disassembled, and its conversation renamed them "a0_…" to get them looked at.
+func isaBinaries(build, test ProcTrace, changed []string) []string {
 	seen := map[string]bool{}
-	var out []string
-	add := func(p string) {
+	var own, rest []string
+	add := func(p string, mine bool) {
 		if p == "" || seen[p] || systemBinRe.MatchString(p) {
 			return
 		}
 		if st, err := os.Stat(p); err == nil && st.Mode().IsRegular() {
 			seen[p] = true
-			out = append(out, p)
+			if mine {
+				own = append(own, p)
+			} else {
+				rest = append(rest, p)
+			}
 		}
 	}
-	for _, c := range build.Cmdlines {
-		if !compilerCmdRe.MatchString(c) {
-			continue
+	compilesChanged := func(cmd string) bool {
+		for _, f := range strings.Fields(cmd) {
+			for _, c := range changed {
+				if f == c || strings.HasSuffix(f, "/"+c) {
+					return true
+				}
+			}
 		}
-		for _, m := range outputFlagRe.FindAllStringSubmatch(c, -1) {
-			add(m[1])
+		return false
+	}
+	for pass := 0; pass < 2; pass++ {
+		for _, c := range build.Cmdlines {
+			if !compilerCmdRe.MatchString(c) || compilesChanged(c) != (pass == 0) {
+				continue
+			}
+			for _, m := range outputFlagRe.FindAllStringSubmatch(c, -1) {
+				add(m[1], pass == 0)
+			}
 		}
 	}
 	for _, e := range test.Exes {
-		add(e)
+		add(e, false)
 	}
-	if len(out) > isaObjdumpMax {
-		out = out[:isaObjdumpMax]
+	if room := isaObjdumpMax - len(own); room < len(rest) {
+		if room < 0 {
+			room = 0
+		}
+		rest = rest[:room]
 	}
-	return out
+	return append(own, rest...)
 }
 
 // isaPortFuncs: per flag, the names of the unit's counterparts (its port map) of reference
