@@ -577,27 +577,56 @@ func dev_store_theory(theory, repo, branch string) error {
 	if err != nil {
 		return fmt.Errorf("dev_store_theory: %w", err)
 	}
-	if err := gitUseBranchFromRemote(repoDir, branch, devNewBranchBase(devRepos[0])); err != nil {
-		return fmt.Errorf("dev_store_theory: checkout %s: %w", branch, err)
-	}
-	if err := os.MkdirAll(repoDir+"/.einsteinOS", 0o755); err != nil {
-		return fmt.Errorf("dev_store_theory: %w", err)
-	}
 	// defense in depth, same reasoning as ref_store_chunk: theory text flows from
 	// child-written .lean content through theorem_store/theorem_get, so a secret
 	// that slipped past the chunk-level redaction (or was stored by an older
 	// binary before that redaction existed) still gets caught here before this
 	// — the actual git-tracked write — happens.
 	theory = redactSecrets(theory)
-	if err := os.WriteFile(repoDir+"/.einsteinOS/theory.md", []byte(theory), 0o644); err != nil {
-		return fmt.Errorf("dev_store_theory: write theory.md: %w", err)
+	write := func() error {
+		if err := gitUseBranchFromRemote(repoDir, branch, devNewBranchBase(devRepos[0])); err != nil {
+			return fmt.Errorf("dev_store_theory: checkout %s: %w", branch, err)
+		}
+		if err := os.MkdirAll(repoDir+"/.einsteinOS", 0o755); err != nil {
+			return fmt.Errorf("dev_store_theory: %w", err)
+		}
+		if err := os.WriteFile(repoDir+"/.einsteinOS/theory.md", []byte(theory), 0o644); err != nil {
+			return fmt.Errorf("dev_store_theory: write theory.md: %w", err)
+		}
+		GitCommit(repoDir, fmt.Sprintf("theory: %d bytes", len(theory)))
+		return nil
 	}
-	GitCommit(repoDir, fmt.Sprintf("theory: %d bytes", len(theory)))
-	if err := devGitPush(repoDir, devRepos[0], branch, 20); err != nil {
+	push := func() error { return devGitPush(repoDir, devRepos[0], branch, 20) }
+	if err := pushOnTopOfTheRemote(branch, 3, write, push); err != nil {
 		return fmt.Errorf("dev_store_theory: %s theory (%d bytes) NOT stored on %s: %w", repo, len(theory), branch, err)
 	}
 	log.Printf("dev_store_theory: %s stored %d bytes to %s:.einsteinOS/theory.md", repo, len(theory), branch)
 	return nil
+}
+
+// pushOnTopOfTheRemote writes and pushes; a push the remote rejects because the branch moved
+// since it was read (non-fast-forward, "fetch first") is written again on top of the branch as
+// it now is and pushed again, up to attempts times. Any other rejection is final. 11/06 a
+// second machine's dev_store_theory push was rejected non-fast-forward while the first machine
+// was pushing units to the same dev branch, and the pipeline stopped.
+func pushOnTopOfTheRemote(branch string, attempts int, write, push func() error) error {
+	var err error
+	for i := 1; i <= attempts; i++ {
+		if err = write(); err != nil {
+			return err
+		}
+		if err = push(); err == nil || !remoteMoved(err) {
+			return err
+		}
+		log.Printf("dev_store_theory: %s moved on the remote since it was read (%s) — written again on top of it (%d/%d)", branch, truncStr(err.Error(), 200), i, attempts)
+	}
+	return err
+}
+
+// remoteMoved: a push rejected because the remote branch has commits this one lacks.
+func remoteMoved(err error) bool {
+	s := err.Error()
+	return strings.Contains(s, "non-fast-forward") || strings.Contains(s, "fetch first")
 }
 
 // dev_static_split: fallback when planner fails. group by directory, split
