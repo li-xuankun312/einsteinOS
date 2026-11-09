@@ -21,6 +21,7 @@ package kernel
 import (
 	"fmt"
 	"log"
+	"os/exec"
 	"sort"
 	"strings"
 	"time"
@@ -999,6 +1000,12 @@ func (r *devRun) reviewBlame(unit DevPlanNode, verdict string) []string {
 		}
 	}
 	owners := reviewOwners(verdict, written, sources)
+	if len(owners) == 0 {
+		owners = reviewSymbolOwners(verdict, portMapEntries(dir, r.branch), func(f string) string {
+			b, _ := exec.Command("git", "-C", dir, "show", r.branch+":"+f).Output()
+			return string(b)
+		})
+	}
 	for _, units := range owners {
 		for _, u := range units {
 			if u == unit.ID {

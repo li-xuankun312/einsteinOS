@@ -41,12 +41,29 @@ func reviewPaths(verdict string) []string {
 // left there — 11/08 the attribution found no port map at all and faulted nobody.
 func portMapOwners(dir, branch string) map[string][]string {
 	owners := map[string][]string{}
-	mapDir := path.Dir(PortMapPath("x"))
-	out, err := exec.Command("git", "-C", dir, "ls-tree", "-r", "--name-only", branch, "--", mapDir).Output()
-	if err != nil {
-		return owners
+	seen := map[string]bool{}
+	for _, e := range portMapEntries(dir, branch) {
+		if k := e.Unit + "\x00" + e.File; !seen[k] {
+			seen[k] = true
+			owners[e.File] = append(owners[e.File], e.Unit)
+		}
 	}
-	for _, f := range strings.Split(string(out), "\n") {
+	return owners
+}
+
+// portMapEntry: one line of a unit's port map — the file the unit wrote and the definition
+// in it that ports a reference definition.
+type portMapEntry struct{ Unit, File, Sym string }
+
+// portMapEntries reads every port map of branch (git ls-tree + git show, as portMapOwners).
+func portMapEntries(dir, branch string) []portMapEntry {
+	var out []portMapEntry
+	mapDir := path.Dir(PortMapPath("x"))
+	ls, err := exec.Command("git", "-C", dir, "ls-tree", "-r", "--name-only", branch, "--", mapDir).Output()
+	if err != nil {
+		return nil
+	}
+	for _, f := range strings.Split(string(ls), "\n") {
 		f = strings.TrimSpace(f)
 		if !strings.HasSuffix(f, ".tsv") {
 			continue
@@ -56,17 +73,19 @@ func portMapOwners(dir, branch string) map[string][]string {
 		if err != nil {
 			continue
 		}
-		seen := map[string]bool{}
 		for _, line := range strings.Split(string(b), "\n") {
-			fs := strings.Split(line, "\t")
-			if len(fs) < 3 || fs[2] == "" || seen[fs[2]] {
+			fs := strings.Split(strings.TrimRight(line, "\r"), "\t")
+			if len(fs) < 3 || fs[2] == "" {
 				continue
 			}
-			seen[fs[2]] = true
-			owners[fs[2]] = append(owners[fs[2]], unit)
+			e := portMapEntry{Unit: unit, File: fs[2]}
+			if len(fs) > 3 {
+				e.Sym = fs[3]
+			}
+			out = append(out, e)
 		}
 	}
-	return owners
+	return out
 }
 
 // reviewOwners: for each file the verdict names, the units that own it — by the port maps
@@ -116,5 +135,49 @@ func reviewBlames(unitID string, owners map[string][]string) []string {
 		}
 	}
 	sort.Strings(out)
+	return out
+}
+
+// reviewIdentRe: a name a verdict can mention (gr_norm, kv_append, gdn_recurrence).
+var reviewIdentRe = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]{2,}`)
+
+// definesWithBody: src holds a definition of sym with its body — a declaration ending in ';'
+// is not one. 11/08 gr_norm is declared in include/baloon/prefill_kernels_api.hpp (unit
+// pf7b804cf95) and defined in src/prefill/kernels.cu (unit u41e2bf114f).
+func definesWithBody(src, sym string) bool {
+	re, err := regexp.Compile(`(?m)\b` + regexp.QuoteMeta(sym) + `\s*\([^;{}]*\)\s*(?:const\s*)?(?:noexcept\s*)?\{`)
+	return err == nil && re.MatchString(src)
+}
+
+// reviewSymbolOwners: for a verdict that names no file, the units that own a definition it
+// names — a port map line whose written definition is that name, in a file that holds the
+// definition's body (read gives a file's text on the branch). 11/08 the verdict stored against
+// unit pf7b804cf95 ("gr_norm normalizes jointly over all 4 streams …") named no file, and
+// the attribution by path found no owner at all.
+func reviewSymbolOwners(verdict string, entries []portMapEntry, read func(file string) string) map[string][]string {
+	named := map[string]bool{}
+	for _, w := range reviewIdentRe.FindAllString(verdict, -1) {
+		named[w] = true
+	}
+	out := map[string][]string{}
+	body := map[string]bool{}
+	for _, e := range entries {
+		if e.Sym == "" || !named[e.Sym] {
+			continue
+		}
+		k := e.File + "\x00" + e.Sym
+		has, ok := body[k]
+		if !ok {
+			has = definesWithBody(read(e.File), e.Sym)
+			body[k] = has
+		}
+		if has {
+			out[e.File] = append(out[e.File], e.Unit)
+		}
+	}
+	for f, units := range out {
+		sort.Strings(units)
+		out[f] = dedupStrings(units)
+	}
 	return out
 }
