@@ -42,6 +42,9 @@ type GateInput struct {
 	IncludersMeasured bool
 	// RepoKernels: for the integration unit, the kernels the whole working tree defines
 	RepoKernels map[string]bool
+	// ISAFuncs: per ISA flag, the names the unit's port map gives to the counterparts of the
+	// reference definitions in files built with that flag (isaPortFuncs)
+	ISAFuncs map[string][]string
 }
 
 // gpuCompilers are the programs that make a GPU build possible, looked for in toolchainDirs.
@@ -66,6 +69,7 @@ const (
 	gateGPUNotCompiledFmt      = "gpu_not_compiled: build.sh ran no CUDA compile of %[1]s (CUDA compiles seen: %[2]s)"
 	gateGPUUnusedFmt           = "gpu_unused: test.sh exited 0 but none of its %[1]d process(es) opened a GPU device (%[2]s); executables that ran: %[3]s"
 	gateISAMissingFmt          = "isa_path_missing: the reference builds %[1]s with %[2]s; no binary the build produced or the test ran contains %[3]s (binaries looked at: %[4]s)"
+	gateISAWhereFmt            = "; looked for inside the unit's counterparts of the definitions of those files: %[1]s"
 	gateISAUnmeasuredFmt       = "isa_unmeasured: the reference builds %[1]s with %[2]s, and the binaries could not be disassembled (%[3]s)"
 	gateToolchainUnusedFmt     = "toolchain_unused: the unit is GPU work but no process of build.sh ran a program from %[1]s (programs that ran: %[2]s) — a build that skips the toolchain proves nothing"
 	gateGPUKernelMissingFmt    = "gpu_kernel_missing: the unit's modules come from CUDA sources in the reference (%[1]s) but its CUDA files define no __global__ kernel: %[2]s — a host header about a kernel is not the kernel"
@@ -155,7 +159,7 @@ func unitGates(in GateInput) (kind, text string) {
 	// "VNNI kernel" was an integer emulation with no VNNI instruction in it
 	if need := attestableISA(in.Req.ISAFlags); len(need) > 0 {
 		bins := isaBinaries(in.Build, in.Test)
-		found, err := isaFound(bins, need)
+		found, err := isaFoundIn(bins, need, in.ISAFuncs)
 		switch {
 		case err != nil:
 			fail("isa_unmeasured", fmt.Sprintf(gateISAUnmeasuredFmt, isaSourceList(in.Req), strings.Join(need, " "), err))
@@ -167,7 +171,15 @@ func unitGates(in GateInput) (kind, text string) {
 				}
 			}
 			if len(missing) > 0 {
-				fail("isa_path_missing", fmt.Sprintf(gateISAMissingFmt, isaSourceList(in.Req), strings.Join(need, " "), strings.Join(missing, ", "), shortList(bins, 6)))
+				text := fmt.Sprintf(gateISAMissingFmt, isaSourceList(in.Req), strings.Join(need, " "), strings.Join(missing, ", "), shortList(bins, 6))
+				var where []string
+				for _, f := range need {
+					where = append(where, in.ISAFuncs[f]...)
+				}
+				if len(where) > 0 {
+					text += fmt.Sprintf(gateISAWhereFmt, shortList(dedupStrings(sortedCopy(where)), 12))
+				}
+				fail("isa_path_missing", text)
 			}
 		}
 	}
@@ -294,7 +306,7 @@ var (
 	outputFlagRe  = regexp.MustCompile(`(?:^|\s)-o\s*(\S+)`)
 	systemBinRe   = regexp.MustCompile(`^/(usr|bin|sbin|lib|lib64|opt|etc)/`)
 	objdumpFn     = func(file string) (string, error) {
-		b, err := exec.Command("objdump", "-d", "--no-show-raw-insn", file).Output()
+		b, err := exec.Command("objdump", "-d", "-C", "--no-show-raw-insn", file).Output()
 		return string(b), err
 	}
 	isaObjdumpMax = 24 // binaries disassembled per unit
@@ -329,6 +341,127 @@ func isaBinaries(build, test ProcTrace) []string {
 		out = out[:isaObjdumpMax]
 	}
 	return out
+}
+
+// isaPortFuncs: per flag, the names of the unit's counterparts (its port map) of reference
+// definitions whose file the reference builds with that flag.
+func isaPortFuncs(pm map[string]portEntry, flagFiles map[string][]string) map[string][]string {
+	out := map[string][]string{}
+	for _, e := range pm {
+		for _, f := range flagFiles[e.refFile] {
+			if isaInsn[f] != nil && e.name != "" {
+				out[f] = append(out[f], symbolBase(e.name))
+			}
+		}
+	}
+	for f := range out {
+		sort.Strings(out[f])
+		out[f] = dedupStrings(out[f])
+	}
+	return out
+}
+
+var objdumpFuncRe = regexp.MustCompile(`(?m)^[0-9a-f]+ <([^>]*)>:$`)
+
+// asmFuncBase: the identifier of a function header objdump -C printed ("baloon::cpu::q2_rows(float
+// const*, int)" → "q2_rows").
+func asmFuncBase(header string) string {
+	h := strings.ReplaceAll(header, "(anonymous namespace)", "anon")
+	h = strings.TrimSuffix(strings.TrimSpace(h), " const")
+	// the parameter list: the parenthesis that closes at the end
+	if strings.HasSuffix(h, ")") {
+		depth := 0
+		for i := len(h) - 1; i >= 0; i-- {
+			switch h[i] {
+			case ')':
+				depth++
+			case '(':
+				depth--
+			}
+			if depth == 0 {
+				h = h[:i]
+				break
+			}
+		}
+	}
+	// template arguments at the end
+	if strings.HasSuffix(h, ">") {
+		if i := strings.Index(h, "<"); i >= 0 {
+			h = h[:i]
+		}
+	}
+	if i := strings.LastIndex(h, "::"); i >= 0 {
+		h = h[i+2:]
+	}
+	if i := strings.LastIndex(h, " "); i >= 0 {
+		h = h[i+1:]
+	}
+	return strings.TrimSpace(h)
+}
+
+// asmFuncs splits a disassembly into function name → its instructions.
+func asmFuncs(asm string) map[string]string {
+	out := map[string]string{}
+	idx := objdumpFuncRe.FindAllStringSubmatchIndex(asm, -1)
+	for i, m := range idx {
+		end := len(asm)
+		if i+1 < len(idx) {
+			end = idx[i+1][0]
+		}
+		name := asmFuncBase(asm[m[2]:m[3]])
+		out[name] += asm[m[1]:end]
+	}
+	return out
+}
+
+// isaFoundIn reports which flags' instructions appear. A flag whose ported functions (funcs)
+// are functions of the binaries is found only inside them: 11/09 unit ube4f27df84 passed
+// isa_path_missing with AVX-512 code its conversation had put into five unrelated files and
+// never called, which its review then failed. A flag none of whose functions is in the
+// binaries (inlined, or no port map) is looked for anywhere, as before.
+func isaFoundIn(bins, need []string, funcs map[string][]string) (map[string]bool, error) {
+	if len(funcs) == 0 {
+		return isaFound(bins, need)
+	}
+	found := map[string]bool{}
+	if len(bins) == 0 {
+		return found, nil
+	}
+	ok := 0
+	var lastErr error
+	present := map[string]bool{} // flag → one of its functions is in a binary
+	whole := map[string]bool{}   // flag → its instructions are somewhere in a binary
+	for _, b := range bins {
+		asm, err := objdumpFn(b)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		ok++
+		fs := asmFuncs(asm)
+		for _, f := range need {
+			if isaInsn[f].MatchString(asm) {
+				whole[f] = true
+			}
+			for _, name := range funcs[f] {
+				if body, in := fs[name]; in {
+					present[f] = true
+					if isaInsn[f].MatchString(body) {
+						found[f] = true
+					}
+				}
+			}
+		}
+	}
+	if ok == 0 {
+		return found, fmt.Errorf("objdump on %d binaries: %v", len(bins), lastErr)
+	}
+	for _, f := range need {
+		if !present[f] && whole[f] {
+			found[f] = true
+		}
+	}
+	return found, nil
 }
 
 // isaFound disassembles the binaries and reports which flags' instructions appear.
@@ -421,4 +554,10 @@ func cuhNotCompiled(gpuFiles []string, includers map[string][]string, cmdlines [
 		}
 	}
 	return missing
+}
+
+func sortedCopy(xs []string) []string {
+	out := append([]string{}, xs...)
+	sort.Strings(out)
+	return out
 }

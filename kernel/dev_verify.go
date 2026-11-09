@@ -468,6 +468,7 @@ func runUnitVerifyWith(ws, unitID, gpuUsable string, req UnitRequirements, chang
 		res.Smoke = "pass"
 		res.Gate, res.GateText = unitGates(GateInput{Req: req, Changed: changed, Build: res.Build, Test: res.Test, Compilers: presentGPUCompilers(),
 			PortMissing: portMissing(ws, unitID, req.Symbols), Kernels: unitKernels(ws, changed), KernelsMeasured: true,
+			ISAFuncs:    isaPortFuncs(readPortMap(ws, unitID), req.FlagFiles),
 			NoToolchain: res.NoToolchain, Includers: cuhIncluders(ws, changed), IncludersMeasured: true,
 			RepoKernels: integrationRepoKernels(ws, req)})
 		// the integration unit: the port against the reference and the integration before,
