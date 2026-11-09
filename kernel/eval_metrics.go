@@ -27,7 +27,7 @@ var evalUnits = map[string][2]string{
 }
 
 var (
-	evalKVRe    = regexp.MustCompile(`(?i)([A-Za-z][\w .()/\-]{0,60}?)\s*[:=]\s*([0-9]+(?:\.[0-9]+)?)\s*(tok/s|tokens/s|t/s|GB/s|GiB/s|GFLOPS|TFLOPS|it/s|samples/s|ms|us|µs)\b`)
+	evalKVRe = regexp.MustCompile(`(?i)([A-Za-z][\w .()/\-]{0,60}?)\s*[:=]\s*([0-9]+(?:\.[0-9]+)?)\s*(tok/s|tokens/s|t/s|GB/s|GiB/s|GFLOPS|TFLOPS|it/s|samples/s|ms|us|µs)\b`)
 	// "decode    256 tokens in 2706.4 ms  ->  94.59 tok/s": the label is the line's first words
 	evalArrowRe = regexp.MustCompile(`(?i)^\s*([A-Za-z][A-Za-z _-]*?)\s+.*->\s*([0-9]+(?:\.[0-9]+)?)\s*(tok/s|tokens/s|t/s|GB/s|GiB/s|GFLOPS|TFLOPS|it/s|samples/s|ms|us|µs)\b`)
 	evalPPLRe   = regexp.MustCompile(`(?i)\b(PPL|perplexity)\s*[:=]\s*([0-9]+(?:\.[0-9]+)?)`)
