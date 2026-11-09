@@ -125,3 +125,28 @@ func shortSHA(s string) string {
 	}
 	return s
 }
+
+// portKernels: the names, in the unit's port map, of counterparts that are __global__ kernels
+// of the files the map names.
+func portKernels(ws, unitID string) map[string]bool {
+	out := map[string]bool{}
+	kernels := map[string]map[string]bool{}
+	for _, e := range readPortMap(ws, unitID) {
+		k, seen := kernels[e.file]
+		if !seen {
+			k = map[string]bool{}
+			if b, err := os.ReadFile(filepath.Join(ws, e.file)); err == nil {
+				for _, s := range SymbolsOf(e.file, string(b)) {
+					if s.Kind == "kernel" {
+						k[symbolBase(s.Name)] = true
+					}
+				}
+			}
+			kernels[e.file] = k
+		}
+		if n := symbolBase(e.name); k[n] {
+			out[n] = true
+		}
+	}
+	return out
+}

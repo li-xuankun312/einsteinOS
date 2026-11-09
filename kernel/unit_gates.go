@@ -45,6 +45,9 @@ type GateInput struct {
 	// ISAFuncs: per ISA flag, the names the unit's port map gives to the counterparts of the
 	// reference definitions in files built with that flag (isaPortFuncs)
 	ISAFuncs map[string][]string
+	// PortKernels: the kernels the unit's port map names as counterparts of reference kernels
+	// (portKernels); empty when it names none
+	PortKernels map[string]bool
 }
 
 // gpuCompilers are the programs that make a GPU build possible, looked for in toolchainDirs.
@@ -140,7 +143,13 @@ func unitGates(in GateInput) (kind, text string) {
 	// the unit's own kernels must have run on the device: the launch probe names every
 	// kernel the test's processes launched (launch_probe.go, launch_symbols.go)
 	if in.Req.GPU() && in.KernelsMeasured && probeMeasured(in.Test) && unmeasured == "" {
+		// the unit's own kernels are its ports of the reference's kernels when its port map names
+		// any: 11/09 unit ube4f27df84 passed with a partition_kernel of its own test file, launched
+		// to satisfy this gate, and its review failed it for that
 		own := kernelSet(in.Kernels)
+		if len(in.PortKernels) > 0 {
+			own = in.PortKernels
+		}
 		if len(own) > 0 && !anyLaunched(own, in.Test.Launches) {
 			fail("gpu_kernel_not_launched", fmt.Sprintf(gateKernelNotLaunchedFmt, setText(own), launchesText(in.Test.Launches), shortList(in.Test.ProbeLoaded, 8)))
 		}
