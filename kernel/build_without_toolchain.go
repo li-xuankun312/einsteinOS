@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -84,8 +85,59 @@ var hideToolchainRun = func(dir, script string, dirs []string, timeout time.Dura
 	return -1, "", fmt.Errorf("%s", strings.Join(refused, "; "))
 }
 
-// buildWithoutToolchain copies ws and runs build.sh there with the toolchain hidden.
+// toolchainHiding: whether this machine lets a process see the toolchain directories as empty,
+// measured once per kernel by hiding them around a script that does nothing. 11/06–11/07 a
+// sandbox where "unshare -m" and a tmpfs mount work passed every test of the hidden-toolchain
+// build, and the Iluvatar container, which allows no mount at all, showed it only one GPU
+// unit at a time after each unit's build — what a machine allows is measured on the machine.
+var (
+	toolchainHidingMu  sync.Mutex
+	toolchainHidingErr = map[string]error{} // by the directories hidden
+)
+
+// measureToolchainHiding: nil when the toolchain can be hidden here, else why not — measured
+// once for each set of toolchain directories.
+func measureToolchainHiding() error {
+	dirs := presentToolchainDirs()
+	if len(dirs) == 0 {
+		return nil
+	}
+	key := strings.Join(dirs, ":")
+	toolchainHidingMu.Lock()
+	defer toolchainHidingMu.Unlock()
+	if err, ok := toolchainHidingErr[key]; ok {
+		return err
+	}
+	var measured error
+	if tmp, err := os.MkdirTemp("", "einsteinos_hideprobe_"); err != nil {
+		measured = err
+	} else {
+		script := filepath.Join(tmp, "probe.sh")
+		os.WriteFile(script, []byte("exit 0\n"), 0o755)
+		_, _, measured = hideToolchainRun(tmp, script, dirs, time.Minute)
+		os.RemoveAll(tmp)
+	}
+	toolchainHidingErr[key] = measured
+	return measured
+}
+
+// presentToolchainDirs: the toolchain directories that exist on this machine.
+func presentToolchainDirs() []string {
+	var dirs []string
+	for _, d := range toolchainDirs {
+		if st, err := os.Stat(d); err == nil && st.IsDir() {
+			dirs = append(dirs, d)
+		}
+	}
+	return dirs
+}
+
+// buildWithoutToolchain copies ws and runs build.sh there with the toolchain hidden. On a
+// machine measured unable to hide it, nothing is copied or run.
 func buildWithoutToolchain(ws, build string, timeout time.Duration) NoToolchainBuild {
+	if err := measureToolchainHiding(); err != nil {
+		return NoToolchainBuild{Err: "this machine cannot hide the toolchain (measured once when the kernel started): " + err.Error()}
+	}
 	tmp, err := os.MkdirTemp("", "einsteinos_notoolchain_")
 	if err != nil {
 		return NoToolchainBuild{Err: err.Error()}
@@ -95,13 +147,7 @@ func buildWithoutToolchain(ws, build string, timeout time.Duration) NoToolchainB
 	if out, err := exec.Command("cp", "-a", ws, copy).CombinedOutput(); err != nil {
 		return NoToolchainBuild{Err: "copy of the workspace: " + tailText(string(out), 200)}
 	}
-	var dirs []string
-	for _, d := range toolchainDirs {
-		if st, err := os.Stat(d); err == nil && st.IsDir() {
-			dirs = append(dirs, d)
-		}
-	}
-	code, out, err := hideToolchainRun(copy, build, dirs, timeout)
+	code, out, err := hideToolchainRun(copy, build, presentToolchainDirs(), timeout)
 	if err != nil {
 		return NoToolchainBuild{Err: err.Error()}
 	}

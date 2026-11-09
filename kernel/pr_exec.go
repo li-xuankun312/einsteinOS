@@ -294,6 +294,13 @@ func hw_init(pid int64) (string, error) {
 
 	log.Printf("hw_init: pid=%d gpu_all=%q vendor=%q (measured=%v) toolchain=%v summary=%d bytes (whole text %d) raw=%d bytes",
 		pid, facts.GPUs, facts.GPUVendor, facts.GPUMeasured, facts.Toolchain, len(facts.Summary), len(hw_info), len(facts.Raw))
+	if len(presentToolchainDirs()) > 0 {
+		if err := measureToolchainHiding(); err != nil {
+			log.Printf("hw_init: pid=%d the toolchain cannot be hidden on this machine (%s) — no GPU unit's build is run without it", pid, tailText(err.Error(), 300))
+		} else {
+			log.Printf("hw_init: pid=%d the toolchain can be hidden on this machine — a GPU unit's build is run again without it", pid)
+		}
+	}
 	return info, nil
 }
 

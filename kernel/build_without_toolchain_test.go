@@ -103,3 +103,38 @@ func TestHidingFallsBackToABindMount(t *testing.T) {
 		t.Fatal("the toolchain itself must be untouched outside the namespace")
 	}
 }
+
+// A machine that cannot hide the toolchain is found out once, by the measurement the kernel
+// makes when it starts, and no GPU unit's build is then copied and run to find it out again.
+// The refusal is the Iluvatar container's of 11/07.
+func TestAMachineThatCannotHideTheToolchainIsMeasuredOnce(t *testing.T) {
+	tc := t.TempDir()
+	old, oldRun := toolchainDirs, hideToolchainRun
+	defer func() { toolchainDirs, hideToolchainRun = old, oldRun }()
+	toolchainDirs = []string{tc}
+	runs := 0
+	hideToolchainRun = func(dir, script string, dirs []string, timeout time.Duration) (int, string, error) {
+		runs++
+		return -1, "", errString("unshare -m: unshare failed: Operation not permitted; unshare -U -r -m: mount: " + tc + ": bind /tmp/einsteinos_empty_1 failed")
+	}
+	if err := measureToolchainHiding(); err == nil {
+		t.Fatal("the refusal is measured")
+	}
+	ws := t.TempDir()
+	for i := 0; i < 3; i++ {
+		nt := buildWithoutToolchain(ws, "build.sh", time.Minute)
+		if nt.Measured || !strings.Contains(nt.Err, "measured once when the kernel started") {
+			t.Fatalf("%+v", nt)
+		}
+	}
+	if runs != 1 {
+		t.Fatalf("the machine was asked %d times", runs)
+	}
+	if k, _ := noToolchainGate(NoToolchainBuild{Err: "x"}); k != "" {
+		t.Fatalf("not a gate: %s", k)
+	}
+}
+
+type errString string
+
+func (e errString) Error() string { return string(e) }
