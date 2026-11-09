@@ -91,6 +91,8 @@ type DevFailure struct {
 
 // DevPlan is the persisted plan.
 type DevPlan struct {
+	// Holder: the run that last stored the plan — the dev branch is that run's (dev_lease.go)
+	Holder      DevHolder                 `json:"holder"`
 	Version     int                       `json:"version"`
 	Ref         string                    `json:"ref"`
 	RefSHA      string                    `json:"ref_sha"`

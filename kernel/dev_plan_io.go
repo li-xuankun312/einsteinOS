@@ -137,6 +137,7 @@ func storeDevPlan(devRepo, branch string, plan *DevPlan, msg string) error {
 
 // devPlanSave records the plan in memory and (best effort) on the branch.
 func devPlanSave(repo, devRepo, branch string, plan *DevPlan, msg string) {
+	plan.Holder = thisHolder(time.Now())
 	devPlanMu.Lock()
 	devPlanMem[devPlanKey(repo, branch)] = plan
 	devPlanMu.Unlock()
