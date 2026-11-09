@@ -69,7 +69,8 @@ func SetEvalTask(task string) {
 // excluding the dev repositories and the ones in exclude (the reference itself is evaluated
 // as the baseline, not as a candidate). accept measures what a clone must hold
 // (evalAcceptRepo: a benchmark the kernel can run).
-func evalDiscover(task string, exclude []string, accept func(repo string) (bool, string)) []RefRepo {
+func evalDiscover(task string, exclude []string, accept func(repo string) (bool, string)) ([]RefRepo, EvalDiscoverTrace) {
+	var tr EvalDiscoverTrace
 	skip := map[string]bool{}
 	for _, e := range exclude {
 		skip[strings.ToLower(e)] = true
@@ -78,29 +79,36 @@ func evalDiscover(task string, exclude []string, accept func(repo string) (bool,
 	prompt := fmt.Sprintf(refDiscoverPromptFmt, truncDiff(task, 3000), MAX_REFS)
 	for tried := 1; tried <= 3 && len(good) < MAX_REFS; tried++ {
 		raw, err := evalAskFn(prompt)
+		tr.Asked++
 		if err != nil {
 			log.Printf("eval_discover: ask: %v", err)
-			return good
+			tr.AskError = err.Error()
+			return good, tr
 		}
 		cands := parseRefRepos(raw)
 		log.Printf("eval_discover: attempt %d: %d candidate(s) named", tried, len(cands))
 		var failed []string
 		for _, r := range cands {
 			key := r.Owner + "/" + r.Name
+			tr.Named = append(tr.Named, key)
 			if skip[strings.ToLower(key)] || is_dev_repo(r.Owner, r.Name) {
+				tr.NotTaken = append(tr.NotTaken, key+": the reference, a dev repository or named before")
 				continue
 			}
 			skip[strings.ToLower(key)] = true
 			if err := evalCloneFn(r.Owner, r.Name, evalBareDir(key)); err != nil {
 				log.Printf("eval_discover: %s not taken: does not clone (%v)", key, err)
+				tr.NotTaken = append(tr.NotTaken, fmt.Sprintf("%s: does not clone (%v)", key, err))
 				failed = append(failed, key)
 				continue
 			}
 			if ok, why := accept(key); !ok {
 				log.Printf("eval_discover: %s not taken: %s", key, why)
+				tr.NotTaken = append(tr.NotTaken, key+": "+why)
 				continue
 			} else {
 				log.Printf("eval_discover: %s taken: %s", key, why)
+				tr.Taken = append(tr.Taken, key+": "+why)
 			}
 			good = append(good, r)
 			if len(good) == MAX_REFS {
@@ -112,5 +120,16 @@ func evalDiscover(task string, exclude []string, accept func(repo string) (bool,
 		}
 		prompt = fmt.Sprintf(refDiscoverPromptFmt, truncDiff(task, 3000), MAX_REFS-len(good))
 	}
-	return good
+	return good, tr
+}
+
+// EvalDiscoverTrace: what the search did, kept in the evaluation record — 11/09 the first
+// record on the machine said "external": null, and whether the search had been asked, named
+// anything or rejected everything could be read only from a log nobody had kept.
+type EvalDiscoverTrace struct {
+	Asked    int      `json:"asked"`               // times the search conversation was asked
+	AskError string   `json:"ask_error,omitempty"` // why asking it failed
+	Named    []string `json:"named"`               // every owner/name it replied
+	Taken    []string `json:"taken"`               // "<repo>: <why>"
+	NotTaken []string `json:"not_taken"`           // "<repo>: <why>"
 }

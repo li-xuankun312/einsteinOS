@@ -25,7 +25,7 @@ func TestPublishedNumbersAreComparedOnlyWhereThePlannerFindsThemCorresponding(t 
 		prompt, files = p, ConsumeForkFiles()
 		return "comparable: 0 decode\n`comparable: 1 prefill`\ncomparable: 2 decode\ncomparable: 7 decode\ncomparable: 1 throughput\n"
 	}
-	cmp := evalComparisons(1, "Niko1221/Strata", cond, e2e, clues, map[string]string{"Niko1221/Strata bench/results/2026-09-24-final/matrix.md": "### Output (tok/s)\n| Model | 4K |\n"})
+	cmp, _ := evalComparisons(1, "Niko1221/Strata", cond, e2e, clues, map[string]string{"Niko1221/Strata bench/results/2026-09-24-final/matrix.md": "### Output (tok/s)\n| Model | 4K |\n"})
 	if !strings.Contains(prompt, "/mnt/user-data/uploads/eval_compare.md") || len(files) != 1 {
 		t.Fatalf("data not given as a file: %q %d", prompt, len(files))
 	}
@@ -45,7 +45,7 @@ func TestPublishedNumbersAreComparedOnlyWhereThePlannerFindsThemCorresponding(t 
 		t.Fatal("not worse passes")
 	}
 	devPlannerRunner = func(int64, string, string) string { t.Fatal("no planner without numbers"); return "" }
-	if evalComparisons(1, "o/r", cond, e2e, nil, nil) != nil {
+	if cmp, _ := evalComparisons(1, "o/r", cond, e2e, nil, nil); cmp != nil {
 		t.Fatal("nothing published, nothing compared")
 	}
 }

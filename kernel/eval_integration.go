@@ -30,6 +30,7 @@ type evalBase struct {
 	external  []EvalRun
 	clues     []EvalClue
 	docs      map[string]string // "<repo> <file>" → text, the documents the clues are in
+	discover  EvalDiscoverTrace
 }
 
 // RegisterIntegrationEval makes fn the evaluation of unitID's verification.
@@ -66,7 +67,9 @@ func evalBaseFor(repo, sha string, benches []EvalBench) evalBase {
 	evalTaskMu.Lock()
 	task := evalTask
 	evalTaskMu.Unlock()
-	for _, r := range evalDiscover(task, []string{repo}, evalAcceptRepo) {
+	taken, trace := evalDiscover(task, []string{repo}, evalAcceptRepo)
+	b.discover = trace
+	for _, r := range taken {
 		name := r.Owner + "/" + r.Name
 		bare := evalBareDir(name)
 		head, err := refGitFn(bare, "rev-parse", "HEAD")
@@ -91,7 +94,7 @@ func evalIntegration(pid int64, repo, sha, devRepo, unitID string, benches []Eva
 		base := evalBaseFor(repo, sha, benches)
 		rec := EvalRecord{Repo: repo, RefSHA: sha, Reference: base.reference, External: base.external,
 			Clues: base.clues, Dev: evalRunPort(ws, shown), When: time.Now().UTC(),
-			Conditions: measureEvalConditions(repo, sha)}
+			Conditions: measureEvalConditions(repo, sha), Discover: base.discover}
 		var prev *EvalRecord
 		if dir, err := evalStateDir(devRepo); err == nil {
 			prev = prevEvalRecord(dir, sha)
@@ -105,7 +108,7 @@ func evalIntegration(pid int64, repo, sha, devRepo, unitID string, benches []Eva
 		if k, t := e2eGate(rec.E2E); k != "" {
 			rec.Gate, rec.GateText = k, t
 		} else {
-			rec.Compared = evalComparisons(pid, repo, rec.Conditions, rec.E2E, rec.Clues, base.docs)
+			rec.Compared, rec.Compare = evalComparisons(pid, repo, rec.Conditions, rec.E2E, rec.Clues, base.docs)
 			rec.Gate, rec.GateText = evalGate(rec, prev, mask)
 			if rec.Gate == "" {
 				rec.Gate, rec.GateText = evalExternalGate(rec.Compared)

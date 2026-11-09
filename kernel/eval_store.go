@@ -30,9 +30,12 @@ type EvalRecord struct {
 	Compared []EvalComparison `json:"compared"`
 	// Conditions: what the measurements were taken under (eval_conditions.go)
 	Conditions EvalConditions `json:"conditions"`
-	Gate       string         `json:"gate"`
-	GateText   string         `json:"gate_text"`
-	When       time.Time      `json:"when"`
+	// Discover, Compare: what the search and the comparison did (eval_discover.go, eval_compare.go)
+	Discover EvalDiscoverTrace `json:"discover"`
+	Compare  EvalCompareTrace  `json:"compare"`
+	Gate     string            `json:"gate"`
+	GateText string            `json:"gate_text"`
+	When     time.Time         `json:"when"`
 }
 
 const (

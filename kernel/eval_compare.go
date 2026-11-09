@@ -69,10 +69,13 @@ func evalCompareData(cond EvalConditions, e2e EvalBenchRun, clues []EvalClue, do
 
 // evalComparisons asks the planner which published numbers correspond to the port's rates and
 // compares those.
-func evalComparisons(pid int64, repo string, cond EvalConditions, e2e EvalBenchRun, clues []EvalClue, docs map[string]string) []EvalComparison {
+func evalComparisons(pid int64, repo string, cond EvalConditions, e2e EvalBenchRun, clues []EvalClue, docs map[string]string) ([]EvalComparison, EvalCompareTrace) {
+	tr := EvalCompareTrace{Published: len(clues), PortRates: len(e2e.Metrics)}
 	if len(clues) == 0 || len(e2e.Metrics) == 0 {
-		return nil
+		tr.NotAsked = "no published number or no rate of the port's run"
+		return nil, tr
 	}
+	tr.Asked = true
 	SetForkFiles([]ForkFile{{Name: evalCompareFile, Data: []byte(evalCompareData(cond, e2e, clues, docs))}})
 	out := devPlannerRunner(pid, repo, fmt.Sprintf(evalComparePromptFmt, localUploadsPath(evalCompareFile))+DoneInstruction())
 	port := map[string]Metric{}
@@ -81,20 +84,35 @@ func evalComparisons(pid int64, repo string, cond EvalConditions, e2e EvalBenchR
 	}
 	var cmp []EvalComparison
 	for _, m := range evalComparableRe.FindAllStringSubmatch(out, -1) {
+		tr.Named++
 		i, err := strconv.Atoi(m[1])
 		pm, ok := port[evalLabel(m[2])]
 		if err != nil || i < 0 || i >= len(clues) || !ok {
+			tr.Ignored = append(tr.Ignored, m[0])
 			continue
 		}
 		c := clues[i]
 		if c.Metric.Unit != pm.Unit {
 			log.Printf("eval: published number %d (%s) and port %q have different units — not compared", i, c.Metric.Unit, pm.Label)
+			tr.Ignored = append(tr.Ignored, m[0])
 			continue
 		}
 		cmp = append(cmp, EvalComparison{Clue: c, Port: pm, Worse: evalWorse(pm.Value, c.Metric.Value, pm.Better)})
 	}
 	log.Printf("eval: %s: the planner found %d of %d published number(s) comparable with the port's run", repo, len(cmp), len(clues))
-	return cmp
+	return cmp, tr
+}
+
+// EvalCompareTrace: what the comparison did, kept in the evaluation record — 11/09 the first
+// record on the machine said "compared": null, which reads the same whether the planner was
+// never asked, answered nothing, or named numbers the kernel could not use.
+type EvalCompareTrace struct {
+	Published int      `json:"published"`           // numbers it could have named
+	PortRates int      `json:"port_rates"`          // rates the port's run printed
+	Asked     bool     `json:"asked"`               // the planner was asked
+	NotAsked  string   `json:"not_asked,omitempty"` // why not
+	Named     int      `json:"named"`               // "comparable:" lines it answered
+	Ignored   []string `json:"ignored"`             // those the kernel could not use
 }
 
 // evalExternalGate: the first published number the port's run is worse than.

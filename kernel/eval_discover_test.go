@@ -28,7 +28,7 @@ func TestEvalDiscoverRunsTheSealedSearch(t *testing.T) {
 		return nil
 	}
 	task := "项目在 zeng-bin3123/baloon，直接参考 github.com/Niko1221/Strata"
-	got := evalDiscover(task, []string{"Niko1221/Strata"}, func(repo string) (bool, string) {
+	got, _ := evalDiscover(task, []string{"Niko1221/Strata"}, func(repo string) (bool, string) {
 		return repo != "vllm-project/vllm", "measured"
 	})
 	if len(got) != 1 || got[0].Owner+"/"+got[0].Name != "ggml-org/llama.cpp" {
