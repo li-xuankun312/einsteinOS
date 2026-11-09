@@ -11,6 +11,7 @@ import (
 // run where the repository puts it, and the printed numbers read; a benchmark that fails to
 // run contributes no metric.
 func TestEvalRunsARepositorysOwnBenchmark(t *testing.T) {
+	bootKernel() // the evaluation forks its builds through the kernel's process table
 	work := t.TempDir()
 	repo := filepath.Join(work, "r")
 	os.MkdirAll(filepath.Join(repo, "benchmarks"), 0o755)

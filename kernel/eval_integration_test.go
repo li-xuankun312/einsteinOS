@@ -12,6 +12,7 @@ import (
 // counterpart in the workspace, and a slower port fails the integration — through the same
 // hook verification calls.
 func TestTheIntegrationIsJudgedAgainstTheReferenceRunHere(t *testing.T) {
+	bootKernel() // the evaluation forks its builds through the kernel's process table
 	work := t.TempDir()
 	ref := filepath.Join(work, "Strata")
 	os.MkdirAll(filepath.Join(ref, "bench"), 0o755)
@@ -69,6 +70,7 @@ func TestTheIntegrationIsJudgedAgainstTheReferenceRunHere(t *testing.T) {
 // No end-to-end script, a failing one, or one that prints no decode rate fails the
 // integration before any comparison.
 func TestTheIntegrationRunsThePortOnTheModel(t *testing.T) {
+	bootKernel() // the evaluation forks its builds through the kernel's process table
 	ws := t.TempDir()
 	if k, _ := e2eGate(evalRunE2E(ws, "u1")); k != "integration_e2e_missing" {
 		t.Fatalf("missing: %q", k)

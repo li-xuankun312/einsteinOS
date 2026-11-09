@@ -9,6 +9,7 @@ import (
 // The port's counterpart of a reference benchmark is found by its (masked) name where the
 // port's build put it and run with the reference's arguments; a missing one runs nothing.
 func TestEvalRunsThePortsCounterparts(t *testing.T) {
+	bootKernel() // the evaluation forks its builds through the kernel's process table
 	ws := t.TempDir()
 	os.MkdirAll(filepath.Join(ws, "build/bin"), 0o755)
 	os.WriteFile(filepath.Join(ws, "build/bin/ref-bench"), []byte("#!/bin/sh\necho \"decode ($1): 64.5 tok/s\"\n"), 0o755)
