@@ -141,15 +141,16 @@ func TestStoredReviewFailuresAreAttributedOnResume(t *testing.T) {
 	if need, _ := dev_node_needs_split(p, unit); !need {
 		t.Fatal("as it stands the plan asks to split it")
 	}
-	blames := p.ReopenableUnits(reviewBlames(unit.ID, reviewOwners(stored, written, sources)))
+	blame := func(u DevPlanNode, verdict string) []string {
+		return reviewBlames(u.ID, reviewOwners(verdict, written, sources))
+	}
+	blames := resumeStoredReviewFailure(p, unit, "einsteinOS/dev-3b59928b8f", blame)
 	if len(blames) != 1 || blames[0] != "u4decb4e657" {
 		t.Fatalf("blames: %v", blames)
 	}
-	for _, id := range blames {
-		p.MarkReopen(id, DevFailure{Kind: "review_fail", Text: stored})
+	if _, left := p.FixAttempts[unit.ID]; left {
+		t.Fatal("its attempts are cleared")
 	}
-	delete(p.FixAttempts, unit.ID)
-	delete(p.LastFailure, unit.ID)
 	if need, why := dev_node_needs_split(p, unit); need {
 		t.Fatalf("it starts again instead of splitting: %s", why)
 	}

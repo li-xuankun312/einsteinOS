@@ -387,18 +387,11 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 		// pf7b804cf95 came back from the plan with three such failures already counted, so
 		// the run asked to split it before it could run once and stopped on a port unit
 		// that has no modules to split.
-		if lf := plan.LastFailure[unit.ID]; lf.Kind == "review_fail" && plan.FixAttempts[unit.ID] > 0 {
-			if blames := plan.ReopenableUnits(run.reviewBlame(unit, lf.Text)); len(blames) > 0 {
-				for _, id := range blames {
-					plan.MarkReopen(id, DevFailure{Kind: "review_fail", Text: fmt.Sprintf(reopenReasonFmt, lf.Text, unit.ID), BaseRef: branch})
-				}
-				delete(plan.FixAttempts, unit.ID)
-				delete(plan.LastFailure, unit.ID)
-				log.Printf("dev_from_theorems: %s unit %s: its stored review failure is about files of %s — those are reopened and unit %s starts again",
-					repo, unit.ID, strings.Join(blames, " "), unit.ID)
-				devPlanSave(repo, devRepo, branch, plan, fmt.Sprintf("plan: %s reopened, unit %s starts again", strings.Join(blames, " "), unit.ID))
-				continue
-			}
+		if blames := resumeStoredReviewFailure(plan, unit, branch, run.reviewBlame); len(blames) > 0 {
+			log.Printf("dev_from_theorems: %s unit %s: its stored review failure is about files of %s — those are reopened and unit %s starts again",
+				repo, unit.ID, strings.Join(blames, " "), unit.ID)
+			devPlanSave(repo, devRepo, branch, plan, fmt.Sprintf("plan: %s reopened, unit %s starts again", strings.Join(blames, " "), unit.ID))
+			continue
 		}
 
 		// whether to split is the kernel's call, from numbers
@@ -1014,6 +1007,30 @@ func (r *devRun) reviewBlame(unit DevPlanNode, verdict string) []string {
 		}
 	}
 	return reviewBlames(unit.ID, owners)
+}
+
+// resumeStoredReviewFailure: a unit that comes back from the plan with a review failure
+// stored against it, whose files blame measures as other units', has those units reopened
+// with that verdict and its own attempts and failure cleared, so it starts again instead of
+// being asked to split. It returns the units reopened (none: the plan is left as it was).
+// dev_from_theorems runs it before the split question; it is a function so that what the
+// loop does is what a test runs — 11/08 the test of this step (6dfd2f13) wrote the same
+// steps out itself and passed on the code before the fix.
+func resumeStoredReviewFailure(plan *DevPlan, unit DevPlanNode, branch string, blame func(DevPlanNode, string) []string) []string {
+	lf := plan.LastFailure[unit.ID]
+	if lf.Kind != "review_fail" || plan.FixAttempts[unit.ID] == 0 {
+		return nil
+	}
+	blames := plan.ReopenableUnits(blame(unit, lf.Text))
+	if len(blames) == 0 {
+		return nil
+	}
+	for _, id := range blames {
+		plan.MarkReopen(id, DevFailure{Kind: "review_fail", Text: fmt.Sprintf(reopenReasonFmt, lf.Text, unit.ID), BaseRef: branch})
+	}
+	delete(plan.FixAttempts, unit.ID)
+	delete(plan.LastFailure, unit.ID)
+	return blames
 }
 
 // nextUnitIndex: the unit to run now — the first that has not passed and was not reopened,
