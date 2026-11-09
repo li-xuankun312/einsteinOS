@@ -20,6 +20,8 @@ type KernelLaunch struct {
 	API    string
 	Symbol string // mangled stub symbol, "" when it could not be resolved
 	Name   string // the kernel's identifier ("" for driver-API handles and unresolved stubs)
+	// Why: for a launch without a name, why none could be given
+	Why string
 }
 
 // elfFuncSymbols maps symbol value → name for the FUNC symbols of an ELF file, and reports
@@ -60,18 +62,31 @@ func resolveLaunches(pl probeLog) []KernelLaunch {
 	var out []KernelLaunch
 	for _, l := range pl.Launches {
 		k := KernelLaunch{PID: l.PID, Object: l.Object, API: l.API, Symbol: l.Symbol}
-		if k.Symbol == "" && l.API != "cuLaunchKernel" && l.Object != "?" {
+		switch {
+		case k.Symbol != "":
+		case l.API == "cuLaunchKernel":
+			k.Why = "a driver-API launch (cuLaunchKernel) passes a handle, not a function"
+		case l.Object == "?":
+			k.Why = fmt.Sprintf("no loaded object holds the launched address %#x", l.Addr)
+		default:
 			o, ok := cache[l.Object]
 			if !ok {
 				o.syms, o.pic, o.err = elfFuncSymbols(l.Object)
 				cache[l.Object] = o
 			}
-			if o.err == nil {
-				addr := l.Addr
-				if o.pic {
-					addr -= l.Base
+			addr := l.Addr
+			if o.pic {
+				addr -= l.Base
+			}
+			switch {
+			case o.err != nil:
+				k.Why = fmt.Sprintf("%s could not be read (%v)", l.Object, o.err)
+			case len(o.syms) == 0:
+				k.Why = l.Object + " has no symbol table (stripped?)"
+			default:
+				if k.Symbol = o.syms[addr]; k.Symbol == "" {
+					k.Why = fmt.Sprintf("%s has no function symbol at %#x", l.Object, addr)
 				}
-				k.Symbol = o.syms[addr]
 			}
 		}
 		if k.Symbol != "" {
@@ -199,8 +214,25 @@ func launchUnmeasured(t ProcTrace) string {
 		return "the launch probe could not be built on this machine: " + t.ProbeErr
 	case len(t.ProbeLoaded) == 0:
 		return ""
-	case len(t.Devices) == 0 || len(t.Launches) > 0:
+	case len(t.Devices) == 0:
 		return ""
+	case len(t.Launches) > 0:
+		// launches were seen but none could be named: which kernels ran is not measured, and
+		// "launched none of the unit's kernels" would be a guess — 11/09 12:02-12:29 unit
+		// ube4f27df84 was sent back gpu_kernel_not_launched three times with "kernels
+		// launched: 7 distinct ((+7 unnamed))"
+		if len(launchedNames(t.Launches)) > 0 {
+			return ""
+		}
+		why := map[string]bool{}
+		for _, l := range t.Launches {
+			if l.Why != "" {
+				why[l.Why] = true
+			} else {
+				why["a "+l.API+" launch without a name"] = true
+			}
+		}
+		return fmt.Sprintf("%d launch(es) were seen and none could be named: %s", len(t.Launches), shortList(sortedKeys(why), 4))
 	}
 	var static []string
 	for _, exe := range t.ProbeLoaded {

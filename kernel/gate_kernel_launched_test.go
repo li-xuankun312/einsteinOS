@@ -102,7 +102,7 @@ func TestRepoKernelsSkipsGitAndBuild(t *testing.T) {
 func TestGateIntegrationKernelNotLaunched(t *testing.T) {
 	in := GateInput{Req: UnitRequirements{Tests: []RefTest{{Name: "gdn_parity"}, {Name: "pool_test"}}, RequireGPU: true},
 		Compilers: corex, Build: ProcTrace{Exes: []string{"/usr/local/corex/bin/clang++"}},
-		Test:        ProcTrace{Devices: []string{"/dev/iluvatar0"}, ProbeLoaded: []string{"/ws/build/gdn_parity"}, Launches: []KernelLaunch{{API: "cuLaunchKernel"}}},
+		Test:        ProcTrace{Devices: []string{"/dev/iluvatar0"}, ProbeLoaded: []string{"/ws/build/gdn_parity"}, Launches: []KernelLaunch{{API: "cudaLaunchKernel", Name: "invariant_check"}}},
 		RepoKernels: map[string]bool{"gdn_step": true, "rope_apply": true}}
 	kind, text := unitGates(in)
 	if kind != "integration_kernel_not_launched" || !strings.Contains(text, "gdn_step") {
