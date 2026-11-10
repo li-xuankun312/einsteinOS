@@ -335,7 +335,7 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 	devMaskSweep(repo, devRepo, branch)
 
 	plan := dev_get_plan(pid, repo, devRefSHA(repo, step.SHA), theory, branch)
-	if err := devLeaseCheck(plan.Holder, thisHolder(time.Now()), time.Now(), os.Getenv(devTakeLeaseEnv) != "", pidAlive); err != nil {
+	if err := devLeaseCheck(plan.Holder, thisHolder(time.Now()), time.Now(), os.Getenv(devTakeLeaseEnv) != "", holderRunning); err != nil {
 		log.Printf("dev_from_theorems: %s %s: %v", repo, branch, err)
 		PRFeedbackAdd(pid, "- dev_from_theorems: "+err.Error())
 		return "", err
