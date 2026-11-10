@@ -87,3 +87,22 @@ func TestTheVerificationGivesTheGatesThePortMapsKernels(t *testing.T) {
 		t.Fatalf("its ported kernels exist and launched: %s", text)
 	}
 }
+
+// A kernel in a file outside the tests that the unit's port map writes nothing into fails the
+// unit: unit u61716a9a8a's src/kernels/cuda/verify_commit_dev.cu (baloon b0c60cf), through the
+// verification's own gate input; its test file's kernels do not.
+func TestAKernelInAFileThePortMapDoesNotWriteFails(t *testing.T) {
+	ws, _ := filepath.Abs("testdata/u617")
+	req := UnitRequirements{GPUSources: []string{"src/kernels/cuda/verify_kernels.cu"}}
+	test := ProcTrace{Devices: []string{"/dev/iluvatar0"}, ProbeLoaded: []string{"/ws/t"}, Launches: []KernelLaunch{{Name: "mtp_select_kernel"}}}
+	changed := []string{".einsteinOS/port/u61716a9a8a.tsv", "src/kernels/cuda/verify_commit_dev.cu"}
+	_, text := unitGates(unitGateInput(ws, "u61716a9a8a", req, changed, ProcTrace{}, test, NoToolchainBuild{}))
+	if !strings.Contains(text, "kernel_unported") || !strings.Contains(text, "accept_prefix_kernel") || !strings.Contains(text, "commit_rows_kernel") {
+		t.Fatalf("%s", text)
+	}
+	in := unitGateInput(ws, "u61716a9a8a", req, []string{".einsteinOS/port/u61716a9a8a.tsv"}, ProcTrace{}, test, NoToolchainBuild{})
+	in.Kernels = map[string][]string{"tests/ku617/test_u617.cu": {"probe_kernel"}}
+	if _, text := unitGates(in); strings.Contains(text, "kernel_unported") {
+		t.Fatalf("a test file's kernel: %s", text)
+	}
+}

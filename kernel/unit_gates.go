@@ -50,6 +50,8 @@ type GateInput struct {
 	PortKernels map[string]bool
 	// UnitID: the unit verified (its port map is PortMapPath(UnitID))
 	UnitID string
+	// PortFiles: the files the unit's port map writes its counterparts into
+	PortFiles map[string]bool
 }
 
 // gpuCompilers are the programs that make a GPU build possible, looked for in toolchainDirs.
@@ -77,6 +79,7 @@ const (
 	gateISAWhereFmt            = "; looked for inside the unit's counterparts of the definitions of those files: %[1]s"
 	gateISAUnmeasuredFmt       = "isa_unmeasured: the reference builds %[1]s with %[2]s, and the binaries could not be disassembled (%[3]s)"
 	gateToolchainUnusedFmt     = "toolchain_unused: the unit is GPU work but no process of build.sh ran a program from %[1]s (programs that ran: %[2]s) — a build that skips the toolchain proves nothing"
+	gateKernelUnportedFmt      = "kernel_unported: %[1]s define __global__ kernels (%[2]s) and are neither test files nor files the unit's port map %[3]s writes a counterpart into"
 	gateGPUKernelMissingFmt    = "gpu_kernel_missing: the unit's modules come from CUDA sources in the reference (%[1]s) but its CUDA files define no __global__ kernel: %[2]s — a host header about a kernel is not the kernel; kernels its port map %[3]s names: %[4]d; kernels its test launched: %[5]s"
 	gateKernelNotLaunchedFmt   = "gpu_kernel_not_launched: test.sh exited 0 but launched none of the unit's kernels (%[1]s); kernels its processes launched: %[2]s; executables the launch probe was in: %[3]s — a test that opens the device and checks on the CPU proves nothing about the kernels"
 	gateLaunchUnmeasuredFmt    = "gpu_launch_unmeasured: whether the unit's kernels ran on the device could not be measured: %[1]s"
@@ -115,6 +118,23 @@ func unitGates(in GateInput) (kind, text string) {
 	}
 	// a CUDA file is GPU work only if it holds a kernel: 11/04's FusedGdnKernels,
 	// QsaDecodeAttention and PrefillGpuKernels were host headers of index arithmetic
+	// a kernel in a file outside the tests that no line of the port map writes into ports nothing:
+	// 11/09 15:32 unit ucc74f228b9 added src/kernels/cuda/ucc7_geometry.cu and 11/10 unit
+	// u61716a9a8a src/kernels/cuda/verify_commit_dev.cu, each to pass gpu_kernel_missing
+	if in.PortFiles != nil {
+		var files, names []string
+		for f, ks := range in.Kernels {
+			if len(ks) > 0 && !isTestPath(f) && !in.PortFiles[f] {
+				files = append(files, f)
+				names = append(names, ks...)
+			}
+		}
+		if len(files) > 0 {
+			sort.Strings(files)
+			sort.Strings(names)
+			fail("kernel_unported", fmt.Sprintf(gateKernelUnportedFmt, strings.Join(files, ", "), shortList(names, 12), PortMapPath(in.UnitID)))
+		}
+	}
 	// …unless its port map names __global__ kernels as its counterparts of the reference's: 11/09
 	// 15:31 unit ucc74f228b9's port map named flash_kernel, qsa_attend_kernel and the rest, in
 	// files the branch already held, and the gate sent it back until it wrote three new kernels
@@ -602,4 +622,14 @@ func sortedCopy(xs []string) []string {
 	out := append([]string{}, xs...)
 	sort.Strings(out)
 	return out
+}
+
+// isTestPath: a path with a directory or file name that starts with "test".
+func isTestPath(p string) bool {
+	for _, seg := range strings.Split(p, "/") {
+		if strings.HasPrefix(strings.ToLower(seg), "test") {
+			return true
+		}
+	}
+	return false
 }

@@ -481,11 +481,21 @@ func runUnitVerifyWith(ws, unitID, gpuUsable string, req UnitRequirements, chang
 // port map's kernels (PortKernels, 58a9d1ed and 3086282d) were tested on hand-built inputs
 // while the verification never set them, and 11/10 02:07 unit u61716a9a8a was sent back
 // gpu_kernel_missing by code whose fix for it had never run.
+// portFiles: the files a port map writes counterparts into.
+func portFiles(pm map[string]portEntry) map[string]bool {
+	out := map[string]bool{}
+	for _, e := range pm {
+		out[e.file] = true
+	}
+	return out
+}
+
 func unitGateInput(ws, unitID string, req UnitRequirements, changed []string, build, test ProcTrace, nt NoToolchainBuild) GateInput {
 	pm := readPortMap(ws, unitID)
 	return GateInput{Req: req, Changed: changed, Build: build, Test: test, Compilers: presentGPUCompilers(),
 		PortMissing: portMissing(ws, unitID, req.Symbols), Kernels: unitKernels(ws, changed), KernelsMeasured: true,
 		ISAFuncs: isaPortFuncs(pm, req.FlagFiles), PortKernels: portKernels(ws, unitID), UnitID: unitID,
+		PortFiles:   portFiles(pm),
 		NoToolchain: nt, Includers: cuhIncluders(ws, changed), IncludersMeasured: true,
 		RepoKernels: integrationRepoKernels(ws, req)}
 }
