@@ -333,8 +333,11 @@ func extractRepoMentions(text string) []RefRepo {
 				}
 				parts := strings.SplitN(rest, "/", 3)
 				if len(parts) >= 2 && parts[0] != "" && parts[1] != "" {
-					owner := parts[0]
-					name := strings.TrimRight(parts[1], ".,;:!?\u3002\uff0c\u3001\uff1b\uff1a\uff01\uff1f")
+					// a GitHub owner and repository name are only [A-Za-z0-9._-]: 11/10 01:24
+					// "github.com/zeng-bin3123/baloon我们要开发的是" was taken as the repository
+					// "baloon我们要开发的是" and cloned
+					owner := githubNamePrefix(parts[0])
+					name := strings.TrimRight(githubNamePrefix(parts[1]), ".,;:!?\u3002\uff0c\u3001\uff1b\uff1a\uff01\uff1f")
 					name = strings.TrimSuffix(name, ".git")
 					if !skip[name] {
 						key := owner + "/" + name
@@ -895,4 +898,14 @@ func RefInitSummary() string {
 		sb.WriteString(fmt.Sprintf("  %s: %d commits\n", key, len(r.Commits)))
 	}
 	return sb.String()
+}
+
+// githubNamePrefix: the leading part of s that a GitHub owner or repository name can hold.
+func githubNamePrefix(s string) string {
+	for i, r := range s {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '.' || r == '_' || r == '-') {
+			return s[:i]
+		}
+	}
+	return s
 }
