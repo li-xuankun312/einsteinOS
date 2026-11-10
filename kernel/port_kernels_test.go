@@ -52,6 +52,21 @@ func TestPortedKernelsInExistingFilesAreTheUnitsKernels(t *testing.T) {
 	}
 }
 
+// gpu_kernel_missing says how many kernels the unit's port map names and which kernels its
+// test launched: 11/10 02:07 unit u61716a9a8a's test launched eleven kernels of an existing
+// file that its port map did not yet name.
+func TestKernelMissingSaysWhatThePortMapAndTheTestShow(t *testing.T) {
+	in := GateInput{UnitID: "u61716a9a8a", Req: UnitRequirements{GPUSources: []string{"src/kernels/cuda/verify_kernels.cu"}},
+		Kernels: map[string][]string{"tests/ku617/test_u617.cu": nil}, KernelsMeasured: true,
+		Test: ProcTrace{Launches: []KernelLaunch{{Name: "mtp_select_kernel"}, {Name: "dense_steps_kernel"}}}}
+	_, text := unitGates(in)
+	for _, want := range []string{".einsteinOS/port/u61716a9a8a.tsv names: 0", "dense_steps_kernel", "mtp_select_kernel"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("lacks %q: %s", want, text)
+		}
+	}
+}
+
 // The verification's gate input carries the port map's kernels: unit u61716a9a8a's files as
 // zeng-bin3123/baloon b0c60cf holds them (its port map, the existing file its kernels are in,
 // and the file it added), through unitGateInput, the function the verification calls.

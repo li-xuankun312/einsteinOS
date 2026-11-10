@@ -77,7 +77,7 @@ const (
 	gateISAWhereFmt            = "; looked for inside the unit's counterparts of the definitions of those files: %[1]s"
 	gateISAUnmeasuredFmt       = "isa_unmeasured: the reference builds %[1]s with %[2]s, and the binaries could not be disassembled (%[3]s)"
 	gateToolchainUnusedFmt     = "toolchain_unused: the unit is GPU work but no process of build.sh ran a program from %[1]s (programs that ran: %[2]s) — a build that skips the toolchain proves nothing"
-	gateGPUKernelMissingFmt    = "gpu_kernel_missing: the unit's modules come from CUDA sources in the reference (%[1]s) but its CUDA files define no __global__ kernel: %[2]s — a host header about a kernel is not the kernel"
+	gateGPUKernelMissingFmt    = "gpu_kernel_missing: the unit's modules come from CUDA sources in the reference (%[1]s) but its CUDA files define no __global__ kernel: %[2]s — a host header about a kernel is not the kernel; kernels its port map %[3]s names: %[4]d; kernels its test launched: %[5]s"
 	gateKernelNotLaunchedFmt   = "gpu_kernel_not_launched: test.sh exited 0 but launched none of the unit's kernels (%[1]s); kernels its processes launched: %[2]s; executables the launch probe was in: %[3]s — a test that opens the device and checks on the CPU proves nothing about the kernels"
 	gateLaunchUnmeasuredFmt    = "gpu_launch_unmeasured: whether the unit's kernels ran on the device could not be measured: %[1]s"
 	gateIntegrationNoKernelFmt = "integration_kernel_not_launched: the reference builds CUDA and its %[1]d registered tests passed here, but none of them launched a kernel of this repository (it defines %[2]d: %[3]s); kernels launched: %[4]s"
@@ -120,7 +120,12 @@ func unitGates(in GateInput) (kind, text string) {
 	// files the branch already held, and the gate sent it back until it wrote three new kernels
 	// (geometry_kernel, order_key_kernel, quota_kernel) of its own
 	if in.Req.GPU() && in.KernelsMeasured && len(in.Kernels) > 0 && len(kernelSet(in.Kernels)) == 0 && len(in.PortKernels) == 0 {
-		fail("gpu_kernel_missing", fmt.Sprintf(gateGPUKernelMissingFmt, strings.Join(in.Req.GPUSources, ", "), kernelFilesText(in.Kernels)))
+		// the measured facts that tell a port written into an existing file from no port at all:
+		// 11/10 02:07 unit u61716a9a8a was told only that its CUDA files held no kernel, while
+		// its test launched dense_steps_kernel, mtp_select_kernel and nine more of an existing
+		// file; it wrote two new kernels instead of naming those in its port map
+		fail("gpu_kernel_missing", fmt.Sprintf(gateGPUKernelMissingFmt, strings.Join(in.Req.GPUSources, ", "), kernelFilesText(in.Kernels),
+			PortMapPath(in.UnitID), len(in.PortKernels), shortList(sortedKeys(launchedNames(in.Test.Launches)), 16)))
 	}
 	// what the unit wrote must be what its build compiled for the GPU — not only the
 	// repository's existing src/*.cu, which is all the 11/03 builds compiled
