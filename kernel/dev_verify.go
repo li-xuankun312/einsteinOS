@@ -466,11 +466,7 @@ func runUnitVerifyWith(ws, unitID, gpuUsable string, req UnitRequirements, chang
 		res.Smoke = "fail"
 	default:
 		res.Smoke = "pass"
-		res.Gate, res.GateText = unitGates(GateInput{Req: req, Changed: changed, Build: res.Build, Test: res.Test, Compilers: presentGPUCompilers(),
-			PortMissing: portMissing(ws, unitID, req.Symbols), Kernels: unitKernels(ws, changed), KernelsMeasured: true,
-			ISAFuncs:    isaPortFuncs(readPortMap(ws, unitID), req.FlagFiles),
-			NoToolchain: res.NoToolchain, Includers: cuhIncluders(ws, changed), IncludersMeasured: true,
-			RepoKernels: integrationRepoKernels(ws, req)})
+		res.Gate, res.GateText = unitGates(unitGateInput(ws, unitID, req, changed, res.Build, res.Test, res.NoToolchain))
 		// the integration unit: the port against the reference and the integration before,
 		// on this machine (eval_integration.go)
 		if fn := integrationEval(unitID); fn != nil && res.Gate == "" {
@@ -478,6 +474,20 @@ func runUnitVerifyWith(ws, unitID, gpuUsable string, req UnitRequirements, chang
 		}
 	}
 	return finish()
+}
+
+// unitGateInput: what the gates of a unit's verification are given, measured in the
+// workspace ws. It is one function that the verification and its tests call: 11/09 the
+// port map's kernels (PortKernels, 58a9d1ed and 3086282d) were tested on hand-built inputs
+// while the verification never set them, and 11/10 02:07 unit u61716a9a8a was sent back
+// gpu_kernel_missing by code whose fix for it had never run.
+func unitGateInput(ws, unitID string, req UnitRequirements, changed []string, build, test ProcTrace, nt NoToolchainBuild) GateInput {
+	pm := readPortMap(ws, unitID)
+	return GateInput{Req: req, Changed: changed, Build: build, Test: test, Compilers: presentGPUCompilers(),
+		PortMissing: portMissing(ws, unitID, req.Symbols), Kernels: unitKernels(ws, changed), KernelsMeasured: true,
+		ISAFuncs: isaPortFuncs(pm, req.FlagFiles), PortKernels: portKernels(ws, unitID), UnitID: unitID,
+		NoToolchain: nt, Includers: cuhIncluders(ws, changed), IncludersMeasured: true,
+		RepoKernels: integrationRepoKernels(ws, req)}
 }
 
 // ---- assembling and committing ------------------------------------------------------------

@@ -48,6 +48,8 @@ type GateInput struct {
 	// PortKernels: the kernels the unit's port map names as counterparts of reference kernels
 	// (portKernels); empty when it names none
 	PortKernels map[string]bool
+	// UnitID: the unit verified (its port map is PortMapPath(UnitID))
+	UnitID string
 }
 
 // gpuCompilers are the programs that make a GPU build possible, looked for in toolchainDirs.

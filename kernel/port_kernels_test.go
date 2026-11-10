@@ -51,3 +51,24 @@ func TestPortedKernelsInExistingFilesAreTheUnitsKernels(t *testing.T) {
 		t.Fatalf("its ported kernels are its kernels: %s", text)
 	}
 }
+
+// The verification's gate input carries the port map's kernels: unit u61716a9a8a's files as
+// zeng-bin3123/baloon b0c60cf holds them (its port map, the existing file its kernels are in,
+// and the file it added), through unitGateInput, the function the verification calls.
+func TestTheVerificationGivesTheGatesThePortMapsKernels(t *testing.T) {
+	ws, err := filepath.Abs("testdata/u617")
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := UnitRequirements{GPUSources: []string{"src/kernels/cuda/verify_kernels.cu"}}
+	changed := []string{".einsteinOS/port/u61716a9a8a.tsv", "tests/ku617/test_u617.cu"}
+	test := ProcTrace{Devices: []string{"/dev/iluvatar0"}, ProbeLoaded: []string{"/ws/build/test_u617"},
+		Launches: []KernelLaunch{{API: "cudaLaunchKernel", Name: "dense_steps_kernel"}, {API: "cudaLaunchKernel", Name: "mtp_select_kernel"}}}
+	in := unitGateInput(ws, "u61716a9a8a", req, changed, ProcTrace{}, test, NoToolchainBuild{})
+	if len(in.PortKernels) != 15 || !in.PortKernels["mtp_select_kernel"] || in.UnitID != "u61716a9a8a" {
+		t.Fatalf("port kernels %d %v, unit %q", len(in.PortKernels), in.PortKernels, in.UnitID)
+	}
+	if _, text := unitGates(in); strings.Contains(text, "gpu_kernel_missing") || strings.Contains(text, "gpu_kernel_not_launched") {
+		t.Fatalf("its ported kernels exist and launched: %s", text)
+	}
+}
