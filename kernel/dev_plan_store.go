@@ -841,10 +841,29 @@ func (p *DevPlan) MarkReopen(id string, f DevFailure) {
 }
 
 // TakeReopen returns and clears a unit's reopen, if any.
+//
+// Taking it withdraws the unit's pass: until its fix passes the unit has not passed. 11/11
+// 01:05 unit u0063babba8's reopen was taken and its fix conversation started; the run stopped,
+// and at 05:48 the resumed run found the reopen gone and the pass of 11/10 06:46 still
+// stored, and counted the unit as passed with no fix made.
 func (p *DevPlan) TakeReopen(id string) (DevFailure, bool) {
 	f, ok := p.Reopen[id]
 	delete(p.Reopen, id)
+	if ok {
+		p.withdrawPass(id)
+	}
 	return f, ok
+}
+
+// withdrawPass: the unit id has no pass stored (port units and module units alike).
+func (p *DevPlan) withdrawPass(id string) {
+	delete(p.PortPass, id)
+	for k, st := range p.State {
+		if st.UnitID == id && st.Pass {
+			st.Pass = false
+			p.State[k] = st
+		}
+	}
 }
 
 // Reopened reports whether a unit is to run again because of another unit's review.

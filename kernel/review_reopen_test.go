@@ -9,7 +9,7 @@ import (
 )
 
 // A passed unit a later review faulted runs again: its pass no longer holds, its failure is
-// the reviewer's own words, and taking it clears it. A second verdict against the same unit
+// the reviewer's own words, and taking it clears the reopen but not the withdrawn pass. A second verdict against the same unit
 // keeps the first.
 func TestAFaultedUnitIsReopened(t *testing.T) {
 	n := DevPlanNode{ID: "u41e2bf114f", Sources: []string{"src/prefill/kernels.cu"}}
@@ -27,8 +27,8 @@ func TestAFaultedUnitIsReopened(t *testing.T) {
 	if !ok || got.Text != f.Text {
 		t.Fatalf("the first verdict is kept: %+v", got)
 	}
-	if p.Reopened(n.ID) || !p.UnitPass(n) {
-		t.Fatal("taken, it passes again until it runs")
+	if p.Reopened(n.ID) || p.UnitPass(n) {
+		t.Fatal("taken, it has not passed until its fix passes")
 	}
 }
 
@@ -84,10 +84,15 @@ func TestReopenedUnitsRunLast(t *testing.T) {
 		t.Fatalf("then the reopened ones, in plan order: %d", got)
 	}
 	p.TakeReopen("u8")
+	if got := nextUnitIndex(p, leaves); got != 0 {
+		t.Fatalf("taken, it is the unit to run until its fix passes: %d", got)
+	}
+	p.PortPass["u8"] = true
 	if got := nextUnitIndex(p, leaves); got != 1 {
 		t.Fatalf("the next reopened one: %d", got)
 	}
 	p.TakeReopen("u9")
+	p.PortPass["u9"] = true
 	if got := nextUnitIndex(p, leaves); got != -1 {
 		t.Fatalf("nothing left: %d", got)
 	}
@@ -321,5 +326,27 @@ func TestAUnitPassingAfterTheIntegrationWithdrawsItsPass(t *testing.T) {
 	p.MarkUnitPass(integ)
 	if !p.UnitPass(integ) {
 		t.Fatal("it passes again when it runs again")
+	}
+}
+
+// 11/11 01:05 u0063babba8's reopen was taken, its fix started, and the run stopped. The unit
+// stays not passed until its fix passes: a resumed run runs it again.
+func TestAReopenTakenWithdrawsThePassUntilTheFixPasses(t *testing.T) {
+	u := DevPlanNode{ID: "u0063babba8", Sources: []string{"src/kernels/cuda/kv_q8.cu"}}
+	p := &DevPlan{}
+	p.MarkUnitPass(u)
+	p.MarkReopen(u.ID, DevFailure{Kind: "review_fail", Text: "PleReader::issue rejects rows >= n_rows"})
+	if p.UnitPass(u) {
+		t.Fatal("a reopened unit has not passed")
+	}
+	if _, ok := p.TakeReopen(u.ID); !ok {
+		t.Fatal("the reopen is taken")
+	}
+	if p.UnitPass(u) {
+		t.Fatal("its fix has not passed yet: the stored pass is withdrawn")
+	}
+	p.MarkUnitPass(u)
+	if !p.UnitPass(u) {
+		t.Fatal("the fix passed")
 	}
 }
