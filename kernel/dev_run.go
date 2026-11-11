@@ -758,7 +758,11 @@ func (r *devRun) reviewUnit(unit DevPlanNode, idx, total int, convID string, st 
 		return stdout, false, true
 	}
 	plan.ClearSilent(unit.ID)
-	n := plan.Fail(unit.ID, DevFailure{Kind: kind, Text: reason, BaseRef: r.branch})
+	failure := DevFailure{Kind: kind, Text: reason, BaseRef: r.branch}
+	if dir, err := devRepoLocalDir(r.devRepo); err == nil {
+		failure.Copies = reviewCopiesText(r.branch, definitionCopies(dir, r.branch, verdict))
+	}
+	n := plan.Fail(unit.ID, failure)
 	log.Printf("dev_from_theorems: %s unit %d/%d id=%s review FAIL, attempt %d", r.repo, idx+1, total, unit.ID, n)
 	devPlanSave(r.repo, r.devRepo, r.branch, plan, fmt.Sprintf("plan: %s review_fail attempt %d", unit.ID, n))
 	return stdout, false, false
@@ -831,6 +835,9 @@ func (r *devRun) unitPrompt(unit DevPlanNode, idx, total, attempt int, fail DevF
 		if fail.Text != "" {
 			p.WriteString("the REAL output (from the kernel's run on the real machine, or the reviewer's reason):\n")
 			p.WriteString("-----\n" + truncStr(fail.Text, 3500) + "\n-----\n")
+		}
+		if fail.Copies != "" {
+			p.WriteString(fail.Copies + "\n")
 		}
 		p.WriteString(fmt.Sprintf("the code of the previous attempt is on branch %s. fix THAT code; do not start over.\n", baseRef))
 		p.WriteString("fix the reason above first; do not spend tools on unrelated probing.\n\n")

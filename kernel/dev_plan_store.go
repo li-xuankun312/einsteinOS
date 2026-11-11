@@ -87,6 +87,9 @@ type DevFailure struct {
 	// Attribution: for a deferred unit's review failure, what the kernel measured about whose
 	// code it faults (deferredFailure)
 	Attribution string `json:"attribution,omitempty"`
+	// Copies: for a review failure, the files on the dev branch that define a name the verdict
+	// says, where there is more than one (review_copies.go)
+	Copies string `json:"copies,omitempty"`
 }
 
 // DevPlan is the persisted plan.
