@@ -49,3 +49,31 @@ func TestPublishedNumbersAreComparedOnlyWhereThePlannerFindsThemCorresponding(t 
 		t.Fatal("nothing published, nothing compared")
 	}
 }
+
+// 11/10 23:06, 23:08 and 23:33 the planner was asked the same question for three
+// verifications of the integration unit. The answer is reused while the published numbers,
+// the conditions and the rates' labels are the same — the rates' values are compared anew.
+func TestTheSameComparisonIsAskedOnce(t *testing.T) {
+	clues := []EvalClue{{Repo: "Niko1221/Strata", SHA: "e5509707730d", File: "README.md", Metric: Metric{"output q2_0 4k", 94.6, "tok/s", "higher"}}}
+	cond := EvalConditions{ModelName: "Qwen3.6-35B-A3B"}
+	old := devPlannerRunner
+	defer func() { devPlannerRunner = old }()
+	asks := 0
+	devPlannerRunner = func(int64, string, string) string { asks++; ConsumeForkFiles(); return "comparable: 0 decode\n" }
+	run := func(decode float64) []EvalComparison {
+		e2e := EvalBenchRun{Metrics: []Metric{{"prefill", 500, "tok/s", "higher"}, {"decode", decode, "tok/s", "higher"}}}
+		cmp, _ := evalComparisons(1, "Niko1221/Strata", cond, e2e, clues, nil)
+		return cmp
+	}
+	a, b := run(80), run(120)
+	if asks != 1 {
+		t.Fatalf("asked %d times", asks)
+	}
+	if len(a) != 1 || !a[0].Worse || len(b) != 1 || b[0].Worse {
+		t.Fatalf("the values are compared each time: %+v %+v", a, b)
+	}
+	_, tr := evalComparisons(1, "Niko1221/Strata", EvalConditions{ModelName: "other"}, EvalBenchRun{Metrics: []Metric{{"decode", 1, "tok/s", "higher"}}}, clues, nil)
+	if asks != 2 || tr.Reused {
+		t.Fatalf("other conditions are another question: %d", asks)
+	}
+}

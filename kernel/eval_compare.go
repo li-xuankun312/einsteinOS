@@ -12,6 +12,8 @@ package kernel
 // output) and the repositories' own files, uploaded into its sandbox.
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -19,6 +21,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // EvalComparison is one published number the planner found comparable, against the port's.
@@ -75,9 +78,20 @@ func evalComparisons(pid int64, repo string, cond EvalConditions, e2e EvalBenchR
 		tr.NotAsked = "no published number or no rate of the port's run"
 		return nil, tr
 	}
-	tr.Asked = true
-	SetForkFiles([]ForkFile{{Name: evalCompareFile, Data: []byte(evalCompareData(cond, e2e, clues, docs))}})
-	out := devPlannerRunner(pid, repo, fmt.Sprintf(evalComparePromptFmt, localUploadsPath(evalCompareFile))+DoneInstruction())
+	key := evalCompareKey(repo, cond, e2e, clues)
+	evalCompareMu.Lock()
+	out, asked := evalCompareAnswers[key]
+	evalCompareMu.Unlock()
+	if asked {
+		tr.Reused = true
+	} else {
+		tr.Asked = true
+		SetForkFiles([]ForkFile{{Name: evalCompareFile, Data: []byte(evalCompareData(cond, e2e, clues, docs))}})
+		out = devPlannerRunner(pid, repo, fmt.Sprintf(evalComparePromptFmt, localUploadsPath(evalCompareFile))+DoneInstruction())
+		evalCompareMu.Lock()
+		evalCompareAnswers[key] = out
+		evalCompareMu.Unlock()
+	}
 	port := map[string]Metric{}
 	for _, m := range e2e.Metrics {
 		port[m.Label] = m
@@ -103,6 +117,28 @@ func evalComparisons(pid int64, repo string, cond EvalConditions, e2e EvalBenchR
 	return cmp, tr
 }
 
+// evalCompareAnswers: the planner's answer for a question already asked. Which published
+// number is comparable with which of the port's rates depends on the numbers, the conditions
+// and the rates' labels, not on the rates' values: 11/10 23:06, 23:08 and 23:33 the planner
+// was asked the same question for three verifications and answered 0 of 68 each time.
+var (
+	evalCompareMu      sync.Mutex
+	evalCompareAnswers = map[string]string{}
+)
+
+// evalCompareKey: what the planner's answer depends on.
+func evalCompareKey(repo string, cond EvalConditions, e2e EvalBenchRun, clues []EvalClue) string {
+	h := sha256.New()
+	fmt.Fprintf(h, "%s\x00%s\x00%d\x00", repo, cond.ModelName, len(cond.GPUs))
+	for _, m := range e2e.Metrics {
+		fmt.Fprintf(h, "%s|%s\x00", m.Label, m.Unit)
+	}
+	for _, c := range clues {
+		fmt.Fprintf(h, "%s|%s|%s|%s|%g|%s\x00", c.Repo, c.SHA, c.File, c.Metric.Label, c.Metric.Value, c.Metric.Unit)
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
 // EvalCompareTrace: what the comparison did, kept in the evaluation record — 11/09 the first
 // record on the machine said "compared": null, which reads the same whether the planner was
 // never asked, answered nothing, or named numbers the kernel could not use.
@@ -110,6 +146,7 @@ type EvalCompareTrace struct {
 	Published int      `json:"published"`           // numbers it could have named
 	PortRates int      `json:"port_rates"`          // rates the port's run printed
 	Asked     bool     `json:"asked"`               // the planner was asked
+	Reused    bool     `json:"reused,omitempty"`    // its answer to the same question was reused
 	NotAsked  string   `json:"not_asked,omitempty"` // why not
 	Named     int      `json:"named"`               // "comparable:" lines it answered
 	Ignored   []string `json:"ignored"`             // those the kernel could not use
