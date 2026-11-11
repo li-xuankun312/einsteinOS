@@ -274,8 +274,8 @@ func TestDirsSectionPrunesTestsBenchmarksAndExamplesAndTheSurveyCannotUndoIt(t *
 	if len(*prompts) != 1 {
 		t.Fatalf("one conversation, got %d", len(*prompts))
 	}
-	if !strings.Contains((*prompts)[0], "PART 0 — DIRECTORIES") || !strings.Contains((*prompts)[0], "skip tests, benchmarks, examples, docs, CI, vendored, build scripts") {
-		t.Fatal("the directory part and the skip rule must be in the prompt")
+	if !strings.Contains((*prompts)[0], "[DIRECTORIES]") || !strings.Contains((*prompts)[0], surveyDirsFact) {
+		t.Fatal("the directories and what keeping one means must be in the prompt")
 	}
 	if len(h) != len(kept) {
 		t.Fatalf("heavy=%d want exactly the %d files of the kept directories (the test and benchmark file the survey called heavy must be light)", len(h), len(kept))
@@ -313,7 +313,7 @@ func TestMissingDirsSectionIsAskedForAloneWithTheShortPrompt(t *testing.T) {
 		return "<survey>\nheavy=" + strings.Join(heavy, ",") + "\nlight=\n</survey>\n<plan>\n" + chunkLines(heavy, 10) + "</plan>\n" + DoneMarker
 	})
 	m := useSeqModel(t, func(prompt string) string {
-		if strings.Contains(prompt, "which have core algorithms") {
+		if strings.Contains(prompt, "the kernel reads the line keep=") {
 			return "keep=src/core"
 		}
 		return ""

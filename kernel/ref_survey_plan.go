@@ -138,12 +138,16 @@ func pruneByDirs(heavy []string, light []lightFile, lines map[string]int, keep [
 // answer had no usable <dirs> section.
 func askDirsAlone(owner, name string, stats map[string]*dirStat) []string {
 	var p strings.Builder
-	fmt.Fprintf(&p, "%d directories in %s/%s. which have core algorithms?\n\n", len(stats), owner, name)
+	fmt.Fprintf(&p, surveyDirsFmt, len(stats), owner, name)
 	p.WriteString(dirTable(stats))
-	p.WriteString("\nreply ONLY: keep=dir1,dir2,dir3\nskip tests, benchmarks, examples, docs, CI, vendored, build scripts.\n")
-	p.WriteString(DoneInstruction())
+	p.WriteString(surveyDirsFact + surveyKeepLineFact + DoneInstruction())
+	files := 0
+	for _, st := range stats {
+		files += st.files
+	}
+	prompt := surveyShell(owner, name, "", files, len(stats), p.String())
 	for attempt := 1; attempt <= 5; attempt++ {
-		child, err := Fork(p.String(), ".")
+		child, err := Fork(prompt, ".")
 		if err != nil {
 			log.Printf("surveyAndPlan: dir fork failed (attempt %d/5): %v", attempt, err)
 			continue
@@ -254,25 +258,17 @@ func buildSurveyPlanPrompt(owner, name, sha, task string, files []string, lines 
 	for _, f := range files {
 		p.WriteString(fmt.Sprintf("--- %s (%d lines) ---\n%s\n\n", f, lines[f], previews[f]))
 	}
+	stats := dirStatsOf(files, lines)
 	if withDirs {
-		p.WriteString(fmt.Sprintf("[PART 0 — DIRECTORIES] %d directories. which have core algorithms?\n", len(dirStatsOf(files, lines))))
-		p.WriteString(dirTable(dirStatsOf(files, lines)))
-		p.WriteString("skip tests, benchmarks, examples, docs, CI, vendored, build scripts.\n")
-		p.WriteString("files outside the directories you keep are light: do not list them in part 1.\n\n")
+		p.WriteString(fmt.Sprintf(surveyDirsFmt, len(stats), owner, name))
+		p.WriteString(dirTable(stats))
+		p.WriteString(surveyDirsFact)
 	}
-	p.WriteString("[PART 1 — SURVEY] classify EVERY file in the kept directories: does it need mathematical specification (LAYER 1a/1b)?\n")
-	p.WriteString("files with algorithms, state machines, concurrency, retry logic, invariants → heavy\n")
-	p.WriteString("simple wrappers, RAII, getters/setters, configs, constants, tests → light\n")
-	p.WriteString("a file is in exactly one of the two lists.\n\n")
+	p.WriteString(surveyHeavyLightFact)
 	if withPlan {
-		p.WriteString("[PART 2 — PLAN] group the files you marked HEAVY into chunks for theory analysis.\n")
-		p.WriteString("- each chunk is analyzed by one conversation with ~50 tool calls budget; each file needs ~4 tool calls (read source + write theory + verify)\n")
-		p.WriteString("- so each chunk should have roughly 8-12 files: enough to fill one session\n")
-		p.WriteString("- a chunk of 1-3 files wastes a conversation; a chunk of 20+ files will not finish\n")
-		p.WriteString("- files in the same directory stay together when possible; related directories (include/x/ and src/x/) can go together\n")
-		p.WriteString("- plan ONLY files you marked heavy, each file once\n\n")
+		p.WriteString(fmt.Sprintf(surveyPlanFact, TurnToolBudget, RoundBudget("theorize_chunk_1")))
 	}
-	p.WriteString("[OUTPUT FORMAT] exactly these tagged sections, nothing outside them except the last line:\n")
+	p.WriteString(surveySectionsFact)
 	if withDirs {
 		p.WriteString("<dirs>\nkeep=dir1,dir2,dir3\n</dirs>\n")
 	}
@@ -280,10 +276,36 @@ func buildSurveyPlanPrompt(owner, name, sha, task string, files []string, lines 
 	if withPlan {
 		p.WriteString("<plan>\nchunk: path1, path2, path3\nchunk: path4, path5\n</plan>\n")
 	}
-	p.WriteString("use EXACT paths and directory names from the lists above.\n")
 	p.WriteString(DoneInstruction())
-	return p.String()
+	return surveyShell(owner, name, sha, len(files), len(stats), p.String())
 }
+
+// surveyShell: a survey prompt — the shell with the reference's files inserted
+func surveyShell(owner, name, sha string, files, dirs int, content string) string {
+	to := "einsteinOS/theory"
+	if d := GetDevRepos(); len(d) > 0 {
+		to = d[0] + " 的 einsteinOS/theory"
+	}
+	return Bagu(fmt.Sprintf(theorizeWhereFmt, owner, name, shortSHA12(sha)), fmt.Sprintf(theoryPlanWhatFmt, files, dirs), content, fmt.Sprint(files), to)
+}
+
+// the survey's facts: %[1]d directories in %[2]s/%[3]s
+const surveyDirsFmt = "[DIRECTORIES] %[1]d directories in %[2]s/%[3]s\n"
+
+// what keeping a directory means to the kernel
+const surveyDirsFact = "the files of a directory not kept are light.\n"
+
+// what heavy and light mean to the kernel
+const surveyHeavyLightFact = "[HEAVY / LIGHT] a heavy file is theorized: its .lean theory is written before its code. a light file is ported straight from the definitions the kernel measures in it, with no theory. a file the answer does not name keeps the kernel's own classification.\n"
+
+// %[1]d/%[2]d the tool calls a round and the rounds of one chunk's conversation
+const surveyPlanFact = "[CHUNKS] the heavy files are theorized in chunks; each chunk is one theory conversation: up to %[1]d tool calls a round, up to %[2]d rounds.\n"
+
+// the one line the kernel reads when it asks for the directories alone
+const surveyKeepLineFact = "[ANSWER] the kernel reads the line keep=<directory names from the list, comma-separated>\n"
+
+// the sections the kernel reads
+const surveySectionsFact = "[ANSWER] the kernel reads these tagged sections, with exact paths and directory names from the lists:\n"
 
 func shortSHA12(sha string) string {
 	if len(sha) > 12 {

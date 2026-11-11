@@ -431,6 +431,18 @@ type surveyOutput struct {
 	light []lightFile
 }
 
+// the two lines the kernel reads from a file survey
+const surveyTwoLinesFact = "[ANSWER] the kernel reads two lines, with exact paths from the list:\nheavy=comma,separated,paths\nlight=comma,separated,paths\n"
+
+// keysOf: the paths of a path → lines map
+func keysOf(m map[string]int) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
 // fileSurveyChild: fork a child that sees the file listing + first 10 lines
 // of each file, and outputs which files need full mathematical analysis.
 // child outputs kv format: heavy=path1,path2,... and light=path3,path4,...
@@ -440,9 +452,7 @@ func fileSurveyChild(owner, name, sha string, initHeavy []string, initLight []li
 	var prompt strings.Builder
 	prompt.WriteString(fmt.Sprintf("[TASK] %s\n\n", task))
 	prompt.WriteString(fmt.Sprintf("[FILE SURVEY] %s/%s commit %s\n", owner, name, sha[:12]))
-	prompt.WriteString("classify each file: does it need mathematical specification (LAYER 1a/1b)?\n")
-	prompt.WriteString("files with algorithms, state machines, concurrency, retry logic, invariants → heavy\n")
-	prompt.WriteString("simple wrappers, RAII, getters/setters, configs, constants, tests → light\n\n")
+	prompt.WriteString(surveyHeavyLightFact + "\n")
 
 	allFiles := make(map[string]int) // path → lines
 	for _, f := range initHeavy {
@@ -464,14 +474,13 @@ func fileSurveyChild(owner, name, sha string, initHeavy []string, initLight []li
 		prompt.WriteString(fmt.Sprintf("--- %s (%d lines) ---\n%s\n\n", lf.path, lf.lines, codePreview(content, 10)))
 	}
 
-	prompt.WriteString("output ONLY two lines, nothing else:\n")
-	prompt.WriteString("heavy=comma,separated,paths\n")
-	prompt.WriteString("light=comma,separated,paths\n")
+	prompt.WriteString(surveyTwoLinesFact)
 	prompt.WriteString(DoneInstruction())
+	surveyPrompt := surveyShell(owner, name, sha, len(allFiles), len(dirStatsOf(keysOf(allFiles), allFiles)), prompt.String())
 
 	var heavyPaths, lightPaths []string
 	for attempt := 1; attempt <= 5; attempt++ {
-		child, err := Fork(prompt.String(), ".")
+		child, err := Fork(surveyPrompt, ".")
 		if err != nil {
 			log.Printf("fileSurveyChild: fork failed (attempt %d/5): %v", attempt, err)
 			continue
