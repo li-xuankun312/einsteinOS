@@ -495,6 +495,9 @@ func (pe *ProcEngine) runBenchmark(pid int64, branch string) float64 {
 // it does NOT write code, fix bugs, or modify anything.
 // ---------------------------------------------------------------------------
 
+// %[1]d the commit's index, %[2]s its sha
+const puppetWhatFmt = "参考的第 %[1]d 个 commit（%[2]s）的流水线已经跑完"
+
 func (pe *ProcEngine) verifyCommit(pid int64, branch string, cursor int, sha string) string {
 	devRepo := pe.DevRepo
 	if devRepo == "" {
@@ -507,47 +510,28 @@ func (pe *ProcEngine) verifyCommit(pid int64, branch string, cursor int, sha str
 	stepLog := PRStepLog(pid)
 	convStatus := ConvRegistryStatus()
 
-	// build verify prompt — only facts, no opinions
-	var prompt strings.Builder
-	prompt.WriteString("[TASK] verify whether this commit's pipeline succeeded.\n\n")
-	prompt.WriteString(fmt.Sprintf("[COMMIT] index=%d sha=%s\n", cursor, sha))
-	prompt.WriteString(fmt.Sprintf("[BRANCH] %s\n", branch))
-	prompt.WriteString(fmt.Sprintf("[DEV REPO] %s (clone to /home/claude/%s)\n\n", devRepo, repoName))
-
-	prompt.WriteString("[WHAT TO CHECK]\n")
-	prompt.WriteString("1. git checkout the branch, run: ls .einsteinOS/convs/ to see unit work logs\n")
-	prompt.WriteString("2. for each unit log, grep for 'compile=' and 'smoke=' lines\n")
-	prompt.WriteString("3. count how many units exist vs how many have compile=pass\n")
-	prompt.WriteString("4. check if the code actually compiles: run make or the compile command from the logs\n")
-	prompt.WriteString("5. if ALL units compile=pass AND the whole project compiles → output PASS\n")
-	prompt.WriteString("6. if ANY unit is missing, failed, or pending → output FAIL: <which unit and why>\n\n")
-
-	prompt.WriteString("[STEP LOG]\n")
+	// the verify prompt: the shell with the kernel's own record of the commit inserted. The
+	// units' results come from the plan, read by the kernel and masked: a conversation never
+	// reads the state branch, whose plan names the reference (dev_plan_io.go).
+	var c strings.Builder
+	c.WriteString(fmt.Sprintf("[COMMIT] index=%d sha=%s\n[BRANCH] %s\n[DEV REPO] %s (clone to /home/claude/%s)\n\n", cursor, sha, branch, devRepo, repoName))
+	if plan, err := loadDevPlanFromBranch(devRepo, branch); err == nil && plan != nil {
+		c.WriteString("[UNITS — the kernel's plan for this branch]\n" + maskShownPrompt(pe.RefOwner+"/"+pe.RefName, plan.Summary()) + "\n\n")
+	}
 	if len(stepLog) > 3000 {
-		prompt.WriteString(stepLog[:3000])
-		prompt.WriteString("\n... (truncated)\n")
-	} else {
-		prompt.WriteString(stepLog)
+		stepLog = stepLog[:3000] + "\n... (truncated)"
 	}
-	prompt.WriteString("\n\n")
-
-	prompt.WriteString("[CONV REGISTRY]\n")
+	c.WriteString("[STEP LOG]\n" + stepLog + "\n\n")
 	if len(convStatus) > 2000 {
-		prompt.WriteString(convStatus[:2000])
-	} else {
-		prompt.WriteString(convStatus)
+		convStatus = convStatus[:2000]
 	}
-	prompt.WriteString("\n\n")
+	c.WriteString("[CONV REGISTRY]\n" + convStatus + "\n\n")
+	c.WriteString(reviewVerdictFact + DoneInstruction())
+	verifyPrompt := Bagu(fmt.Sprintf(devWhereFmt, branch), fmt.Sprintf(puppetWhatFmt, cursor, short_sha(sha)), c.String(), "1", devRepo)
 
-	prompt.WriteString("[OUTPUT FORMAT]\n")
-	prompt.WriteString("your LAST line must be exactly one of:\n")
-	prompt.WriteString("  PASS\n")
-	prompt.WriteString("  FAIL: <one line reason>\n")
-	prompt.WriteString("nothing else on that line. do NOT write code or fix anything.\n")
+	log.Printf("proc_engine: commit %d forking verify_conv (%d bytes prompt)", cursor, len(verifyPrompt))
 
-	log.Printf("proc_engine: commit %d forking verify_conv (%d bytes prompt)", cursor, prompt.Len())
-
-	child, err := ForkWithRole(prompt.String(), ".", "verify_conv")
+	child, err := ForkWithRole(verifyPrompt, ".", "verify_conv")
 	if err != nil {
 		log.Printf("proc_engine: verify_conv fork failed: %v", err)
 		return "FAIL: verify_conv fork failed"
