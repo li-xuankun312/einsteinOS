@@ -201,16 +201,28 @@ func RefFileAt(owner, name, sha, path string) (string, error) {
 	}
 	// the clone is blobless: a blob not fetched yet is fetched from the network here, so the
 	// call is bounded and never asks for credentials
-	ctx, cancel := context.WithTimeout(context.Background(), refFileTimeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", "--git-dir", r.CloneDir, "show", sha+":"+path)
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
-	out, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("git show %s:%s: %v", sha, path, err)
+	// 11/11 05:58 five source files of 07b4a6263ab9 were not read this way — their blobs did not
+	// come directly — and fileSurvey counted 207 files of 212. A blob that does not come
+	// directly is asked for through the machine's proxy, and a stalled transfer is given up
+	// after 20 s below 1 KB/s rather than at the timeout.
+	var err error
+	for _, proxy := range refFetchRoutes() {
+		ctx, cancel := context.WithTimeout(context.Background(), refFileTimeout)
+		args := append(append([]string{"--git-dir", r.CloneDir}, refProxyArgs(proxy)...), refStallArgs...)
+		cmd := exec.CommandContext(ctx, "git", append(args, "show", sha+":"+path)...)
+		cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+		out, e := cmd.Output()
+		cancel()
+		if e == nil {
+			return string(out), nil
+		}
+		err = fmt.Errorf("git show %s:%s %s: %v", sha, path, refRouteName(proxy), e)
 	}
-	return string(out), nil
+	return "", err
 }
+
+// refStallArgs: a transfer slower than 1 KB/s for 20 s is given up.
+var refStallArgs = []string{"-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=20"}
 
 const refFileTimeout = 60 * time.Second
 
