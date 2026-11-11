@@ -32,12 +32,13 @@ type EvalComparison struct {
 }
 
 const (
-	// %[1]s the uploaded data file
-	evalComparePromptFmt = "[TASK] the kernel ran this machine's port end to end and read numbers other repositories published. " +
-		"for each published number, decide whether the conditions it was measured under correspond in proportion to this run's " +
-		"(the model, the memory capacity), and if so which of the port's measured rates it is the same measurement as.\n" +
-		"you may NOT start other conversations.\n\n[DATA] %[1]s\n\n[OUTPUT FORMAT]\n" +
-		"only lines like `comparable: <number id> <port label>`, copying the port label exactly; nothing for a number that does not correspond.\n"
+	// the data file and what the kernel does with the answer: %[1]s the uploaded file
+	evalCompareContentFmt = "[DATA] %[1]s: the conditions of this run measured by the kernel (the model, GPU memory, memory, the reference commit), " +
+		"the port's end-to-end output and its rates, and every published number with the document it is in.\n" +
+		"[ANSWER] the kernel reads lines 'comparable: <number id> <port label>', the label copied from the port's rates. a number named there " +
+		"is compared with that rate in its unit: the port worse than it fails the integration (integration_below_external). a number no line names is not compared.\n"
+	// inserted into the shell: %[1]d published numbers, %[2]d rates of the port
+	evalCompareWhatFmt       = "内核在这台机器上端到端跑了移植版，测到 %[2]d 个速率，并读到其他仓库发布的 %[1]d 个数字"
 	gateEvalBelowExternalFmt = "integration_below_external: %[1]q: the port %[2]g %[3]s, %[4]s %[5]s published %[6]g %[3]s under conditions the planner found corresponding (%[7]s is better)"
 	evalCompareFile          = "eval_compare.md"
 )
@@ -87,7 +88,9 @@ func evalComparisons(pid int64, repo string, cond EvalConditions, e2e EvalBenchR
 	} else {
 		tr.Asked = true
 		SetForkFiles([]ForkFile{{Name: evalCompareFile, Data: []byte(evalCompareData(cond, e2e, clues, docs))}})
-		out = devPlannerRunner(pid, repo, fmt.Sprintf(evalComparePromptFmt, localUploadsPath(evalCompareFile))+DoneInstruction())
+		prompt := Bagu(localUploadsPath(evalCompareFile), fmt.Sprintf(evalCompareWhatFmt, len(clues), len(e2e.Metrics)),
+			fmt.Sprintf(evalCompareContentFmt, localUploadsPath(evalCompareFile))+spawnLeafFact+DoneInstruction(), fmt.Sprint(len(clues)), spawnTo())
+		out = devPlannerRunner(pid, repo, prompt)
 		evalCompareMu.Lock()
 		evalCompareAnswers[key] = out
 		evalCompareMu.Unlock()
