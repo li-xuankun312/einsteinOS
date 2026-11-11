@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -113,5 +114,33 @@ func TestARepositoryNotTakenIsNotMeasuredAgain(t *testing.T) {
 	_, tr := evalDiscover("task", nil, func(string) (bool, string) { return true, "" })
 	if !strings.Contains(strings.Join(tr.NotTaken, " "), "llvm/llvm-project: does not clone (repository not found) (measured before in this run)") {
 		t.Fatalf("not taken: %v", tr.NotTaken)
+	}
+}
+
+// Three verifications of the integration unit asked for the same commit's measurement at the
+// same time; it is measured once and the others wait for it.
+func TestTheCommitIsMeasuredOnceForVerificationsSideBySide(t *testing.T) {
+	oa := evalAskFn
+	defer func() { evalAskFn = oa }()
+	var mu sync.Mutex
+	asks := 0
+	evalAskFn = func(string) (string, error) {
+		mu.Lock()
+		asks++
+		mu.Unlock()
+		time.Sleep(100 * time.Millisecond)
+		return "", nil
+	}
+	repo, sha := "nobody/side-by-side", "0000000000000000000000000000000000000000"
+	var wg sync.WaitGroup
+	for i := 0; i < 3; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); evalBaseFor(repo, sha, nil) }()
+	}
+	wg.Wait()
+	one := asks
+	evalBaseFor(repo, sha, nil)
+	if one == 0 || asks != one || one > 3 {
+		t.Fatalf("asks: %d side by side, %d after", one, asks)
 	}
 }

@@ -23,6 +23,8 @@ var (
 	// are measured once per reference commit and reused by every verification of it
 	evalBaseMu    sync.Mutex
 	evalBaseCache = map[string]evalBase{}
+	// evalBaseInFlight: the measurements running now, closed when stored
+	evalBaseInFlight = map[string]chan struct{}{}
 )
 
 type evalBase struct {
@@ -54,14 +56,35 @@ func integrationEval(unitID string) func(string, []EvalBench) (string, string) {
 }
 
 // evalBaseFor measures the reference at sha and the searched repositories, once per sha.
+//
+// Verifications that ask at the same time wait for the one measuring: 11/10 between 16:46 and
+// 22:45 the integration unit's verifications, running side by side, each found the cache
+// empty and ran the search again — six searches of the same commit.
 func evalBaseFor(repo, sha string, benches []EvalBench) evalBase {
 	key := repo + "@" + sha
-	evalBaseMu.Lock()
-	b, ok := evalBaseCache[key]
-	evalBaseMu.Unlock()
-	if ok {
-		return b
+	for {
+		evalBaseMu.Lock()
+		b, ok := evalBaseCache[key]
+		wait, measuring := evalBaseInFlight[key]
+		if !ok && !measuring {
+			evalBaseInFlight[key] = make(chan struct{})
+		}
+		evalBaseMu.Unlock()
+		if ok {
+			return b
+		}
+		if !measuring {
+			break
+		}
+		<-wait
 	}
+	var b evalBase
+	defer func() {
+		evalBaseMu.Lock()
+		close(evalBaseInFlight[key])
+		delete(evalBaseInFlight, key)
+		evalBaseMu.Unlock()
+	}()
 	b.reference = evalRunRepo(repo, refBareDir(repo), sha, benches)
 	b.clues = evalClues(repo, refBareDir(repo), sha)
 	evalTaskMu.Lock()
