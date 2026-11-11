@@ -738,8 +738,12 @@ func (r *devRun) reviewUnit(unit DevPlanNode, idx, total int, convID string, st 
 	// the files the verdict names decide whose failure it is (review_owner.go)
 	if blames := r.reviewBlame(unit, verdict); len(plan.ReopenableUnits(blames)) > 0 {
 		blames = plan.ReopenableUnits(blames)
+		copies := ""
+		if dir, err := devRepoLocalDir(r.devRepo); err == nil {
+			copies = reviewCopiesText(r.branch, definitionCopies(dir, r.branch, verdict))
+		}
 		for _, id := range blames {
-			plan.MarkReopen(id, DevFailure{Kind: "review_fail", Text: fmt.Sprintf(reopenReasonFmt, reason, unit.ID), BaseRef: r.branch})
+			plan.MarkReopen(id, DevFailure{Kind: "review_fail", Text: fmt.Sprintf(reopenReasonFmt, reason, unit.ID), BaseRef: r.branch, Copies: copies})
 		}
 		log.Printf("dev_from_theorems: %s unit %s: the review faulted files of %s — %s reopened, unit %s is not held to answer for it",
 			r.repo, unit.ID, strings.Join(blames, " "), strings.Join(blames, " "), unit.ID)
