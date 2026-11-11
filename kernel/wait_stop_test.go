@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 )
@@ -46,5 +47,22 @@ func TestTheNextConversationWaitsForTheAbandonedOne(t *testing.T) {
 	waitAbandoned(pid, "o/r", "u")
 	if time.Since(start) > 20*time.Millisecond {
 		t.Fatal("a conversation that was not given up on is not waited for here")
+	}
+}
+
+// A dev unit's conversation is not forked while another of its role still runs.
+func TestASecondConversationOfADevRoleIsNotStarted(t *testing.T) {
+	const pid, role = int64(990005), "dev_unit_41"
+	m := &TaskMeta{Role: role, Done: make(chan struct{})}
+	metaMu.Lock()
+	taskMeta[pid] = m
+	metaMu.Unlock()
+	defer func() { metaMu.Lock(); delete(taskMeta, pid); metaMu.Unlock() }()
+	if _, err := ForkWithTermination("p", ".", role, nil); err == nil || !strings.Contains(err.Error(), "still running (pid 990005)") {
+		t.Fatalf("err: %v", err)
+	}
+	close(m.Done)
+	if p, alive := liveRole(role); alive {
+		t.Fatalf("an ended conversation is not live: %d", p)
 	}
 }

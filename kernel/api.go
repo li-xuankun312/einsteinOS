@@ -192,9 +192,34 @@ func ForkWithRole(prompt string, pwd string, role string) (int64, error) {
 	return pid, err
 }
 
+// forkRoleBusyFmt: a dev unit has one conversation at a time. 11/10 from 22:39 9a378854,
+// b7563fcf and e8e9ed00 — three conversations of role dev_unit_41 — changed the integration
+// unit's files at once.
+const forkRoleBusyFmt = "a conversation of role %[1]s is still running (pid %[2]d): no second one is started"
+
+// liveRole: a task of role that has not ended, if any.
+func liveRole(role string) (int64, bool) {
+	metaMu.Lock()
+	defer metaMu.Unlock()
+	for pid, m := range taskMeta {
+		if m.Role != role || m.Done == nil {
+			continue
+		}
+		select {
+		case <-m.Done:
+		default:
+			return pid, true
+		}
+	}
+	return 0, false
+}
+
 // ForkWithTermination creates a child with a custom termination condition.
 // Use when the caller needs finer control than role-based defaults.
 func ForkWithTermination(prompt string, pwd string, role string, cond TerminationCondition) (int64, error) {
+	if pid, alive := liveRole(role); alive && strings.HasPrefix(role, "dev_") {
+		return 0, fmt.Errorf(forkRoleBusyFmt, role, pid)
+	}
 	// set both role and termination BEFORE fork — child consumes atomically
 	SetForkRole(role)
 	SetPendingTermination(cond)
