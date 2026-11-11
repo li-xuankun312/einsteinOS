@@ -27,7 +27,7 @@ const TheoryOutputsDir = "/mnt/user-data/outputs"
 
 // theorizeFacts: the kernel's contracts with a theory conversation, as facts —
 // %[1]s TheoryOutputsDir, %[2]s/%[3]s the proof reference's URL and clone dir,
-// %[4]s the proofs under it, %[5]s/%[6]s Axle's session and CSRF, %[7]s the done line.
+// %[4]s the proofs under it, %[5]s the Axle facts (axleFacts), %[6]s the done line.
 // The SOURCES line is what the kernel's coverage check reads (11/04 03:13:42 chunk 5 was
 // continued for files already covered when it matched by name alone).
 const theorizeFacts = `[OUTPUT] %[1]s/<CamelCaseName>.lean, one file per module, named by what the code does; the kernel finds them by the paths in this conversation (create_file, and one ls %[1]s).
@@ -46,20 +46,29 @@ SOURCES: <every reference file this module covers, by its full repo path, comma-
 then sections (-- § name) with theorems, each with a /-- docstring -/.
 [PROOF REFERENCE] git clone %[2]s %[3]s — Lean 4 proofs: the files under %[4]s
 [MEASURED BY THE KERNEL] a theorem that uses sorry is not proved yet; the sorry count is measured on the machine that runs you, and every theorem statement changed after it was verified is recorded with how it changed.
-[AXLE] answered by the machine that runs you: each round of Axle calls costs one round trip of this conversation. Axle refuses native_decide. okay:false is a failed proof.
+%[5]s%[6]s`
+
+// axleFactsFmt: how Axle is reached from a conversation, as facts — %[1]s/%[2]s its session
+// and CSRF. A theory conversation and a proof repair are given the same.
+const axleFactsFmt = `[AXLE] answered by the machine that runs you: each round of Axle calls costs one round trip of this conversation. Axle refuses native_decide. okay:false is a failed proof.
 curl -s https://axle.axiommath.ai/api/v1/verify_proof \
   -H 'content-type: application/json' \
-  -b 'provertools_session=%[5]s' \
-  -H 'x-browser-api-csrf: %[6]s' \
+  -b 'provertools_session=%[1]s' \
+  -H 'x-browser-api-csrf: %[2]s' \
   -H 'x-request-source: web' \
   -H 'origin: https://axle.axiommath.ai' \
   --data-raw '{"formal_statement":"<with sorry>","content":"<with proof>","ignore_imports":true,"environment":"lean-4.35.0","timeout_seconds":120}'
-%[7]s`
+`
+
+// axleFacts: the Axle facts with the credentials inserted.
+func axleFacts() string {
+	session, csrf := axleCredentials()
+	return fmt.Sprintf(axleFactsFmt, session, csrf)
+}
 
 // formatTheorizeInstruction: the theorize facts with their values inserted.
 func formatTheorizeInstruction() string {
-	session, csrf := axleCredentials()
-	return fmt.Sprintf(theorizeFacts, TheoryOutputsDir, proofRefURL, proofRefDir, ProofReferencePath(), session, csrf, DoneInstruction())
+	return fmt.Sprintf(theorizeFacts, TheoryOutputsDir, proofRefURL, proofRefDir, ProofReferencePath(), axleFacts(), DoneInstruction())
 }
 
 // theorizePrompt: a theory conversation's prompt — the shell with the reference commit, what

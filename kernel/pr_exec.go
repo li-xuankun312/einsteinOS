@@ -516,19 +516,19 @@ var proofFixRunner = func(pid int64, repo, role string, attempt int, prompt stri
 	return nil
 }
 
+// inserted into the shell for a proof repair
+const proofFixWhere = "理论里 Axle 拒绝的证明"
+
+// %[1]d the round, %[2]d theorems
+const proofFixWhatFmt = "第 %[1]d 轮，Axle 拒绝了 %[2]d 个定理"
+
+// what the kernel does with a repaired proof
+const proofFixFact = "[MEASURED BY THE KERNEL] each proof is re-checked by the kernel through Axle against the statement above, unchanged; a proof of any other statement is rejected, and Axle's answers are recorded by the kernel itself.\n"
+
 // dev_repair_proofs forks one proof_fix child for the failing theorems and
 // returns the theory with every proof the kernel could re-verify patched in.
 func dev_repair_proofs(pid int64, repo, theory string, failed []string, attempt int) string {
 	var p strings.Builder
-	p.WriteString("[TASK] repair failing Lean 4 proofs. Axle rejected the proofs below.\n\n")
-	p.WriteString("[RULES]\n")
-	p.WriteString("- change ONLY the proof (after `:= by`). The theorem statement is fixed; the kernel re-checks your proof\n")
-	p.WriteString("  against the ORIGINAL statement, so a weakened or altered statement is simply rejected.\n")
-	p.WriteString("- verify each theorem with the Axle curl from your instructions, one curl per theorem.\n")
-	p.WriteString("- use omega / decide / simp / norm_num / Nat lemmas. no native_decide, no sorry, no new axioms.\n")
-	p.WriteString("- the kernel records Axle's responses itself. what you write about results is not read.\n")
-	p.WriteString("- do NOT write code files, do NOT git push, do NOT touch anything except these proofs.\n")
-	p.WriteString("- stop when every theorem returns okay=true; if one resists 4 distinct approaches, stop and name it.\n\n")
 	p.WriteString("[FAILING THEOREMS]\n")
 	for _, n := range failed {
 		r, ok := Proofs.Get(n)
@@ -538,10 +538,16 @@ func dev_repair_proofs(pid int64, repo, theory string, failed []string, attempt 
 		p.WriteString(fmt.Sprintf("### %s\nstatement:\n```lean\n%s\n```\ncurrent proof:\n```lean\n%s\n```\naxle error: %s\n\n",
 			n, r.Statement, r.Content, r.Error))
 	}
+	p.WriteString(proofFixFact + axleFacts())
+	to := "einsteinOS/theory"
+	if d := GetDevRepos(); len(d) > 0 {
+		to = d[0] + " 的 einsteinOS/theory"
+	}
+	prompt := Bagu(proofFixWhere, fmt.Sprintf(proofFixWhatFmt, attempt, len(failed)), p.String(), fmt.Sprint(len(failed)), to)
 	role := fmt.Sprintf("proof_fix_%d", attempt)
 	log.Printf("dev_repair_proofs: %s round %d, %d theorem(s): %v (%d bytes prompt)",
-		repo, attempt, len(failed), failed, p.Len())
-	if err := proofFixRunner(pid, repo, role, attempt, p.String()); err != nil {
+		repo, attempt, len(failed), failed, len(prompt))
+	if err := proofFixRunner(pid, repo, role, attempt, prompt); err != nil {
 		log.Printf("dev_repair_proofs: proof_fix child failed: %v", err)
 		return theory
 	}
