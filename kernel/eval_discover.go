@@ -22,6 +22,28 @@ import (
 
 const evalBareDirFmt = "/tmp/eval_%[1]s_%[2]s.git"
 
+// evalCloneTimeout: how long a searched repository's clone may take.
+var evalCloneTimeout = 120 * time.Second
+
+// runKillingGroup runs name args in a process group of its own and, at timeout, kills the
+// whole group and stops waiting for its output. 11/10 the clone's 120 s context killed git
+// only; git-remote-https held the output pipe, CombinedOutput waited on it, and the llvm
+// clone was reported "not taken" 37 minutes after it started (19:15 → 19:52).
+func runKillingGroup(timeout time.Duration, name string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	setProcGroup(cmd)
+	cmd.Cancel = func() error { killProcGroup(cmd); return nil }
+	cmd.WaitDelay = 2 * time.Second
+	out, err := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		err = fmt.Errorf("killed after %v", timeout)
+	}
+	return string(out), err
+}
+
 func evalBareDir(repo string) string {
 	owner, name, _ := strings.Cut(repo, "/")
 	return fmt.Sprintf(evalBareDirFmt, owner, name)
@@ -43,14 +65,11 @@ var (
 			return nil
 		}
 		os.RemoveAll(dir)
-		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-		defer cancel()
-		cmd := exec.CommandContext(ctx, "git", "clone", "--bare", "--filter=blob:none",
+		out, err := runKillingGroup(evalCloneTimeout, "git", "clone", "--bare", "--filter=blob:none",
 			fmt.Sprintf("https://github.com/%s/%s.git", owner, name), dir)
-		cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
-		if out, err := cmd.CombinedOutput(); err != nil {
+		if err != nil {
 			os.RemoveAll(dir)
-			return fmt.Errorf("%v: %s", err, tailText(string(out), 200))
+			return fmt.Errorf("%v: %s", err, tailText(out, 200))
 		}
 		return nil
 	}

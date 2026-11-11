@@ -3,6 +3,7 @@ package kernel
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // The search runs even though the task names its reference (ref_discover returns before it
@@ -73,5 +74,21 @@ func TestALargeRepositoryIsNotCloned(t *testing.T) {
 	}
 	if len(got) != 2 || !strings.Contains(strings.Join(tr.NotTaken, " "), "llvm/llvm-project: too large to clone here (GitHub size 2636 MiB") {
 		t.Fatalf("kept %v, not taken %v", got, tr.NotTaken)
+	}
+}
+
+// A command whose child keeps the output pipe open is killed with its child at the timeout,
+// and the call returns then — not when the child ends.
+func TestATimedOutCommandIsKilledWithItsChildren(t *testing.T) {
+	start := time.Now()
+	_, err := runKillingGroup(time.Second, "sh", "-c", "sleep 30 & sleep 30")
+	if err == nil || !strings.Contains(err.Error(), "killed after 1s") {
+		t.Fatalf("err: %v", err)
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Fatalf("returned after %v", d)
+	}
+	if out, err := runKillingGroup(5*time.Second, "sh", "-c", "echo ok"); err != nil || strings.TrimSpace(out) != "ok" {
+		t.Fatalf("a command that ends: %q %v", out, err)
 	}
 }
