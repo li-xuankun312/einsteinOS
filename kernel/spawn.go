@@ -198,8 +198,6 @@ type JudgeAnswer struct {
 // shared background; items are numbered 1..n.
 func BuildJudgePrompt(context string, items []JudgeItem) string {
 	var b strings.Builder
-	b.WriteString("[TASK] answer EVERY question below. you are a judge, not a developer: do not write or change code,\n")
-	b.WriteString("do not start other conversations, do not search for more work. read what you need, decide, answer.\n\n")
 	if strings.TrimSpace(context) != "" {
 		b.WriteString("[CONTEXT]\n" + strings.TrimSpace(context) + "\n\n")
 	}
@@ -207,10 +205,26 @@ func BuildJudgePrompt(context string, items []JudgeItem) string {
 	for i, it := range items {
 		b.WriteString(fmt.Sprintf("%d. %s\n", i+1, strings.TrimSpace(it.Question)))
 	}
-	b.WriteString("\n[OUTPUT FORMAT]\none line per question, in order, exactly:\n<number>: <VERDICT>: <one-line reason>\n")
-	b.WriteString("VERDICT is one word in capitals (PASS, FAIL, YES, NO, or a label the question asked for).\nnothing else after the last answer.\n")
-	b.WriteString(DoneInstruction())
-	return b.String()
+	b.WriteString(judgeAnswerFact + spawnLeafFact + DoneInstruction())
+	return Bagu(judgeWhere, fmt.Sprintf(judgeWhatFmt, len(items)), b.String(), fmt.Sprint(len(items)), spawnTo())
+}
+
+// inserted into the shell for a judge: where, and %[1]d how many questions
+const judgeWhere = "下面这些问题"
+const judgeWhatFmt = "有 %[1]d 个问题要判"
+
+// the lines the kernel reads from a judge
+const judgeAnswerFact = "[ANSWERS] the kernel reads one line per question, in order: <number>: <VERDICT>: <one-line reason>, VERDICT one word in capitals (PASS, FAIL, YES, NO, or a label the question asked for); a question with no such line is NO_ANSWER.\n"
+
+// what the kernel does with a spawn from a judge or plan conversation
+const spawnLeafFact = "the kernel refuses a judge or plan conversation's spawns.\n"
+
+// spawnTo: where a spawned conversation's work goes
+func spawnTo() string {
+	if d := GetDevRepos(); len(d) > 0 {
+		return d[0]
+	}
+	return "the tree"
 }
 
 var judgeLineRe = regexp.MustCompile(`^\s*(\d+)\s*[:.)]\s*([A-Za-z_]+)\s*(?:[:\-–]\s*(.*))?$`)
@@ -394,7 +408,7 @@ func HandleEinsteinCommand(parentConv, cmd string) string {
 			}
 			prompt = BuildJudgePrompt(strings.Join(ctx, "\n"), items)
 		case "work", "plan":
-			prompt = spawnPreamble(parentConv, kind, scope) + body
+			prompt = spawnPrompt(parentConv, kind, scope, body)
 		}
 		res, err := SpawnConv(parentConv, kind, prompt)
 		if err != nil {
@@ -498,17 +512,31 @@ func resolveAddr(a string) string {
 }
 
 // spawnPreamble is what a started work/plan conversation is told about itself.
-func spawnPreamble(parent, kind, scope string) string {
+func spawnPreamble(parent, kind, scope string) string { return spawnPrompt(parent, kind, scope, "") }
+
+// spawnPrompt: a spawned conversation's prompt — the shell with the parent's own words (the
+// heredoc it wrote) in the content, and the kernel's facts after them.
+func spawnPrompt(parent, kind, scope, body string) string {
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("[YOU WERE STARTED BY CONVERSATION %s — kind=%s]\n", shortID(parent), kind))
-	if scope != "" {
-		b.WriteString("[YOUR SCOPE] " + scope + "\ntouch only files that belong to this scope: other conversations are editing the same tree.\n")
+	if body != "" {
+		b.WriteString(body + "\n\n")
 	}
-	b.WriteString("do NOT git push: the kernel verifies and pushes. write your files, then finish with a short summary of what you did.\n")
+	if scope != "" {
+		b.WriteString(fmt.Sprintf(spawnScopeFmt, scope))
+	}
+	b.WriteString(spawnPushFact)
 	if kind == "plan" {
-		b.WriteString("you decide how to split, you write no code and you start no conversations.\n")
+		b.WriteString(spawnLeafFact)
 	}
 	b.WriteString(DoneInstruction())
-	b.WriteString("\n")
-	return b.String()
+	where := fmt.Sprintf(spawnWhereFmt, shortID(parent))
+	return Bagu(where, fmt.Sprintf(spawnWhatFmt, kind), b.String(), "1", spawnTo())
 }
+
+// inserted for a spawned conversation: its parent, its kind, its scope (each %[1]s)
+const spawnWhereFmt = "对话 %[1]s 交给你的工作"
+const spawnWhatFmt = "它开了这个 %[1]s 对话"
+const spawnScopeFmt = "[SCOPE] %[1]s — other conversations edit the same tree.\n"
+
+// what happens to a spawned conversation's files
+const spawnPushFact = "the kernel verifies the tree and pushes it; a push from this conversation is not used.\n"
