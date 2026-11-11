@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"time"
 )
 
 type preVerifyResult struct {
@@ -54,8 +55,45 @@ func PreVerify(role string) (ran, ok bool, report string) {
 	if fn == nil {
 		return false, false, ""
 	}
+	stop := touchRoleWhile(role, preVerifyTouchEvery)
 	ok, report = fn()
+	stop()
 	return true, ok, report
+}
+
+// preVerifyTouchEvery: how often a conversation waiting on the kernel's verification is marked
+// active. 11/10 the integration unit's verification ran for hours (the search's clones);
+// the conversation, waiting on it, did nothing the watchdog could see, was found idle after
+// 2h30m at 18:31 and 21:15, and a second and a third conversation were started for the unit.
+var preVerifyTouchEvery = 30 * time.Second
+
+// touchRoleWhile marks every task of role active now and every interval until stop is called.
+func touchRoleWhile(role string, interval time.Duration) (stop func()) {
+	touch := func() {
+		metaMu.Lock()
+		now := time.Now().Unix()
+		for _, m := range taskMeta {
+			if m.Role == role {
+				m.LastActivity = now
+			}
+		}
+		metaMu.Unlock()
+	}
+	touch()
+	done := make(chan struct{})
+	go func() {
+		t := time.NewTicker(interval)
+		defer t.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-t.C:
+				touch()
+			}
+		}
+	}()
+	return func() { close(done); touch() }
 }
 
 const (
