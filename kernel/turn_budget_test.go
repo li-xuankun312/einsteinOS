@@ -65,7 +65,7 @@ func TestTheBudgetSentenceIsComposedFromWhatThePromptHolds(t *testing.T) {
 		t.Fatal("dev: MaxRounds(30) under a 20-round ceiling")
 	}
 	// the theory instruction itself states where sorry counts come from
-	if !strings.Contains(formatTheorizeInstruction(), "a theorem that uses sorry is not proved yet: the proofs under "+ProofReferencePath()) {
+	if !strings.Contains(formatTheorizeInstruction(), "a theorem that uses sorry is not proved yet") || !strings.Contains(formatTheorizeInstruction(), "the files under "+ProofReferencePath()) {
 		t.Fatal("sorry line")
 	}
 	for _, s := range []string{got, p} {

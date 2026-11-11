@@ -8,7 +8,7 @@ import (
 // 11/04 03:13:42: ple.cu and qsa.cu were reported missing though PleBlockGpu.lean and
 // QsaCacheIndexerAttention.lean covered them. A SOURCES line names the paths exactly.
 func TestASourcesLineCoversShortNamedFiles(t *testing.T) {
-	if !strings.Contains(thi_structure, "SOURCES:") {
+	if !strings.Contains(theorizeFacts, "SOURCES:") {
 		t.Fatal("the module header must ask for the SOURCES line")
 	}
 	files := []string{"src/kernels/cuda/ple.cu", "src/kernels/cuda/qsa.cu"}

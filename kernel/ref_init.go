@@ -25,16 +25,13 @@ type theorem_entry struct {
 // prompts and the local mirror both use it).
 const TheoryOutputsDir = "/mnt/user-data/outputs"
 
-// thi_output takes TheoryOutputsDir.
-const thi_output = `output one .lean file per module via create_file.
-file: %[1]s/<CamelCaseName>.lean — name by what the code DOES, not the source path.
-`
-
-// thi_structure: the SOURCES line is what the kernel's coverage check reads. Matching by
-// name alone missed short ones: 11/04 03:13:42 chunk 5 was continued for src/kernels/cuda/
-// ple.cu and qsa.cu, already covered by PleBlockGpu.lean and QsaCacheIndexerAttention.lean.
-const thi_structure = `each .lean file:
-
+// theorizeFacts: the kernel's contracts with a theory conversation, as facts —
+// %[1]s TheoryOutputsDir, %[2]s/%[3]s the proof reference's URL and clone dir,
+// %[4]s the proofs under it, %[5]s/%[6]s Axle's session and CSRF, %[7]s the done line.
+// The SOURCES line is what the kernel's coverage check reads (11/04 03:13:42 chunk 5 was
+// continued for files already covered when it matched by name alone).
+const theorizeFacts = `[OUTPUT] %[1]s/<CamelCaseName>.lean, one file per module, named by what the code does; the kernel finds them by the paths in this conversation (create_file, and one ls %[1]s).
+[MODULE HEADER] the kernel reads, at the top of each file:
 /-!
 # MODULE: <snake_case_name>
 SOURCES: <every reference file this module covers, by its full repo path, comma-separated>
@@ -46,61 +43,53 @@ SOURCES: <every reference file this module covers, by its full repo path, comma-
 ## Form template identifiers
 <role mapping for downstream code generation — see source names → abstract names>
 -/
-
-then sections (-- § name) with theorems. every theorem gets a /-- docstring -/.
-`
-
-// thi_proofs takes proofRefURL, proofRefDir and ProofReferencePath().
-const thi_proofs = `PROOF STYLE — BEFORE writing any .lean file, run this:
-
-  git clone %[1]s %[2]s
-
-then read 3-5 files under %[3]s to see how real
-Lean 4 proofs are structured. notice: they decompose goals with 'have'
-and 'obtain', main theorems cite helper lemmas, tactics only close
-small leaf goals. model your proofs after what you see there.
-
-do NOT use native_decide (Axle bans it). do NOT change a theorem statement to make it easier to prove.
-a theorem that uses sorry is not proved yet: the proofs under %[3]s show how. every Axle answer
-comes back with the sorry count measured on the machine that runs you.
-`
-
-// thi_axle takes the Axle session cookie and CSRF token.
-//
-// Axle cannot be reached from the sandbox: every call is answered by the machine
-// that runs the conversation, and each batch of calls is one round trip (one
-// completion in the 9-per-10-minutes window). "verify after each .lean file" made
-// a round trip per file; the batch protocol makes it a round trip per attempt.
-const thi_axle = `VERIFICATION — through Axle. every Axle call is answered by the machine that runs you,
-so each round of calls costs one round trip. work in batches:
-  1. write ALL your .lean files first — do not verify between files
-  2. verify them ALL with ONE command (a loop over the files)
-  3. fix every failure in ONE script, then verify them all again
-
+then sections (-- § name) with theorems, each with a /-- docstring -/.
+[PROOF REFERENCE] git clone %[2]s %[3]s — Lean 4 proofs: the files under %[4]s
+[MEASURED BY THE KERNEL] a theorem that uses sorry is not proved yet; the sorry count is measured on the machine that runs you, and every theorem statement changed after it was verified is recorded with how it changed.
+[AXLE] answered by the machine that runs you: each round of Axle calls costs one round trip of this conversation. Axle refuses native_decide. okay:false is a failed proof.
 curl -s https://axle.axiommath.ai/api/v1/verify_proof \
   -H 'content-type: application/json' \
-  -b 'provertools_session=%[1]s' \
-  -H 'x-browser-api-csrf: %[2]s' \
+  -b 'provertools_session=%[5]s' \
+  -H 'x-browser-api-csrf: %[6]s' \
   -H 'x-request-source: web' \
   -H 'origin: https://axle.axiommath.ai' \
   --data-raw '{"formal_statement":"<with sorry>","content":"<with proof>","ignore_imports":true,"environment":"lean-4.35.0","timeout_seconds":120}'
+%[7]s`
 
-if okay:false, fix the proof and re-verify. if timeout/network error, move on.
-`
-
-// thi_scope takes TheoryOutputsDir and DoneInstruction().
-const thi_scope = `produce theory ONLY for your assigned files. do not write .md, .cpp, .py.
-do not push to git. before you finish, run ls %[1]s once so the list of your files is in the conversation, then write a brief summary.
-%[2]s`
-
-// formatTheorizeInstruction assembles the theory prompt from pieces.
+// formatTheorizeInstruction: the theorize facts with their values inserted.
 func formatTheorizeInstruction() string {
 	session, csrf := axleCredentials()
-	return fmt.Sprintf(thi_output, TheoryOutputsDir) + thi_structure +
-		fmt.Sprintf(thi_proofs, proofRefURL, proofRefDir, ProofReferencePath()) +
-		fmt.Sprintf(thi_axle, session, csrf) +
-		fmt.Sprintf(thi_scope, TheoryOutputsDir, DoneInstruction())
+	return fmt.Sprintf(theorizeFacts, TheoryOutputsDir, proofRefURL, proofRefDir, ProofReferencePath(), session, csrf, DoneInstruction())
 }
+
+// theorizePrompt: a theory conversation's prompt — the shell with the reference commit, what
+// this conversation covers (%what), and the content inserted: the task, the kernel's facts,
+// where the bare repo is, the source files, the budget.
+func theorizePrompt(owner, repo, sha, what, task, sources string, files int, budget string) string {
+	dir := fmt.Sprintf("/tmp/ref_%s_%s.git", owner, repo)
+	var c strings.Builder
+	if task != "" {
+		c.WriteString(fmt.Sprintf("[TASK] %s\n\n", task))
+	}
+	c.WriteString(formatTheorizeInstruction())
+	c.WriteString(fmt.Sprintf(theorizeBareRepoFmt, dir, short_sha(sha)))
+	c.WriteString(sources)
+	c.WriteString("\n" + budget)
+	to := "einsteinOS/theory"
+	if d := GetDevRepos(); len(d) > 0 {
+		to = d[0] + " 的 einsteinOS/theory"
+	}
+	return Bagu(fmt.Sprintf(theorizeWhereFmt, owner, repo, short_sha(sha)), what, c.String(), fmt.Sprint(files), to)
+}
+
+// %[1]d files, %[2]d lines of source included
+const theorizeFullWhatFmt = "这次是 %[1]d 个文件，下面包括其中 %[2]d 行源码"
+
+// %[1]s/%[2]s the reference, %[3]s its commit
+const theorizeWhereFmt = "参考仓库 %[1]s/%[2]s 在 commit %[3]s 的源文件"
+
+// %[1]s the bare clone, %[2]s the commit
+const theorizeBareRepoFmt = "[BARE REPO] %[1]s: git --git-dir=%[1]s show %[2]s:<path>\n[SOURCE CODE]\n"
 
 var (
 	theorem_table [NR_THEOREMS]theorem_entry
@@ -625,15 +614,7 @@ func ref_theorize_task(pid int64) string {
 }
 
 func ref_theorize_leaf(parent int64, owner, name, sha string, files []string, task string) string {
-	dir := fmt.Sprintf("/tmp/ref_%s_%s.git", owner, name)
-
 	var src strings.Builder
-	if task != "" {
-		src.WriteString(fmt.Sprintf("[TASK] %s\n\n", task))
-	}
-	src.WriteString(fmt.Sprintf("[REFERENCE] %s/%s commit %s\n%d files\n\n",
-		owner, name, sha[:12], len(files)))
-
 	read := 0
 	skipped := 0
 	var tally sourceTally
@@ -657,22 +638,8 @@ func ref_theorize_leaf(parent int64, owner, name, sha string, files []string, ta
 	log.Printf("ref_theorize: %s/%s %s: %d files (%d binary skipped), %d lines fed",
 		owner, name, sha[:12], len(files), skipped, read)
 
-	var extra string
-	if read < 50 {
-		extra = fmt.Sprintf(
-			"\nNOTE: only %d lines of source were included above (binary/doc files skipped). "+
-				"use git at %s to read the actual source files for this commit: "+
-				"git ls-tree -r --name-only %s | head -50, then git show %s:<path>.\n",
-			read, dir, sha[:12], sha[:12])
-	}
-
-	prompt := src.String() + extra + formatTheorizeInstruction() +
-		fmt.Sprintf("you may use git to read other files for CONTEXT.\n"+
-			"the bare repo is at %s — use `git --git-dir=%s show %s:<path>`.\n"+
-			"do NOT clone the repo again.\n"+
-			"produce .lean theory ONLY for the files listed above.\n",
-			dir, dir, sha[:12])
-	prompt += "\n" + BudgetBlock(tally.Theory(), RoundBudget("theorize_full"))
+	prompt := theorizePrompt(owner, name, sha, fmt.Sprintf(theorizeFullWhatFmt, len(files), read), task, src.String(), len(files),
+		BudgetBlock(tally.Theory(), RoundBudget("theorize_full")))
 
 	child, err := ForkWithRole(prompt, ".", "theorize_full")
 	if err != nil {

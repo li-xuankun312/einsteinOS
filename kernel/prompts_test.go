@@ -20,10 +20,9 @@ func TestTheoryPromptIsFormattedAndTeachesBatching(t *testing.T) {
 	p := formatTheorizeInstruction()
 	noFormatDamage(t, "theory", p)
 	for _, want := range []string{
-		TheoryOutputsDir + "/<CamelCaseName>.lean", // the outputs dir came through as an arg
-		"write ALL your .lean files first",
-		"ONE command",
-		"ls " + TheoryOutputsDir, // the manifest step that lets the kernel find bash-written files
+		TheoryOutputsDir + "/<CamelCaseName>.lean",                           // the outputs dir came through as an arg
+		"each round of Axle calls costs one round trip of this conversation", // why a conversation batches, as a fact
+		"ls " + TheoryOutputsDir,                                             // the manifest step that lets the kernel find bash-written files
 		DoneMarker,
 	} {
 		if !strings.Contains(p, want) {

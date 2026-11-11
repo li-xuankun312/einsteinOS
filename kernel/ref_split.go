@@ -794,18 +794,15 @@ func theory_static_split(files []string) [][]string {
 	return chunks
 }
 
-func ref_split_fork(parent_pid int64, owner, repo, sha string, files []string, task string, depth int, chunk_idx int, chunk_total int, allChunks [][]string, prior []priorChunk) int64 {
-	dir := fmt.Sprintf("/tmp/ref_%s_%s.git", owner, repo)
+// what a chunk conversation covers: %[1]d/%[2]d the chunk, %[3]d files, %[4]d depth
+const theorizeChunkWhatFmt = "这是第 %[1]d/%[2]d 个 chunk，%[3]d 个文件（depth %[4]d），其余文件由别的对话负责"
 
+// %[1]d files, %[2]d depth
+const theorizeLeafWhatFmt = "这是 %[1]d 个文件（depth %[2]d）"
+
+func ref_split_fork(parent_pid int64, owner, repo, sha string, files []string, task string, depth int, chunk_idx int, chunk_total int, allChunks [][]string, prior []priorChunk) int64 {
 	var src strings.Builder
 	var tally sourceTally // what the prompt embeds, for its budget block
-	src.WriteString(fmt.Sprintf("[TASK] %s\n\n", task))
-	src.WriteString(fmt.Sprintf("[REFERENCE] %s/%s commit %s\n", owner, repo, short_sha(sha)))
-	src.WriteString(fmt.Sprintf("[YOUR ASSIGNMENT] %d files (depth %d)\n", len(files), depth))
-	src.WriteString("produce LAYER 1/2 ONLY for YOUR files listed below. nothing else.\n")
-	src.WriteString("other files in this repo are handled by OTHER conversations — not your concern.\n")
-	src.WriteString("do NOT explore the repo to find more files to theorize. YOUR scope is FIXED.\n\n")
-
 	// earlier chunks of THIS plan, by address: the kernel hands their files over
 	src.WriteString(PriorChunksContext(prior))
 
@@ -829,22 +826,9 @@ func ref_split_fork(parent_pid int64, owner, repo, sha string, files []string, t
 
 	src_text := src.String()
 
-	// INSTRUCTION FIRST, source code second.
-	// if source comes first, the child reads 2000+ lines of CUDA and starts
-	// "porting" it instead of writing mathematical theory. instruction must
-	// be the first thing the child sees after the task header.
-	prompt := formatTheorizeInstruction() +
-		fmt.Sprintf("\nyou may use git to read other files for CONTEXT (types, interfaces, dependencies).\n"+
-			"the bare repo is at %s — use `git --git-dir=%s show %s:<path>`.\n"+
-			"produce theory ONLY for YOUR assigned files. when those are done, you are done.\n"+
-			"if any single file is too large, list its functions and cover the most important ones.\n\n"+
-			"[SOURCE CODE — your complete assignment. write .lean theory for these files, then stop]\n\n",
-			dir, dir, short_sha(sha)) +
-		src_text
-
 	role := fmt.Sprintf("theorize_chunk_%d", chunk_idx+1)
-	// after everything it needs: what it reads, what it writes, the budget (turn_budget.go)
-	prompt += "\n" + BudgetBlock(tally.Theory(), RoundBudget(role))
+	prompt := theorizePrompt(owner, repo, sha, fmt.Sprintf(theorizeChunkWhatFmt, chunk_idx+1, chunk_total, len(files), depth), task, src_text, len(files),
+		BudgetBlock(tally.Theory(), RoundBudget(role)))
 	pid, err := ForkWithRole(prompt, ".", role)
 	if err != nil {
 		log.Printf("ref_split_fork: %v", err)
@@ -859,13 +843,9 @@ func ref_split_fork(parent_pid int64, owner, repo, sha string, files []string, t
 }
 
 func ref_split_leaf(parent_pid int64, owner, repo, sha string, files []string, task string, depth int) string {
-	dir := fmt.Sprintf("/tmp/ref_%s_%s.git", owner, repo)
 
 	var src strings.Builder
 	var tally sourceTally // what the prompt embeds, for its budget block
-	src.WriteString(fmt.Sprintf("[TASK] %s\n\n", task))
-	src.WriteString(fmt.Sprintf("[REFERENCE] %s/%s commit %s\n", owner, repo, short_sha(sha)))
-	src.WriteString(fmt.Sprintf("[LEAF] %d files (depth %d)\n\n", len(files), depth))
 
 	for _, f := range files {
 		if isBinaryFile(f) {
@@ -887,9 +867,8 @@ func ref_split_leaf(parent_pid int64, owner, repo, sha string, files []string, t
 
 	src_text := src.String()
 
-	prompt := src_text + formatTheorizeInstruction() +
-		fmt.Sprintf("the repo is at %s if you need git for context.\n\n", dir) +
-		BudgetBlock(tally.Theory(), RoundBudget("theorize_leaf"))
+	prompt := theorizePrompt(owner, repo, sha, fmt.Sprintf(theorizeLeafWhatFmt, len(files), depth), task, src_text, len(files),
+		BudgetBlock(tally.Theory(), RoundBudget("theorize_leaf")))
 
 	pid, err := ForkWithRole(prompt, ".", "theorize_leaf")
 	if err != nil {
