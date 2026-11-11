@@ -542,6 +542,7 @@ func fileSurvey(owner, name, sha string, files []string) (heavy []string, light 
 		ext   string
 	}
 	var stats []fstat
+	var unread []string
 	extCount := make(map[string]int)
 	extLines := make(map[string]int)
 	refMu.Lock()
@@ -558,6 +559,7 @@ func fileSurvey(owner, name, sha string, files []string) (heavy []string, light 
 		}
 		content, err := RefFileAt(owner, name, sha, f)
 		if err != nil {
+			unread = append(unread, f)
 			continue
 		}
 		lines := strings.Count(content, "\n") + 1
@@ -586,6 +588,11 @@ func fileSurvey(owner, name, sha string, files []string) (heavy []string, light 
 
 	log.Printf("fileSurvey: %s/%s %d total → %d heavy, %d light",
 		owner, name, len(stats), len(heavy), len(light))
+	// 11/10 14:17 the survey counted 189 of 212 files and 11/11 05:58 207 of 212, and said nothing
+	// of the files it skipped
+	if len(unread) > 0 {
+		log.Printf("fileSurvey: %s/%s %d file(s) could not be read and are not counted: %s", owner, name, len(unread), shortList(unread, 10))
+	}
 	for ext, cnt := range extCount {
 		log.Printf("fileSurvey:   %s: %d files, %d lines", ext, cnt, extLines[ext])
 	}
