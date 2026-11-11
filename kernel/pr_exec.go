@@ -194,15 +194,11 @@ func PRRunNext(pid int64) (string, error) {
 		task := strip_credentials(step.Command)
 		repo := step.Owner + "/" + step.Repo
 		feedback := pr_feedback(pid)
-		devPrompt := fmt.Sprintf(
-			"[REFERENCE THEORY from %s commit %s]\n%s\n\n"+
-				"[DEVELOPMENT TASK]\n%s",
-			repo, short_sha(step.SHA),
-			truncDiff(theory, 6000),
-			task)
+		content := fmt.Sprintf("[REFERENCE THEORY from %s commit %s]\n%s\n\n[TASK]\n%s\n", repo, short_sha(step.SHA), truncDiff(theory, 6000), task)
 		if feedback != "" {
-			devPrompt += fmt.Sprintf("\n\n[DEVELOPMENT DISCIPLINE from prior review]\n%s", feedback)
+			content += fmt.Sprintf("\n[PRIOR FEEDBACK]\n%s\n", feedback)
 		}
+		devPrompt := Bagu(fmt.Sprintf(theorizeWhereFmt, step.Owner, step.Repo, short_sha(step.SHA)), legacyDevWhat, content, "1", spawnTo())
 		childPid, e := ForkWithRole(devPrompt, ".", "dev_legacy")
 		err = e
 		if err == nil {
@@ -2173,6 +2169,16 @@ func PRFeedbackAdd(pid int64, line string) {
 	}
 }
 
+// inserted for the legacy dev step and for ref_diff
+const legacyDevWhat = "这个 commit 的理论已经写好"
+const refDiffWhereFmt = "参考的 %[1]s 和工作目录里对应的文件"
+const refDiffWhat = "内核要它们之间的差别"
+
+// the key=value lines the kernel reads from ref_diff
+const refDiffAnswerFact = "[ANSWER] the kernel reads key=value lines, one block per function/struct pair that differs:\n" +
+	"  ref_file=<path>\n  ref_lines=<number>\n  ref_funcs=<comma-separated function/struct names>\n  ref_pattern=<one phrase: what the ref does differently>\n" +
+	"  our_file=<path>\n  our_lines=<number>\n  our_funcs=<comma-separated function/struct names>\n  gap=<one phrase: what ours is missing or doing wrong>\n"
+
 func ref_diff(pid int64, step *Step) (string, error) {
 	ref_content, err := RefFileAt(step.Owner, step.Repo, step.SHA, step.Path)
 	if err != nil {
@@ -2182,25 +2188,10 @@ func ref_diff(pid int64, step *Step) (string, error) {
 
 	ref_lines := strings.Count(ref_content, "\n") + 1
 
-	var prompt strings.Builder
-	prompt.WriteString(fmt.Sprintf("[REFERENCE: %s/%s commit %s — %s (%d lines)]\n",
-		step.Owner, step.Repo, short_sha(step.SHA), step.Path, ref_lines))
-	prompt.WriteString(ref_content)
-	prompt.WriteString("\n\n")
-	prompt.WriteString("read every line above. then read the corresponding file in our working directory.\n")
-	prompt.WriteString("output ONLY key=value pairs, one per line. no prose, no explanation.\n")
-	prompt.WriteString("required keys:\n")
-	prompt.WriteString("  ref_file=<path>\n")
-	prompt.WriteString("  ref_lines=<number>\n")
-	prompt.WriteString("  ref_funcs=<comma-separated function/struct names>\n")
-	prompt.WriteString("  ref_pattern=<one phrase: what the ref does differently>\n")
-	prompt.WriteString("  our_file=<path>\n")
-	prompt.WriteString("  our_lines=<number>\n")
-	prompt.WriteString("  our_funcs=<comma-separated function/struct names>\n")
-	prompt.WriteString("  gap=<one phrase: what ours is missing or doing wrong>\n")
-	prompt.WriteString("repeat the block for each function/struct pair that differs.\n")
+	content := fmt.Sprintf("[REFERENCE: %s/%s commit %s — %s (%d lines)]\n%s\n\n", step.Owner, step.Repo, short_sha(step.SHA), step.Path, ref_lines, ref_content) + refDiffAnswerFact
+	diffPrompt := Bagu(fmt.Sprintf(refDiffWhereFmt, step.Path), refDiffWhat, content, "1", spawnTo())
 
-	child, err := Fork(prompt.String(), step.Dir)
+	child, err := Fork(diffPrompt, step.Dir)
 	if err != nil {
 		return "", err
 	}
