@@ -379,12 +379,24 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 	}
 
 	var lastStdout string
+	staleRerun := map[string]bool{} // units after which the integration was run again (integrationStale)
 	// every loop turn is one attempt at one unit (or one split). The ceiling is
 	// a backstop against a bug, not a limit anyone should reach.
 	for turn := 0; turn < 400; turn++ {
 		leaves := plan.Leaves()
 		idx := nextUnitIndex(plan, leaves)
 		if idx < 0 {
+			if dir, err := devRepoLocalDir(devRepo); err == nil {
+				// once per unit: an integration run that passes without a commit of its own leaves
+				// the branch as it was, and would be judged stale again without end
+				if after := integrationStale(dir, branch, plan, leaves); after != "" && !staleRerun[after] {
+					staleRerun[after] = true
+					plan.withdrawPass(plan.IntegrationUnit.ID)
+					log.Printf("dev_from_theorems: %s unit %s committed after the integration unit %s's last verified commit — the integration runs again", repo, after, plan.IntegrationUnit.ID)
+					devPlanSave(repo, devRepo, branch, plan, fmt.Sprintf("plan: %s runs again after unit %s", plan.IntegrationUnit.ID, after))
+					continue
+				}
+			}
 			break
 		}
 		unit := leaves[idx]
@@ -1116,6 +1128,42 @@ func waitRoleEnded(role, repo, unitID string) {
 
 // waitAbandonedReport: how often waitAbandoned says it is still waiting.
 var waitAbandonedReport = 10 * time.Minute
+
+// integrationStale: the unit of leaves whose commit on branch is newer than the integration
+// unit's last commit, or "" (also when the integration unit has no commit). Read from the
+// branch, it holds whatever code recorded the passes: 11/11 the integration unit's last
+// commit was 3b95c93 (11/10 23:34); units uf4e6ff5513, uf9f69c2c43 and ua9684a588f committed
+// after it, under a kernel that did not withdraw the integration's pass, and the pipeline
+// completed at 05:48 with the integration judged on the tree before their fixes.
+func integrationStale(dir, branch string, plan *DevPlan, leaves []DevPlanNode) string {
+	if plan.IntegrationUnit == nil {
+		return ""
+	}
+	out, err := exec.Command("git", "-C", dir, "log", "--first-parent", "--format=%s", branch).Output()
+	if err != nil {
+		return ""
+	}
+	ids := map[string]bool{}
+	for _, l := range leaves {
+		if !l.Integration {
+			ids[l.ID] = true
+		}
+	}
+	var newer string
+	for _, subj := range strings.Split(string(out), "\n") {
+		if !strings.HasPrefix(subj, "unit ") {
+			continue
+		}
+		id := strings.TrimSuffix(strings.Fields(subj)[1], ":")
+		if id == plan.IntegrationUnit.ID {
+			return newer
+		}
+		if newer == "" && ids[id] {
+			newer = id
+		}
+	}
+	return ""
+}
 
 // planOwners: owners with every unit outside inPlan dropped, and files left with no owner
 // dropped (nil inPlan keeps every unit).

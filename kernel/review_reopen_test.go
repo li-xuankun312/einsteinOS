@@ -350,3 +350,32 @@ func TestAReopenTakenWithdrawsThePassUntilTheFixPasses(t *testing.T) {
 		t.Fatal("the fix passed")
 	}
 }
+
+// The dev branch of 11/11: the integration unit's last commit (3b95c93, 23:34), then commits
+// of uf4e6ff5513, uf9f69c2c43 and ua9684a588f. The integration is stale; with its commit last
+// it is not.
+func TestAUnitCommittedAfterTheIntegrationMakesItStale(t *testing.T) {
+	const branch = "einsteinOS/dev-3089b9ac95"
+	dir := t.TempDir()
+	git := func(a ...string) {
+		c := exec.Command("git", append([]string{"-C", dir}, a...)...)
+		c.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+		if out, err := c.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %s", a, out)
+		}
+	}
+	git("init", "-q", "-b", branch)
+	for _, m := range []string{"unit pb01fed7fa5: [compile=pass]", "unit uintegratione5509707730d: [compile=pass smoke=pass gate=ok kernels=196]", "unit uf4e6ff5513: SharedExpertBlock.lean", "unit ua9684a588f: SessionGraphReplay.lean", "theory: 383670 bytes"} {
+		git("commit", "-q", "--allow-empty", "-m", m)
+	}
+	p := &DevPlan{}
+	p.SetIntegrationUnit("uintegratione5509707730d")
+	leaves := []DevPlanNode{{ID: "pb01fed7fa5", Sources: []string{"a"}}, {ID: "uf4e6ff5513", Sources: []string{"b"}}, {ID: "ua9684a588f", Sources: []string{"c"}}, *p.IntegrationUnit}
+	if got := integrationStale(dir, branch, p, leaves); got != "ua9684a588f" {
+		t.Fatalf("stale after: %q", got)
+	}
+	git("commit", "-q", "--allow-empty", "-m", "unit uintegratione5509707730d: [compile=pass smoke=pass gate=ok]")
+	if got := integrationStale(dir, branch, p, leaves); got != "" {
+		t.Fatalf("the integration's commit is the last: %q", got)
+	}
+}
