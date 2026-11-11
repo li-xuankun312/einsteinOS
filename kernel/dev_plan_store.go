@@ -24,6 +24,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"path"
 	"sort"
 	"strings"
@@ -519,6 +520,7 @@ func (p *DevPlan) TakeReviewPending(id string) (map[string]string, bool) {
 }
 
 func (p *DevPlan) MarkUnitPass(n DevPlanNode) {
+	p.withdrawIntegrationPass(n)
 	if len(n.Sources) > 0 || n.Integration {
 		if p.PortPass == nil {
 			p.PortPass = map[string]bool{}
@@ -533,6 +535,18 @@ func (p *DevPlan) MarkUnitPass(n DevPlanNode) {
 	delete(p.LastFailure, n.ID)
 	p.ClearSilent(n.ID)
 	p.setConv(n.ID, "")
+}
+
+// withdrawIntegrationPass: a unit that passes after the integration unit changed the code the
+// integration judged, so the integration unit runs again. 11/10 23:35 the integration passed on
+// the tree before the fixes of the reopened units uf4e6ff5513, uf9f69c2c43, ua9684a588f and
+// u0063babba8, which passed after it.
+func (p *DevPlan) withdrawIntegrationPass(n DevPlanNode) {
+	if n.Integration || p.IntegrationUnit == nil || !p.PortPass[p.IntegrationUnit.ID] {
+		return
+	}
+	delete(p.PortPass, p.IntegrationUnit.ID)
+	log.Printf("dev_plan: unit %s passed after the integration unit %s — its pass is withdrawn and it runs again", n.ID, p.IntegrationUnit.ID)
 }
 
 func (p *DevPlan) setConv(id, conv string) {

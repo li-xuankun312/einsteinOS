@@ -303,3 +303,23 @@ func TestReopenedUnitsRunBeforeTheIntegrationUnit(t *testing.T) {
 		t.Fatalf("then the integration unit: %d", got)
 	}
 }
+
+// 11/10 23:35 the integration unit passed; uf4e6ff5513, reopened, passed after it. The
+// integration's pass is withdrawn so it judges the tree with the fix.
+func TestAUnitPassingAfterTheIntegrationWithdrawsItsPass(t *testing.T) {
+	p := &DevPlan{}
+	p.SetIntegrationUnit("uintegratione5509707730d")
+	integ := *p.IntegrationUnit
+	p.MarkUnitPass(integ)
+	if !p.UnitPass(integ) {
+		t.Fatal("the integration unit passed")
+	}
+	p.MarkUnitPass(DevPlanNode{ID: "uf4e6ff5513", Sources: []string{"src/kernels/cuda/shared_expert.cu"}})
+	if p.UnitPass(integ) {
+		t.Fatal("a unit that passed after it withdraws the integration's pass")
+	}
+	p.MarkUnitPass(integ)
+	if !p.UnitPass(integ) {
+		t.Fatal("it passes again when it runs again")
+	}
+}
