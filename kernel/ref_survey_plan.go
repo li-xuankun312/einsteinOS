@@ -282,10 +282,7 @@ func buildSurveyPlanPrompt(owner, name, sha, task string, files []string, lines 
 
 // surveyShell: a survey prompt — the shell with the reference's files inserted
 func surveyShell(owner, name, sha string, files, dirs int, content string) string {
-	to := "einsteinOS/theory"
-	if d := GetDevRepos(); len(d) > 0 {
-		to = d[0] + " 的 einsteinOS/theory"
-	}
+	to := theoryTo()
 	return Bagu(fmt.Sprintf(theorizeWhereFmt, owner, name, shortSHA12(sha)), fmt.Sprintf(theoryPlanWhatFmt, files, dirs), content, fmt.Sprint(files), to)
 }
 

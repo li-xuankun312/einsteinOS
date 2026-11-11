@@ -535,10 +535,7 @@ func dev_repair_proofs(pid int64, repo, theory string, failed []string, attempt 
 			n, r.Statement, r.Content, r.Error))
 	}
 	p.WriteString(proofFixFact + axleFacts())
-	to := "einsteinOS/theory"
-	if d := GetDevRepos(); len(d) > 0 {
-		to = d[0] + " 的 einsteinOS/theory"
-	}
+	to := theoryTo()
 	prompt := Bagu(proofFixWhere, fmt.Sprintf(proofFixWhatFmt, attempt, len(failed)), p.String(), fmt.Sprint(len(failed)), to)
 	role := fmt.Sprintf("proof_fix_%d", attempt)
 	log.Printf("dev_repair_proofs: %s round %d, %d theorem(s): %v (%d bytes prompt)",

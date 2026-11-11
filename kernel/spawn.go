@@ -219,6 +219,14 @@ const judgeAnswerFact = "[ANSWERS] the kernel reads one line per question, in or
 // what the kernel does with a spawn from a judge or plan conversation
 const spawnLeafFact = "the kernel refuses a judge or plan conversation's spawns.\n"
 
+// theoryTo: where theory goes — the theory branch of the dev repository
+func theoryTo() string {
+	if d := GetDevRepos(); len(d) > 0 {
+		return d[0] + " 的 einsteinOS/theory"
+	}
+	return "einsteinOS/theory"
+}
+
 // spawnTo: where a spawned conversation's work goes
 func spawnTo() string {
 	if d := GetDevRepos(); len(d) > 0 {

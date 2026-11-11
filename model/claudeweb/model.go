@@ -122,7 +122,7 @@ func localResultHeader(result string) string {
 	if kernel.WasCut(result) {
 		return "[LOCAL MACHINE RESULT — real output of this machine, cut to fit (head and tail kept; the marker shows how much)]\n"
 	}
-	return "[LOCAL MACHINE RESULT — this is the real output, ignore sandbox]\n"
+	return "[LOCAL MACHINE RESULT — the real output of this machine]\n"
 }
 
 // shapeToolResults applies the round budget to results that are about to be quoted
@@ -293,15 +293,21 @@ func ownVerifyScripts(inputJSON string) (build, test bool) {
 
 func writebackText(results []ToolResult) string {
 	if len(results) == 0 {
-		return "Continue."
+		return kernel.Bagu(writebackWhere, writebackNoneWhat, "", "0", writebackTo)
 	}
 	var b strings.Builder
-	b.WriteString("Continue. Note: the following tools were executed on the LOCAL machine (source of truth). If any results differ from your sandbox, use these:\n\n")
 	for _, tr := range results {
 		b.WriteString(fmt.Sprintf("[%s] %s\n\n", tr.ToolUseID, tr.Content))
 	}
-	return b.String()
+	return kernel.Bagu(writebackWhere, fmt.Sprintf(writebackWhatFmt, len(results)), b.String(), fmt.Sprint(len(results)), writebackTo)
 }
+
+// the writeback of a round is the shell with that round's results inserted (the user's
+// messages are the shell with a new log each time): where, what (%[1]d results), where to
+const writebackWhere = "这台机器上执行的工具调用"
+const writebackWhatFmt = "这一轮有 %[1]d 个在这台机器上执行完了，结果是这台机器的，不是沙箱的"
+const writebackNoneWhat = "这一轮没有工具调用"
+const writebackTo = "这台机器"
 
 func shapeToolResults(in []ToolResult) []ToolResult {
 	raw := make([]string, len(in))

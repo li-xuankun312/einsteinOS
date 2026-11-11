@@ -84,10 +84,7 @@ func theorizePrompt(owner, repo, sha, what, task, sources string, files int, bud
 	c.WriteString(fmt.Sprintf(theorizeBareRepoFmt, dir, short_sha(sha)))
 	c.WriteString(sources)
 	c.WriteString("\n" + budget)
-	to := "einsteinOS/theory"
-	if d := GetDevRepos(); len(d) > 0 {
-		to = d[0] + " 的 einsteinOS/theory"
-	}
+	to := theoryTo()
 	return Bagu(fmt.Sprintf(theorizeWhereFmt, owner, repo, short_sha(sha)), what, c.String(), fmt.Sprint(files), to)
 }
 

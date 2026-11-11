@@ -241,7 +241,7 @@ func ref_split_with(parent_pid int64, owner, repo, sha string, files []string, t
 							// an unpersisted turn is what created chunk 1's junk branch
 							log.Printf("ref_split: chunk %d/%d poll %d: conversation settled, sending ContinueConv to resume",
 								i+1, len(chunks), poll+1)
-							contOut, contErr := ContinueConv(convID, "you were interrupted. continue writing ## MODULE sections for YOUR assigned files only. do NOT write theory for files outside your assignment.")
+							contOut, contErr := ContinueConv(convID, Bagu(fmt.Sprintf(chunkResumeWhereFmt, i+1, len(chunks)), chunkResumeWhat, fmt.Sprintf(chunkResumeContentFmt, strings.Join(chunks[i], "\n")), fmt.Sprint(len(chunks[i])), theoryTo()))
 							if len(contOut) < 4000 && len(contErr) == 0 {
 								continueWaste++
 								log.Printf("ref_split: chunk %d/%d poll %d: ContinueConv waste (stdout=%d stderr=0) %d/2",
@@ -613,10 +613,7 @@ func theory_plan(parent_pid int64, owner, repo string, files []string) [][]strin
 		}
 	}
 
-	to := "einsteinOS/theory"
-	if d := GetDevRepos(); len(d) > 0 {
-		to = d[0] + " 的 einsteinOS/theory"
-	}
+	to := theoryTo()
 	prompt := Bagu(fmt.Sprintf(theoryPlanWhereFmt, owner, repo), fmt.Sprintf(theoryPlanWhatFmt, len(files), len(dirOrder)),
 		fmt.Sprintf(theoryPlanContentFmt, fileList.String(), TurnToolBudget, RoundBudget("theorize_chunk_1"))+DoneInstruction(),
 		fmt.Sprint(len(files)), to)
@@ -793,6 +790,16 @@ func theory_static_split(files []string) [][]string {
 	log.Printf("theory_static_split: %d files → %d chunks", len(files), len(chunks))
 	return chunks
 }
+
+// inserted into the shell when a chunk's conversation is resumed: %[1]d/%[2]d the chunk, its files
+const chunkResumeWhereFmt = "第 %[1]d/%[2]d 个 chunk 的文件"
+const chunkResumeWhat = "这个对话被打断了"
+const chunkResumeContentFmt = "[YOUR FILES]\n%[1]s\n[OUTPUT] the kernel takes a .lean module for each of these files; a module for any other file is not part of this chunk.\n"
+
+// inserted when a chunk ended with files no module covers: %[1]d/%[2]d covered, %[3]d missing
+const chunkCoverWhere = "这个 chunk 的文件"
+const chunkCoverWhatFmt = "内核测到 %[1]d/%[2]d 个文件有 module 覆盖，还缺 %[3]d 个"
+const chunkCoverContentFmt = "[MISSING]\n%[1]s\n[COVERAGE] the kernel reads each module's SOURCES line: a file is covered when a module names it there.\n"
 
 // what a chunk conversation covers: %[1]d/%[2]d the chunk, %[3]d files, %[4]d depth
 const theorizeChunkWhatFmt = "这是第 %[1]d/%[2]d 个 chunk，%[3]d 个文件（depth %[4]d），其余文件由别的对话负责"
@@ -981,13 +988,9 @@ func chunk_fill_missing(convID string, chunk []string, result, tag string) (stri
 		}
 		log.Printf("ref_split: %s has %d/%d files covered, %d missing — ContinueConv round %d",
 			tag, cov.CoveredCount(), cov.Total, len(cov.Missing), round)
-		var prompt strings.Builder
-		prompt.WriteString(fmt.Sprintf("Continue. %d files remaining:\n", len(cov.Missing)))
-		for _, f := range cov.Missing {
-			prompt.WriteString(f + "\n")
-		}
-		prompt.WriteString("a file an existing module already covers: add its path to that module's SOURCES line (the coverage check reads it); otherwise write the module.\n")
-		contResult, _ := ContinueConv(convID, prompt.String())
+		prompt := Bagu(chunkCoverWhere, fmt.Sprintf(chunkCoverWhatFmt, cov.CoveredCount(), cov.Total, len(cov.Missing)),
+			fmt.Sprintf(chunkCoverContentFmt, strings.Join(cov.Missing, "\n")), fmt.Sprint(len(cov.Missing)), theoryTo())
+		contResult, _ := ContinueConv(convID, prompt)
 		if full, err := DownloadConv(convID); err == nil && len(full) > len(result) {
 			log.Printf("ref_split: %s ContinueConv + re-download: %d bytes (was %d)", tag, len(full), len(result))
 			result = full

@@ -7,11 +7,12 @@ import (
 )
 
 func TestAWritebackWithNoResultsIsJustContinue(t *testing.T) {
-	if got := writebackText(nil); got != "Continue." {
+	// a round's writeback is the shell with that round's results inserted; none, and it says so
+	if got := writebackText(nil); !strings.HasPrefix(got, "这些问题的每一句话") || !strings.Contains(got, writebackNoneWhat) {
 		t.Fatalf("%q", got)
 	}
 	got := writebackText([]ToolResult{{ToolUseID: "toolu_1", Content: "exit=0"}})
-	if !strings.Contains(got, "use these") || !strings.Contains(got, "[toolu_1] exit=0") {
+	if !strings.HasPrefix(got, "这些问题的每一句话") || !strings.Contains(got, "内容如下评价：[toolu_1] exit=0") {
 		t.Fatalf("%q", got)
 	}
 }

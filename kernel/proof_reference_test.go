@@ -43,7 +43,7 @@ func TestChunkSorryPromptIsFactsAndTheReference(t *testing.T) {
 	t.Cleanup(func() { proofRefDir, proofRefSub = oldDir, oldSub })
 	proofRefDir, proofRefSub = "/tmp/ref_x/", "/proofs/"
 	p := chunkSorryPrompt([]sorrySite{{File: "A.lean", Decls: []string{"t1", "t2"}}, {File: "B.lean", Decls: []string{"t3"}}})
-	for _, want := range []string{"Continue. 3 declaration(s) in 2 file(s) still use sorry:", "  A.lean: t1, t2\n", "  B.lean: t3\n", "/tmp/ref_x/proofs/"} {
+	for _, want := range []string{"3 declaration(s) in 2 file(s) still use sorry:", "  A.lean: t1, t2\n", "  B.lean: t3\n", "/tmp/ref_x/proofs/"} {
 		if !strings.Contains(p, want) {
 			t.Errorf("missing %q in\n%s", want, p)
 		}

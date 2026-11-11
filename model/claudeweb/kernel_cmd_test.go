@@ -28,11 +28,11 @@ func TestShadowExecuteAnswersEinsteinosCommandsItself(t *testing.T) {
 
 func TestLocalResultHeaderTellsTheChildWhenOutputWasCut(t *testing.T) {
 	whole := localResultHeader("short output")
-	if !strings.Contains(whole, "ignore sandbox") {
+	if !strings.Contains(whole, "the real output of this machine") {
 		t.Fatalf("an uncut result keeps its authority: %q", whole)
 	}
 	cut := localResultHeader(kernel.ShapeOutput(strings.Repeat("x", 50000), 1000))
-	if strings.Contains(cut, "ignore sandbox") || !strings.Contains(cut, "cut to fit") {
+	if strings.Contains(cut, "the real output of this machine]") || !strings.Contains(cut, "cut to fit") {
 		t.Fatalf("a cut result must say so, and must not claim to be the whole output: %q", cut)
 	}
 }

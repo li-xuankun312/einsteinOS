@@ -39,9 +39,9 @@ func ProofReferencePath() string {
 }
 
 const (
-	chunkSorryHeadFmt = "Continue. %[1]d declaration(s) in %[2]d file(s) still use sorry:\n"
+	chunkSorryHeadFmt = "%[1]d declaration(s) in %[2]d file(s) still use sorry:\n"
 	chunkSorryLineFmt = "  %[1]s: %[2]s\n"
-	chunkSorryTailFmt = "the proofs under %[1]s are built the way these need: read the ones closest to each goal, prove these, verify them, then finish.\n"
+	chunkSorryTailFmt = "Lean 4 proofs: the files under %[1]s\n"
 )
 
 // sorrySite is one file and the declarations in it that still use sorry.
@@ -101,8 +101,12 @@ func chunkSorryPrompt(sites []sorrySite) string {
 		b.WriteString(fmt.Sprintf(chunkSorryLineFmt, s.File, strings.Join(s.Decls, ", ")))
 	}
 	b.WriteString(fmt.Sprintf(chunkSorryTailFmt, ProofReferencePath()))
-	return b.String()
+	return Bagu(chunkSorryWhere, fmt.Sprintf(chunkSorryWhatFmt, sorryCount(sites)), b.String(), fmt.Sprint(sorryCount(sites)), theoryTo())
 }
+
+// inserted into the shell when a chunk's files still use sorry: where, %[1]d how many
+const chunkSorryWhere = "这个对话写的 .lean 文件"
+const chunkSorryWhatFmt = "内核在这台机器上测到还有 %[1]d 处 sorry"
 
 // hooks, so the loop can be tested without a server
 var (
