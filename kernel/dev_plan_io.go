@@ -384,13 +384,12 @@ func dev_split_node(pid int64, p *DevPlan, nodeID, repo, devRepo, branch, theory
 		for _, m := range node.Modules {
 			mods = append(mods, p.Modules[m])
 		}
-		prompt := fmt.Sprintf(
-			"[TASK] this unit of %d modules is too big for one session (%s). split it into 2-4 smaller units.\n"+
-				"you may NOT start other conversations. keep related modules together, foundational first.\n\n[MODULES]\n", len(mods), reason)
+		var list strings.Builder
 		for _, m := range mods {
-			prompt += fmt.Sprintf("  %s (%d bytes)\n", m.Name, m.Bytes)
+			list.WriteString(fmt.Sprintf("  %s (%d bytes)\n", m.Name, m.Bytes))
 		}
-		prompt += "\n[OUTPUT FORMAT]\nonly lines like `unit: a, b`. copy names exactly. every module exactly once.\n" + DoneInstruction()
+		prompt := Bagu(fmt.Sprintf(devSplitWhereFmt, node.ID, branch), fmt.Sprintf(devSplitWhatFmt, len(mods), reason),
+			fmt.Sprintf(devSplitContentFmt, list.String())+DoneInstruction(), fmt.Sprint(len(mods)), devRepo)
 		out := devPlannerRunner(pid, repo, prompt)
 		g, _, unclaimed := parseDevPlanOutput(out, mods)
 		if len(unclaimed) > 0 && len(g) > 0 {
@@ -408,14 +407,8 @@ func dev_split_node(pid int64, p *DevPlan, nodeID, repo, devRepo, branch, theory
 			log.Printf("dev_plan: %s node %s (%s) has %d named items — too few to split below module level", repo, node.ID, name, len(idents))
 			return nil
 		}
-		prompt := fmt.Sprintf(
-			"[TASK] module %s (%d bytes of theory) is too big for one session (%s). split its work into 2-4 groups of items.\n"+
-				"you may NOT start other conversations. items that depend on each other stay together; foundational items first.\n\n[ITEMS]\n",
-			name, len(body), reason)
-		for _, id := range idents {
-			prompt += "  " + id + "\n"
-		}
-		prompt += "\n[OUTPUT FORMAT]\nonly lines like `group: item_a, item_b, item_c`. copy item names exactly. every item exactly once.\n" + DoneInstruction()
+		prompt := Bagu(fmt.Sprintf(devItemSplitWhereFmt, name, branch), fmt.Sprintf(devItemSplitWhatFmt, len(body), len(idents), reason),
+			fmt.Sprintf(devItemSplitContentFmt, "  "+strings.Join(idents, "\n  ")+"\n")+DoneInstruction(), fmt.Sprint(len(idents)), devRepo)
 		out := devPlannerRunner(pid, repo, prompt)
 		gs := parseItemGroups(out, idents)
 		if len(gs) < 2 {
@@ -435,6 +428,24 @@ func dev_split_node(pid int64, p *DevPlan, nodeID, repo, devRepo, branch, theory
 	devPlanSave(repo, devRepo, branch, p, fmt.Sprintf("plan: split %s (%s)", nodeID, truncStr(reason, 60)))
 	return kids
 }
+
+// inserted into the shell when a unit is split: %[1]s the unit, %[2]s the branch
+const devSplitWhereFmt = "unit %[1]s 在分支 %[2]s 上的理论"
+
+// %[1]d modules, %[2]s why it is split (measured)
+const devSplitWhatFmt = "它有 %[1]d 个 module，%[2]s"
+
+// %[1]s the modules; the line the kernel reads, and what it does with what is not named
+const devSplitContentFmt = "[MODULES]\n%[1]s[UNITS] the kernel reads lines 'unit: <module names from the list>', one unit per line; a module no line names becomes a unit of its own, and fewer than two units are cut in half by the kernel.\n"
+
+// inserted when one module is split by its items: %[1]s the module, %[2]s the branch
+const devItemSplitWhereFmt = "module %[1]s 在分支 %[2]s 上的理论"
+
+// %[1]d bytes of theory, %[2]d items, %[3]s why (measured)
+const devItemSplitWhatFmt = "它有 %[1]d bytes 理论、%[2]d 个 item，%[3]s"
+
+// %[1]s the items; the line the kernel reads
+const devItemSplitContentFmt = "[ITEMS]\n%[1]s[GROUPS] the kernel reads lines 'group: <item names from the list>', one group per line; fewer than two groups are cut in half by the kernel.\n"
 
 // restrictToScope keeps only the items a scoped node is responsible for, so a
 // scoped node that must split again splits ITS items, not the whole module's.

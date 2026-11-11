@@ -156,7 +156,7 @@ func bigModuleTheory(items int) string {
 func TestSplitSingleModuleBelowModuleLevel(t *testing.T) {
 	theory := bigModuleTheory(8)
 	withPlanner(t, func(prompt string) string {
-		if !strings.Contains(prompt, "item_0") || !strings.Contains(prompt, "may NOT start other conversations") {
+		if !strings.Contains(prompt, "item_0") || !strings.Contains(prompt, "[GROUPS] the kernel reads lines") {
 			t.Errorf("planner prompt lacks the items / the leaf rule")
 		}
 		return "group: item_0, item_1, item_2\ngroup: item_3, item_4, bogus\ngroup: item_5\n" // item_6, item_7 unclaimed

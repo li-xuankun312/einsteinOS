@@ -45,7 +45,7 @@ func (f *fakeModel) exec(prompt string) (string, string) {
 	switch {
 	case strings.Contains(prompt, "[VERDICT] the kernel reads the last line"):
 		return "looked at it.\nPASS", ""
-	case strings.Contains(prompt, "[UNITS] the kernel reads lines") || strings.Contains(prompt, "is too big for one session"):
+	case strings.Contains(prompt, "[UNITS] the kernel reads lines") || strings.Contains(prompt, "[GROUPS] the kernel reads lines"):
 		if f.planner != nil {
 			return f.planner(prompt), ""
 		}
@@ -481,7 +481,7 @@ func countConversations(prompts []string) (units, planners int) {
 		switch {
 		case strings.Contains(p, "[THEORY — unit "):
 			units++
-		case strings.Contains(p, "[TASK] group") || strings.Contains(p, "is too big for one session"):
+		case strings.Contains(p, "[UNITS] the kernel reads lines") || strings.Contains(p, "[GROUPS] the kernel reads lines"):
 			planners++
 		}
 	}
