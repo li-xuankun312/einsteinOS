@@ -274,6 +274,18 @@ func devTotalBytes(mods []DevModule) int {
 	return t
 }
 
+// inserted into the shell for the planner: %[1]s the branch
+const devPlannerWhereFmt = "分支 %[1]s 上的 .einsteinOS/theory.md"
+
+// %[1]d modules, %[2]d bytes of theory
+const devPlannerWhatFmt = "理论有 %[1]d 个 module，共 %[2]d bytes"
+
+// the module list and the kernel's contract with the planner, as facts: %[1]d entries,
+// %[2]s the list, %[3]d/%[4]d the limits the kernel cuts a unit to
+const devPlannerContentFmt = "[MODULES] %[1]d entries, each a ## MODULE section of the theory\n%[2]s" +
+	"a unit over %[3]d bytes of theory or %[4]d modules is cut by the kernel; a module the output does not name becomes a unit of its own.\n" +
+	"[UNITS] the kernel reads lines 'unit: <module names from the list>', one unit per line.\n"
+
 // dev_run_planner runs the planner conversation on the module list and returns
 // groups of canonical module names, with anything unmatched or unclaimed
 // appended as extra groups (never dropped, never one giant unit).
@@ -283,24 +295,12 @@ func dev_run_planner(pid int64, repo string, mods []DevModule, branch string) []
 		list.WriteString(fmt.Sprintf("  %d. %s (%d bytes)\n", i+1, m.Name, m.Bytes))
 	}
 	maxBytes, maxModules := devUnitBudget()
-	prompt := fmt.Sprintf(
-		"[TASK] group the %d modules below into implementation units.\n\n"+
-			"[IMPORTANT] the complete list of modules is below. this IS the input.\n"+
-			"you do NOT need to search for files, clone repos, or find anything.\n"+
-			"just read the list and group them. you may NOT start other conversations.\n\n"+
-			"[MODULES] (%d entries — each is a ## MODULE section from the theory)\n%s\n"+
-			"[RULES]\n"+
-			"- group related modules together (same subsystem)\n"+
-			"- foundational modules first (types, config, utils), then core, then high-level\n"+
-			"- a unit must stay under %d bytes of theory AND under %d modules: one developer session digests that much and no more\n"+
-			"- a single module bigger than the byte limit goes in a unit by itself\n"+
-			"- every module from the list must appear in exactly one unit\n\n"+
-			"[OUTPUT FORMAT]\n"+
-			"output ONLY lines like:\n"+
-			"unit: module_name_1, module_name_2\n"+
-			"unit: module_name_3\n"+
-			"copy the module names EXACTLY from the list. one line per unit. nothing else.\n%s",
-		len(mods), len(mods), list.String(), maxBytes, maxModules, DoneInstruction())
+	content := fmt.Sprintf(devPlannerContentFmt, len(mods), list.String(), maxBytes, maxModules) + DoneInstruction()
+	to := branch
+	if d := GetDevRepos(); len(d) > 0 {
+		to = d[0]
+	}
+	prompt := Bagu(fmt.Sprintf(devPlannerWhereFmt, branch), fmt.Sprintf(devPlannerWhatFmt, len(mods), devTotalBytes(mods)), content, fmt.Sprint(len(mods)), to)
 
 	out := devPlannerRunner(pid, repo, prompt)
 	log.Printf("dev_plan: %s planner returned %d bytes", repo, len(out))

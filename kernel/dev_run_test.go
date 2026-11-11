@@ -45,7 +45,7 @@ func (f *fakeModel) exec(prompt string) (string, string) {
 	switch {
 	case strings.Contains(prompt, "[VERDICT] the kernel reads the last line"):
 		return "looked at it.\nPASS", ""
-	case strings.Contains(prompt, "[TASK] group the") || strings.Contains(prompt, "is too big for one session"):
+	case strings.Contains(prompt, "[UNITS] the kernel reads lines") || strings.Contains(prompt, "is too big for one session"):
 		if f.planner != nil {
 			return f.planner(prompt), ""
 		}
@@ -191,7 +191,7 @@ func TestDevFromTheorems_HappyPath_KernelVerifiesAndPushes(t *testing.T) {
 	var planners, works, reviews int
 	for _, p := range env.model.prompts {
 		switch {
-		case strings.Contains(p, "[TASK] group the"):
+		case strings.Contains(p, "[UNITS] the kernel reads lines"):
 			planners++
 		case strings.Contains(p, "[THEORY — unit "):
 			works++
