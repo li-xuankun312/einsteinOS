@@ -586,6 +586,7 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 		// stays registered for all of it (11/05 07:14:08 dev_fix_1 of u12d8dd5102 ended with no
 		// check at all — it had been unregistered the moment the fork returned)
 		Wait(child)
+		waitAbandoned(child, r.repo, unit.ID)
 		UnregisterPreVerify(role)
 		if m := getMeta(child); m != nil && m.ConvID != "" {
 			convID = m.ConvID
@@ -1063,6 +1064,35 @@ func blameOnBranch(dir, branch, unitID, verdict string, sources map[string][]str
 	}
 	return reviewBlames(unitID, owners)
 }
+
+// waitAbandoned: a conversation Wait gave up on is still the unit's conversation — the next
+// one is not started beside it. 11/10 18:31 and 21:15 the integration unit's conversation
+// was given up on while it ran, and fresh ones (b7563fcf, e8e9ed00) were started; from 22:39
+// three conversations of the unit changed its files at once.
+func waitAbandoned(child int64, repo, unitID string) {
+	m := getMeta(child)
+	if m == nil || m.Done == nil {
+		return
+	}
+	metaMu.Lock()
+	abandoned := m.Abandoned
+	metaMu.Unlock()
+	if !abandoned {
+		return
+	}
+	for {
+		select {
+		case <-m.Done:
+			log.Printf("dev_from_theorems: %s unit %s: the conversation given up on (pid %d) has ended", repo, unitID, child)
+			return
+		case <-time.After(waitAbandonedReport):
+			log.Printf("dev_from_theorems: %s unit %s: waiting for the conversation given up on (pid %d) to end before another is started", repo, unitID, child)
+		}
+	}
+}
+
+// waitAbandonedReport: how often waitAbandoned says it is still waiting.
+var waitAbandonedReport = 10 * time.Minute
 
 // planOwners: owners with every unit outside inPlan dropped, and files left with no owner
 // dropped (nil inPlan keeps every unit).
