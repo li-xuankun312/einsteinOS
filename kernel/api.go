@@ -28,6 +28,8 @@ type TaskMeta struct {
 	stderr       strings.Builder
 	Done         chan struct{}
 	LastActivity int64
+	// Abandoned: the task did not end on SIGINT nor on cancel (stopUnresponsive)
+	Abandoned bool
 }
 
 func Touch(pid int64) {
@@ -480,10 +482,7 @@ func WaitTimeout(pid int64, idleTimeout time.Duration) (int64, int, error) {
 						case <-meta.Done:
 							log.Printf("wait: pid %d exited after SIGINT", pid)
 						case <-time.After(10 * time.Second):
-							log.Printf("wait: pid %d still alive 10s after SIGINT, giving up", pid)
-							if meta.Cancel != nil {
-								meta.Cancel()
-							}
+							stopUnresponsive(pid, meta, waitCancelGrace)
 						}
 						goto waited
 					}
@@ -506,6 +505,34 @@ waited:
 	}
 	schedMu.Unlock()
 	return pid, int(exitCode >> 8), nil
+}
+
+// waitCancelGrace: how long a task is given to end once its context is cancelled and its
+// process killed.
+var waitCancelGrace = 2 * time.Minute
+
+// stopUnresponsive ends a task that did not end on SIGINT: its context is cancelled, its
+// process killed, and Wait returns only when it has ended or the grace has passed — then it
+// says so, and the task is marked Abandoned. 11/10 18:31 and 21:15 "still alive 10s after
+// SIGINT, giving up" returned at once with the conversation still running; the unit's next
+// conversation was started beside it.
+func stopUnresponsive(pid int64, meta *TaskMeta, grace time.Duration) {
+	log.Printf("wait: pid %d still alive 10s after SIGINT — cancelling it", pid)
+	if meta.Cancel != nil {
+		meta.Cancel()
+	}
+	if meta.Cmd != nil && meta.Cmd.Process != nil {
+		meta.Cmd.Process.Kill()
+	}
+	select {
+	case <-meta.Done:
+		log.Printf("wait: pid %d ended after cancel", pid)
+	case <-time.After(grace):
+		metaMu.Lock()
+		meta.Abandoned = true
+		metaMu.Unlock()
+		log.Printf("wait: pid %d still running %v after cancel — abandoned", pid, grace)
+	}
 }
 
 func sendSigint(pid int64) {
