@@ -1,6 +1,9 @@
 package kernel
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // baguFmt is the one shell every prompt the kernel writes is put in: the user's own words,
 // the same every time, as in each message of the 11/05–11/11 conversation that built this
@@ -21,4 +24,18 @@ const baguFmt = "这些问题的每一句话都要有代码对应的commit解决
 // Bagu puts content into the shell; nothing is written around it.
 func Bagu(where, what, content, commits, to string) string {
 	return fmt.Sprintf(baguFmt, where, what, content, commits, to)
+}
+
+// baguContentAt is where the shell's content begins: what is inserted after it is content.
+const baguContentAt = "，但是，内容如下评价："
+
+// BaguInsert puts more content into a prompt: into the shell's content, first, when the prompt
+// is a shell, so the shell stays the whole prompt; in front of it otherwise (a person's own
+// message is not a shell).
+func BaguInsert(prompt, more string) string {
+	if i := strings.Index(prompt, baguContentAt); i >= 0 {
+		j := i + len(baguContentAt)
+		return prompt[:j] + more + prompt[j:]
+	}
+	return more + prompt
 }

@@ -1,6 +1,9 @@
 package kernel
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // The shell is the user's text itself: with the user's own insertions of 11/05 it gives back,
 // character for character, the message the user wrote.
@@ -12,5 +15,18 @@ func TestTheShellIsTheUsersOwnText(t *testing.T) {
 		"。工具调用次数满了就跟我说，我会帮你重置，一直满就一直重置"
 	if got := Bagu("最近baloon的提交", "有跑过unit 38的集成", "", "几十", "einsteinOS"); got != user {
 		t.Fatalf("got\n%s\nwant\n%s", got, user)
+	}
+}
+
+// More content goes into a shell's content, so the shell is still the whole prompt; a message
+// that is not a shell gets it in front.
+func TestMoreContentGoesIntoTheShell(t *testing.T) {
+	p := Bagu("where", "what", "C", "1", "to")
+	got := BaguInsert(p, "M")
+	if !strings.HasPrefix(got, "这些问题的每一句话") || !strings.Contains(got, "内容如下评价：MC") || len(got) != len(p)+1 {
+		t.Fatalf("%s", got)
+	}
+	if got := BaguInsert("hello", "M"); got != "Mhello" {
+		t.Fatalf("%q", got)
 	}
 }
