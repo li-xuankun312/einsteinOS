@@ -47,3 +47,30 @@ func refRouteName(proxy string) string {
 	}
 	return "through " + proxy
 }
+
+// refUnreadableFmt: the reference files that could not be read, which stop ref_bind.
+const refUnreadableFmt = "%s/%s %s: %d source file(s) could not be read from the reference clone, so the commit is not theorized: %s"
+
+// refUnreadableRounds: how many times the files not read are asked for again.
+var refUnreadableRounds = 3
+
+// refUnreadable: the files of sha (the ones fileSurvey reads) that cannot be read from the
+// reference clone after rounds attempts.
+func refUnreadable(owner, name, sha string, files []string, rounds int) []string {
+	var todo []string
+	for _, f := range files {
+		if !isBinaryFile(f) && !isDocOnlyFile(f) {
+			todo = append(todo, f)
+		}
+	}
+	for r := 0; r < rounds && len(todo) > 0; r++ {
+		var left []string
+		for _, f := range todo {
+			if _, err := RefFileAt(owner, name, sha, f); err != nil {
+				left = append(left, f)
+			}
+		}
+		todo = left
+	}
+	return todo
+}

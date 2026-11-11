@@ -367,6 +367,14 @@ func ref_bind_at(pid int64, owner, repo string, startIdx int) (string, error) {
 	log.Printf("ref_bind: %s/%s %d commits, theorize=%s (index %d) %d files",
 		owner, repo, len(commits), short_sha(theoryCommit.SHA), theoryIdx, len(theoryFiles))
 
+	// every source file of the commit is read before it is theorized: 11/11 05:58 the survey
+	// of 07b4a6263ab9 counted 207 of its 212 source files — five could not be read — and the
+	// theory was written without them.
+	if missing := refUnreadable(owner, repo, theoryCommit.SHA, theoryFiles, refUnreadableRounds); len(missing) > 0 {
+		err := fmt.Errorf(refUnreadableFmt, owner, repo, short_sha(theoryCommit.SHA), len(missing), shortList(missing, 10))
+		log.Printf("ref_bind: %v", err)
+		return "", err
+	}
 	ref_theorize(pid, owner, repo, theoryCommit.SHA, "", len(theoryFiles), theoryCommit.Message)
 
 	// completeness gate: a theory that covers a fraction of its source is not

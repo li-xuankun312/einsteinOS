@@ -56,3 +56,35 @@ func TestAReferenceFileIsAskedForOnEveryRoute(t *testing.T) {
 		t.Fatalf("err: %v", err)
 	}
 }
+
+// A source file of the commit that cannot be read is named, and stops the theorizing.
+func TestAnUnreadableSourceFileIsNamed(t *testing.T) {
+	dir := t.TempDir()
+	work, bare := dir+"/w", dir+"/b.git"
+	gitIn := func(d string, a ...string) string {
+		out, err := exec.Command("git", append([]string{"-C", d}, a...)...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v %s", a, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	gitIn(dir, "init", "-q", "-b", "main", work)
+	writeFileAll(t, work+"/src/a.cu", "__global__ void k() {}\n")
+	writeFileAll(t, work+"/src/b.cpp", "int f() { return 1; }\n")
+	gitIn(work, "add", "-A")
+	gitIn(work, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "x")
+	gitIn(dir, "clone", "-q", "--bare", work, bare)
+	sha := gitIn(bare, "rev-parse", "HEAD")
+	refMu.Lock()
+	refRepos["t/unread"] = &RefRepoState{CloneDir: bare}
+	refMu.Unlock()
+	defer func() { refMu.Lock(); delete(refRepos, "t/unread"); refMu.Unlock() }()
+	t.Setenv("ALL_PROXY", "")
+	t.Setenv("all_proxy", "")
+	if m := refUnreadable("t", "unread", sha, []string{"src/a.cu", "src/b.cpp"}, 2); len(m) != 0 {
+		t.Fatalf("both readable: %v", m)
+	}
+	if m := refUnreadable("t", "unread", sha, []string{"src/a.cu", "src/gone.cpp"}, 2); len(m) != 1 || m[0] != "src/gone.cpp" {
+		t.Fatalf("unreadable: %v", m)
+	}
+}
