@@ -786,30 +786,31 @@ func (r *devRun) reviewUnit(unit DevPlanNode, idx, total int, convID string, st 
 	return stdout, false, false
 }
 
-// unitPrompt builds the work conversation's prompt (attempt 1) or the fix
-// conversation's prompt (attempt > 1, with the real failure).
+// unitPrompt: the shell (Bagu) with this unit inserted. Attempt 1 and every fix attempt are
+// the same shell; a fix attempt differs only by what is inserted — the failure the kernel
+// measured or the review's words go first in the content, as the user's review did.
 func (r *devRun) unitPrompt(unit DevPlanNode, idx, total, attempt int, fail DevFailure, baseRef string) string {
-	var p strings.Builder
 	plan := r.plan
-
-	p.WriteString(hardwareSection(r.hwInfo))
+	var c strings.Builder
+	if attempt > 1 {
+		if fail.Text != "" {
+			c.WriteString(truncStr(fail.Text, 3500) + "\n")
+		}
+		if fail.Copies != "" {
+			c.WriteString(fail.Copies + "\n")
+		}
+		c.WriteString("\n")
+	}
+	c.WriteString(hardwareSection(r.hwInfo))
 	if r.plan != nil {
 		// the measured requirements name reference files: masked like everything else shown
-		p.WriteString(newRefMask(refMaskIdent, r.repo).Replace(r.requirements(unit).Block("(reference)", r.plan.RefSHA)))
-		p.WriteString(r.shown(unit).PortChecklist("(reference)", r.plan.RefSHA, unit.ID))
-		p.WriteString(r.shown(unit).IntegrationBlock("(reference)", r.plan.RefSHA, unit.ID))
+		c.WriteString(newRefMask(refMaskIdent, r.repo).Replace(r.requirements(unit).Block("(reference)", r.plan.RefSHA)))
+		c.WriteString(r.shown(unit).PortChecklist("(reference)", r.plan.RefSHA, unit.ID))
+		c.WriteString(r.shown(unit).IntegrationBlock("(reference)", r.plan.RefSHA, unit.ID))
 	}
-
-	// prior units: addresses and logs, never text
-	var prior []DevPlanNode
+	passed := 0
 	for _, l := range plan.Leaves() {
 		if l.ID != unit.ID && plan.UnitPass(l) {
-			prior = append(prior, l)
-		}
-	}
-	if len(prior) > 0 {
-		p.WriteString(fmt.Sprintf("[PRIOR UNITS — %d passed; code is on branch %s]\n", len(prior), r.branch))
-		for _, l := range prior {
 			files := nodeDesc(l)
 			if len(files) > 120 {
 				files = files[:120] + "..."
@@ -818,127 +819,73 @@ func (r *devRun) unitPrompt(unit DevPlanNode, idx, total, attempt int, fail DevF
 			if addr == "" {
 				addr = "-"
 			}
-			p.WriteString(fmt.Sprintf("  unit %s: conv=%s modules=[%s]\n", l.ID, shortID(addr), files))
+			c.WriteString(fmt.Sprintf(devPriorUnitFmt, l.ID, shortID(addr), files))
+			passed++
 		}
-		p.WriteString("\nthe code of every prior unit is on that branch. READ it before you write; do NOT rewrite it unless your theory REQUIRES it.\n")
-		p.WriteString("\n")
 	}
-
-	// the theory: it is in the repo (the local mirror is primed with it)
-	p.WriteString(fmt.Sprintf("[THEORY — unit %d/%d, id=%s, %d module(s), %d bytes]\n", idx+1, total, unit.ID, len(unit.Modules), plan.UnitTheoryBytes(unit)))
-	p.WriteString(fmt.Sprintf("your modules: %s\n", strings.Join(unit.Modules, ", ")))
-	p.WriteString("the full theory is at .einsteinOS/theory.md in your repo. find YOUR sections and read them (the theory is the specification):\n")
-	p.WriteString("  grep -n '^## \\(FILE\\|MODULE\\):' .einsteinOS/theory.md — where each section starts (its header line ends with the module's name)\n")
-	p.WriteString("  sed -n '<start>,<end>p' .einsteinOS/theory.md — read a section\n")
+	c.WriteString(fmt.Sprintf(devTheoryFmt, idx+1, total, unit.ID, len(unit.Modules), plan.UnitTheoryBytes(unit), strings.Join(unit.Modules, ", ")))
 	if unit.Scope != "" {
-		p.WriteString(fmt.Sprintf("\n[YOUR SCOPE INSIDE THE MODULE] %s\nthis module was too big for one session and was split. implement ONLY the scope above; other units cover the rest.\n", unit.Scope))
+		c.WriteString(fmt.Sprintf(devScopeFmt, unit.Scope))
 	}
-	p.WriteString("\n")
-
 	if tbl := Proofs.Table(SpecTheorems(devUnitFromNode(unit, r.sections).Theory)); tbl != "" {
-		p.WriteString("[PROOF STATUS — checked by the kernel against Axle. do NOT re-verify these]\n")
-		p.WriteString(tbl)
-		p.WriteString("a VERIFIED theorem is a fact you may rely on. for anything UNPROVEN/UNVERIFIED, never claim in code or\n")
-		p.WriteString("comments that it is verified; guard the property with a static_assert or runtime check plus a test.\n\n")
+		c.WriteString("[PROOF STATUS]\n" + tbl)
 	}
-
-	p.WriteString("[YOUR ROLE]\n")
-	p.WriteString("you are an EXECUTOR: write the code for your unit, write the two verification scripts, and stop.\n")
-	p.WriteString("you do NOT push (the kernel verifies on the real machine and pushes). a separate REVIEW conversation judges the pushed result.\n")
-	p.WriteString("do NOT decide whether your work is 'good enough' — do your best and stop.\n\n")
-
-	if attempt > 1 {
-		p.WriteString(fmt.Sprintf("[THIS IS FIX ATTEMPT %d for this unit]\n", attempt-1))
-		p.WriteString(fmt.Sprintf("the previous attempt failed: %s\n", fail.Kind))
-		if fail.Text != "" {
-			p.WriteString("the REAL output (from the kernel's run on the real machine, or the reviewer's reason):\n")
-			p.WriteString("-----\n" + truncStr(fail.Text, 3500) + "\n-----\n")
-		}
-		if fail.Copies != "" {
-			p.WriteString(fail.Copies + "\n")
-		}
-		p.WriteString(fmt.Sprintf("the code of the previous attempt is on branch %s. fix THAT code; do not start over.\n", baseRef))
-		p.WriteString("fix the reason above first; do not spend tools on unrelated probing.\n\n")
-	}
-	if len(prior) > 0 || attempt > 1 {
-		p.WriteString(fmt.Sprintf("[EXISTING CODE]\nbranch %s is the tree to build on. add your unit to it and keep the WHOLE project building.\n\n", baseRef))
-	}
-
-	p.WriteString(fmt.Sprintf("[TASK]\n%s\n\n", r.task))
-	p.WriteString(newDevRepoFacts(r.devRepo, baseRef).Block())
-	p.WriteString("\n")
-
+	c.WriteString(fmt.Sprintf("[TASK]\n%s\n\n", r.task))
+	c.WriteString(newDevRepoFacts(r.devRepo, baseRef).Block())
 	build, test := devVerifyScripts(unit.ID)
-	p.WriteString(fmt.Sprintf(dev_unit_instruction, idx+1, total, unit.ID, r.gpuAll, r.gpuUsable(), r.gpuUsable(), build, test, einsteinHelp, DoneInstruction()+DevDoneInToolRound, toolchainPATH()))
-
+	c.WriteString(fmt.Sprintf(dev_unit_instruction, idx+1, total, unit.ID, r.gpuAll, r.gpuUsable(), r.gpuUsable(), build, test, einsteinHelp, DoneInstruction()+DevDoneInToolRound, toolchainPATH()))
 	if fb := pr_feedback(r.pid); fb != "" {
-		p.WriteString(fmt.Sprintf("\n\n[PRIOR FEEDBACK]\n%s", fb))
+		c.WriteString(fmt.Sprintf("\n[PRIOR FEEDBACK]\n%s\n", fb))
 	}
-	// last, after everything it needs: what it reads, what it writes, the budget
 	bytes := 0
 	for _, m := range unit.Modules {
 		if r.plan != nil {
 			bytes += r.plan.Modules[m].Bytes
 		}
 	}
-	p.WriteString("\n\n" + BudgetBlock(devWorkLoad(len(unit.Modules), bytes), RoundBudgetOf(devUnitCondition())))
-	return maskShownPrompt(r.repo, p.String())
+	c.WriteString("\n" + BudgetBlock(devWorkLoad(len(unit.Modules), bytes), RoundBudgetOf(devUnitCondition())))
+
+	what := fmt.Sprintf(devWhatFmt, passed, idx+1, total, unit.ID, attempt)
+	if attempt > 1 {
+		what += fmt.Sprintf(devWhatFailFmt, fail.Kind)
+	}
+	commits := len(r.requirements(unit).Symbols)
+	if commits == 0 {
+		commits = len(unit.Modules)
+	}
+	return maskShownPrompt(r.repo, Bagu(fmt.Sprintf(devWhereFmt, baseRef), what, c.String(), fmt.Sprint(commits), r.devRepo))
 }
 
-const dev_unit_instruction = `
-[INCREMENTAL BUILD — unit %[1]d of %[2]d, id=%[3]s]
-you are building ONE unit of a multi-unit project. each unit is its own conversation.
+// inserted into the shell for a dev unit: %[1]s the branch to build on
+const devWhereFmt = "分支 %[1]s 上最近的提交"
 
-[GPU CONFIGURATION]
-all GPUs on this machine: %[4]s
-usable GPUs: %[5]s
-CUDA_VISIBLE_DEVICES=%[6]s
+// %[1]d units passed, unit %[2]d of %[3]d, id %[4]s, attempt %[5]d
+const devWhatFmt = "有 %[1]d 个 unit 已经通过，现在是 unit %[2]d/%[3]d（%[4]s）第 %[5]d 次"
 
-[WHAT YOU HAVE]
-- the THEORY for your unit (LAYER 1 math + LAYER 2 form templates) in .einsteinOS/theory.md
-- the code of the prior units, on the dev repo branch
-- you do NOT have the original source code. this is intentional.
+// %[1]s the kind of the last failure
+const devWhatFailFmt = "，上一次 %[1]s"
 
-[CRITICAL — DO NOT]
-- do NOT clone, fetch, or read ANY repository other than the dev repo
-- do NOT search for or access the reference source code in any way
-- do NOT use the reference project's namespace, directory structure, or file names
-- the theory is ABSTRACT — it describes WHAT to build, not HOW the reference did it
-- if the theory mentions paths from the reference, IGNORE those paths
+// a passed unit: %[1]s id, %[2]s its conversation, %[3]s its modules
+const devPriorUnitFmt = "[PRIOR UNIT] %[1]s conv=%[2]s modules=[%[3]s]\n"
 
-[WHERE YOUR FILES GO]
-work in the repo directory shown under [DEV REPO]. use the dev repo's existing layout
-(include/<project>/, src/<project>/, tests/); if it has none yet, create one that fits YOUR project name.
+// the unit's theory: %[1]d/%[2]d unit, %[3]s id, %[4]d modules, %[5]d bytes, %[6]s module names
+const devTheoryFmt = "[THEORY — unit %[1]d/%[2]d, id=%[3]s, %[4]d module(s), %[5]d bytes] .einsteinOS/theory.md, its sections headed '## FILE: <path>' or '## MODULE: <name>': %[6]s\n"
 
-[THE KERNEL VERIFIES YOU — WRITE THESE TWO SCRIPTS]
-%[7]s
-%[8]s
-- build script: compiles the WHOLE project with the real toolchain (the compilers are in %[11]s on this machine).
-  it must exit 0 only if everything builds.
-- test script: runs the tests for YOUR unit. it must exit 0 only if every test passes; a failing check must make it exit non-zero.
-  the tests must check the INVARIANTS of the theory (the LAYER 1 statements), not just that the code runs.
-the kernel runs both on the real machine after you stop, with EINSTEINOS_GPUS and CUDA_VISIBLE_DEVICES set to the usable GPUs.
-a unit with no test script, or with tests that cannot fail, will be rejected by the reviewer.
-run them yourself first: the results you see for commands run on this machine are the real ones.
+// %[1]s the part of a split module that is this unit's
+const devScopeFmt = "[SCOPE] %[1]s\n"
 
-[IF YOUR UNIT IS TOO BIG]
-if you find your part is too large to finish well in one session, you may hand a self-contained piece to another conversation
-(see below) — give it a narrow scope (specific files), because it edits the same tree as you. do this EARLY, before you have
-written most of it yourself. do not start conversations for small things.
-when you have many small questions to decide, ask ONE judge conversation all of them at once.
-
-[CONVERSATION COMMANDS — run them in bash]
+// the kernel's contracts with a dev unit, as facts: %[1]d/%[2]d/%[3]s unit, %[4]s all GPUs,
+// %[5]s/%[6]s usable, %[7]s/%[8]s the scripts it runs, %[9]s the commands, %[10]s the done
+// line, %[11]s where the compilers are.
+const dev_unit_instruction = `[UNIT %[1]d/%[2]d id=%[3]s]
+GPUs: %[4]s; usable: %[5]s (CUDA_VISIBLE_DEVICES=%[6]s)
+build: %[7]s
+test: %[8]s
+the kernel runs both on the real machine, with EINSTEINOS_GPUS and CUDA_VISIBLE_DEVICES set to the usable GPUs; their exit codes are compile= and smoke=.
+the compilers are in %[11]s on this machine.
+LAYER 2 placeholders: prjname, adj, Obj, typenameType, objtype, argname
+[CONVERSATION COMMANDS]
 %[9]s
-
-[THEORY → CODE]
-LAYER 2 form templates use placeholder identifiers:
-  prjname, adj, Obj, typenameType, objtype, argname
-fill them with YOUR project's names. you are creating NEW code, not copying.
-the math in LAYER 1 defines WHAT the code must do. HOW you implement it
-(data structures, control flow, error handling) is YOUR choice for YOUR hardware.
-
-[WHEN YOU ARE DONE]
-write a short summary (what you built, which files). do NOT git push. do NOT claim compile or test results — the kernel measures them.
 %[10]s`
 
 // devSettleSleep: how long to wait between looks at a conversation the remote

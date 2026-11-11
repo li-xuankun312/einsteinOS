@@ -50,7 +50,7 @@ func (f *fakeModel) exec(prompt string) (string, string) {
 			return f.planner(prompt), ""
 		}
 		return "", ""
-	case strings.Contains(prompt, "[INCREMENTAL BUILD"):
+	case strings.Contains(prompt, "[THEORY — unit "):
 		m := unitIDRe.FindStringSubmatch(prompt)
 		unit := ""
 		if m != nil {
@@ -193,7 +193,7 @@ func TestDevFromTheorems_HappyPath_KernelVerifiesAndPushes(t *testing.T) {
 		switch {
 		case strings.Contains(p, "[TASK] group the"):
 			planners++
-		case strings.Contains(p, "[INCREMENTAL BUILD"):
+		case strings.Contains(p, "[THEORY — unit "):
 			works++
 		case strings.Contains(p, "[YOU ARE A REVIEWER"):
 			reviews++
@@ -219,7 +219,7 @@ func TestDevFromTheorems_FailThenFix_RealErrorReachesTheFixConversation(t *testi
 			return
 		}
 		// the fix conversation must be handed the REAL output and the failing code
-		if !strings.Contains(prompt, "FIX ATTEMPT 1") || !strings.Contains(prompt, "undefined symbol ix_frobnicate") {
+		if !strings.Contains(prompt, "第 2 次，上一次") || !strings.Contains(prompt, "undefined symbol ix_frobnicate") {
 			t.Errorf("fix prompt lacks the real build error:\n%s", prompt)
 		}
 		if b, _ := os.ReadFile(filepath.Join(env.mirror, "src/impl.cu")); !strings.Contains(string(b), "broken") {
@@ -249,7 +249,7 @@ func TestDevFromTheorems_FailThenFix_RealErrorReachesTheFixConversation(t *testi
 	}
 	works := 0
 	for _, p := range env.model.prompts {
-		if strings.Contains(p, "[INCREMENTAL BUILD") {
+		if strings.Contains(p, "[THEORY — unit ") {
 			works++
 		}
 	}
@@ -393,7 +393,7 @@ func TestTheoryPhaseOutputRunsThroughTheDevLoopToAFinishedBranch(t *testing.T) {
 	if !strings.Contains(th, "## FILE: "+TheoryOutputsDir+"/ExpertCacheResidency.lean") {
 		t.Fatalf("theory.md on the branch lacks the sections:\n%.300s", th)
 	}
-	if len(prompts) != 1 || !strings.Contains(prompts[0], `grep -n '^## \(FILE\|MODULE\):'`) {
+	if len(prompts) != 1 || !strings.Contains(prompts[0], "'## FILE: <path>' or '## MODULE: <name>'") {
 		t.Fatalf("the child's instructions must search for the headers the theory really has; prompts=%d", len(prompts))
 	}
 	if len(*env.prDone) != 1 {
@@ -427,7 +427,7 @@ func TestAConversationThatWritesNothingHandsItsLastWordsToTheNextAttempt(t *test
 	if _, err := dev_from_theorems(pid, &Step{Owner: "ref", Repo: "proj"}); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"FIX ATTEMPT 1", "nothing_written", "wrote no file", "BLOCKER: I cannot see /home/claude/x"} {
+	for _, want := range []string{"第 2 次，上一次", "nothing_written", "wrote no file", "BLOCKER: I cannot see /home/claude/x"} {
 		if !strings.Contains(fixPrompt, want) {
 			t.Fatalf("the fix conversation must be told what the failed one said; lacks %q in:\n%.1500s", want, fixPrompt)
 		}
@@ -479,7 +479,7 @@ func TestARestartedProcessResumesFromTheBranchAndRedoesNothing(t *testing.T) {
 func countConversations(prompts []string) (units, planners int) {
 	for _, p := range prompts {
 		switch {
-		case strings.Contains(p, "[INCREMENTAL BUILD"):
+		case strings.Contains(p, "[THEORY — unit "):
 			units++
 		case strings.Contains(p, "[TASK] group") || strings.Contains(p, "is too big for one session"):
 			planners++

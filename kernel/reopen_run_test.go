@@ -14,7 +14,7 @@ func TestAReopenedUnitRunsAsAFixConversationThroughTheRun(t *testing.T) {
 	const verdict = "gr_norm normalizes jointly over all 4 streams (D=10240) but theory/decode reference norm each stream row (N=2560) separately"
 	env.model.unitWork = func(prompt, unit string, n int) {
 		if n == 2 {
-			if !strings.Contains(prompt, "FIX ATTEMPT 1") || !strings.Contains(prompt, verdict) {
+			if !strings.Contains(prompt, "第 2 次，上一次") || !strings.Contains(prompt, verdict) {
 				t.Errorf("the reopened unit's conversation is not a fix conversation with the verdict:\n%s", prompt)
 			}
 			mustWrite(env.mirror, "src/impl.cu", "// per-stream norm\n")
@@ -46,7 +46,7 @@ func TestAReopenedUnitRunsAsAFixConversationThroughTheRun(t *testing.T) {
 	}
 	fixes := 0
 	for _, p := range env.model.prompts[before:] {
-		if strings.Contains(p, "[INCREMENTAL BUILD") {
+		if strings.Contains(p, "[THEORY — unit ") {
 			fixes++
 		}
 	}

@@ -57,8 +57,9 @@ func TestTheBudgetSentenceIsComposedFromWhatThePromptHolds(t *testing.T) {
 	tail := "the information is complete. this time you read a lot of theory: LAYER 1/2 of 2 module(s) (6 KB of theory) " +
 		"and write the code for them, with the build and test scripts. start.\n" +
 		"using up the tool calls is fine: up to 40 in one round, and the kernel resets you for the next one (up to 20 rounds).\n"
-	if !strings.HasSuffix(p, tail) {
-		t.Fatalf("dev prompt does not end with its budget:\n%s", p[max(0, len(p)-500):])
+	// the budget is inserted; the prompt ends as the shell does, with the user's own sentence
+	if !strings.Contains(p, tail) || !strings.HasSuffix(p, "。工具调用次数满了就跟我说，我会帮你重置，一直满就一直重置") {
+		t.Fatalf("dev prompt does not hold its budget inside the shell:\n%s", p[max(0, len(p)-800):])
 	}
 	if RoundBudgetOf(devUnitCondition()) != 20 {
 		t.Fatal("dev: MaxRounds(30) under a 20-round ceiling")
