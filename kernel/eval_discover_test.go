@@ -15,6 +15,7 @@ import (
 // then), the reference and the dev repo are not candidates, a candidate that does not clone
 // is asked again with the same prompt, and only accepted clones are kept.
 func TestEvalDiscoverRunsTheSealedSearch(t *testing.T) {
+	resetEvalSearch()
 	oa, oc, os := evalAskFn, evalCloneFn, evalSizeFn
 	defer func() { evalAskFn, evalCloneFn, evalSizeFn = oa, oc, os }()
 	evalSizeFn = func(owner, name string) (int64, error) { return 1024, nil }
@@ -59,6 +60,7 @@ func (*notExistErr) Error() string { return "repository not found" }
 // clone was killed. A repository larger than the limit is not cloned; one whose size cannot be
 // read is.
 func TestALargeRepositoryIsNotCloned(t *testing.T) {
+	resetEvalSearch()
 	oa, oc, os := evalAskFn, evalCloneFn, evalSizeFn
 	defer func() { evalAskFn, evalCloneFn, evalSizeFn = oa, oc, os }()
 	evalAskFn = func(string) (string, error) { return "llvm/llvm-project\ntriton-lang/triton\nsomeone/unknown\n", nil }
@@ -100,6 +102,7 @@ func TestATimedOutCommandIsKilledWithItsChildren(t *testing.T) {
 
 // A repository the search did not take is not cloned again when the search runs again.
 func TestARepositoryNotTakenIsNotMeasuredAgain(t *testing.T) {
+	resetEvalSearch()
 	oa, oc, os := evalAskFn, evalCloneFn, evalSizeFn
 	defer func() { evalAskFn, evalCloneFn, evalSizeFn = oa, oc, os }()
 	evalNotTakenMu.Lock()
@@ -124,6 +127,7 @@ func TestARepositoryNotTakenIsNotMeasuredAgain(t *testing.T) {
 // Three verifications of the integration unit asked for the same commit's measurement at the
 // same time; it is measured once and the others wait for it.
 func TestTheCommitIsMeasuredOnceForVerificationsSideBySide(t *testing.T) {
+	resetEvalSearch()
 	oa := evalAskFn
 	defer func() { evalAskFn = oa }()
 	var mu sync.Mutex
@@ -188,4 +192,11 @@ func TestARepositoryWithoutANumberInThePortsUnitIsNotTaken(t *testing.T) {
 			t.Fatalf("%s: why %q", c.name, why)
 		}
 	}
+}
+
+// resetEvalSearch forgets what the search measured, for a test that measures anew.
+func resetEvalSearch() {
+	evalNotTakenMu.Lock()
+	evalNotTaken = map[string]string{}
+	evalNotTakenMu.Unlock()
 }

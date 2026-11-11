@@ -10,6 +10,7 @@ import (
 // the Iluvatar machine (zeng-bin3123/baloon einsteinOS/state, .einsteinOS/eval/6801c77f…json)
 // held "external": null and "compared": null, and could not tell whether the search had run.
 func TestTheRecordSaysWhatTheSearchAndTheComparisonDid(t *testing.T) {
+	resetEvalSearch()
 	oa, oc := evalAskFn, evalCloneFn
 	defer func() { evalAskFn, evalCloneFn = oa, oc }()
 	replies := []string{"Niko1221/Strata\nggml-org/llama.cpp\nnobody/missing\nvllm-project/vllm\n", "\n"}
