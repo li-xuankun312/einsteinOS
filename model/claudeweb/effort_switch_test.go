@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"google.golang.org/adk/v2/model"
 )
@@ -49,6 +50,10 @@ func TestAnEffortSwitchLeavesThinkingAsTheClientSendsIt(t *testing.T) {
 	}))
 	defer srv.Close()
 
+	// a window of its own: the package's requests so far must not throttle this test's
+	oldWin := apiWin
+	apiWin = newAPIWindow(1000, time.Minute)
+	t.Cleanup(func() { apiWin = oldWin })
 	m := NewModel(NewClient(ClientConfig{BaseURL: srv.URL, OrgID: "org1", Cookie: "c=1"}), "claude-opus-5-5", "medium")
 	req := m.newCompletionRequest("hi")
 	m.completionLoop(context.Background(), "conv1", req, false, func(*model.LLMResponse, error) bool { return true })

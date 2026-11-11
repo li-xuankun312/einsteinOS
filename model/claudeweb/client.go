@@ -147,7 +147,9 @@ func (c *Client) Completion(convID string, req *CompletionRequest) (io.ReadClose
 					lastErr = &RateLimitError{Body: errStr}
 					continue
 				}
-				lastErr = &RateLimitError{Body: errStr}
+				// the account's limit says when it resets ("请2026-11-12 05:25:05后重试"): 11/11
+				// 19:07-20:35 without it each effort was retried every 3 minutes for 10 hours
+				lastErr = &RateLimitError{Body: errStr, RetryAfter: parseRetryAfter(errStr)}
 				watch.stop()
 				return nil, lastErr
 			}

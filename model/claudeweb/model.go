@@ -659,6 +659,10 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 		body, err := m.client.Completion(convID, webReq)
 		if err != nil {
 			if rle, ok := err.(*RateLimitError); ok {
+				// a refused attempt is not a round: the conversation has not been answered.
+				// 11/11 19:34 unit 3's conversations ended at rounds=20 tools=0, every "round"
+				// an attempt refused for quota, and the unit was judged to have written nothing.
+				round--
 				// record cooldown for current effort tier
 				m.mu.Lock()
 				curEffort := m.effort
@@ -691,14 +695,14 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 					m.effort = other
 					m.mu.Unlock()
 					webReq.Effort = other // only the effort: thinking stays as the client sends it
-					sleepWithHeartbeat(wait)
+					rateLimitSleep(wait)
 					continue
 				} else {
 					// current tier recovers sooner — wait for it
 					wait := time.Until(curReady)
 					log.Printf("claudeweb: rate limit on effort=%s, waiting %v", curEffort, wait.Truncate(time.Second))
 					m.mu.Unlock()
-					sleepWithHeartbeat(wait)
+					rateLimitSleep(wait)
 					continue
 				}
 			}
@@ -1497,6 +1501,9 @@ func truncate(s string, n int) string {
 	}
 	return s[:n] + "..."
 }
+
+// rateLimitSleep is how a conversation waits for an effort's quota (a hook for tests).
+var rateLimitSleep = sleepWithHeartbeat
 
 // sleepWithHeartbeat: sleep for duration but print a log line every 2 minutes.
 // keeps SSH alive and lets the user know the process isn't dead.
