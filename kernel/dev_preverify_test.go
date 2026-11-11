@@ -17,7 +17,7 @@ func TestTheDoneLineIsCheckedByTheKernelsOwnVerification(t *testing.T) {
 		GateText: "port_incomplete: 2 of the 86 definitions have no counterpart:\n  src/x.cu k1 …"}}
 	RegisterPreVerify("dev_unit_x", func() (bool, string) { return false, preVerifyReport(fail) })
 	ran, ok, rep := PreVerify("dev_unit_x")
-	if !ran || ok || !strings.Contains(rep, "gate=port_incomplete") || !strings.Contains(rep, "2 of the 86") || !strings.Contains(rep, "not done until this passes") {
+	if !ran || ok || !strings.Contains(rep, "gate=port_incomplete") || !strings.Contains(rep, "2 of the 86") || !strings.Contains(rep, preVerifyTailFmt) || !strings.HasPrefix(rep, "这些问题的每一句话") {
 		t.Fatalf("%v %v %s", ran, ok, rep)
 	}
 	UnregisterPreVerify("dev_unit_x")

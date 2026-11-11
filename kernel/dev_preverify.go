@@ -98,13 +98,17 @@ func touchRoleWhile(role string, interval time.Duration) (stop func()) {
 
 const (
 	preVerifyHeadFmt = "[KERNEL VERIFICATION — the check that decides this unit, run now on the real machine on your tree]\ncompile=%[1]s (build.sh exit %[2]d)  smoke=%[3]s (test.sh exit %[4]d)  gate=%[5]s\n"
-	preVerifyTailFmt = "the unit is not done until this passes: fix it, run it again, and write the done line again.\n"
+	preVerifyTailFmt = "the kernel ends this conversation at a done line only when this verification passes.\n"
+	// inserted into the shell: where, and %[1]s/%[2]s/%[3]s what the verification measured
+	preVerifyWhere   = "这个对话在真机上的 tree"
+	preVerifyWhatFmt = "内核刚在真机上验证了它，compile=%[1]s smoke=%[2]s gate=%[3]s"
 )
 
 // preVerifyReport is what a failed check sends back, formatted from the outcome.
 func preVerifyReport(o UnitVerifyOutcome) string {
 	if o.Err != nil {
-		return fmt.Sprintf(preVerifyHeadFmt, "error", -1, "error", -1, o.Err.Error()) + preVerifyTailFmt
+		return Bagu(preVerifyWhere, fmt.Sprintf(preVerifyWhatFmt, "error", "error", o.Err.Error()),
+			fmt.Sprintf(preVerifyHeadFmt, "error", -1, "error", -1, o.Err.Error())+preVerifyTailFmt, "1", spawnTo())
 	}
 	s := fmt.Sprintf(preVerifyHeadFmt, o.Result.Compile, o.Result.BuildExit, o.Result.Smoke, o.Result.TestExit, gateOrNone(o.Result.Gate))
 	for _, k := range []string{"compile_error", "smoke_error"} {
@@ -115,7 +119,7 @@ func preVerifyReport(o UnitVerifyOutcome) string {
 	if o.Result.GateText != "" {
 		s += ShapeOutput(o.Result.GateText, LocalResultCap()/2) + "\n"
 	}
-	return s + preVerifyTailFmt
+	return Bagu(preVerifyWhere, fmt.Sprintf(preVerifyWhatFmt, o.Result.Compile, o.Result.Smoke, gateOrNone(o.Result.Gate)), s+preVerifyTailFmt, "1", spawnTo())
 }
 
 // deltaDigest identifies the mirror's delta (paths and contents of changed files, removed paths).
