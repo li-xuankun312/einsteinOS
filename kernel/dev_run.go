@@ -1109,10 +1109,21 @@ func resumeStoredReviewFailure(plan *DevPlan, unit DevPlanNode, branch string, b
 // and only when none of those is left, the first reopened one. A unit another unit's review
 // faulted is extra work queued behind what was already queued, not a step back: 11/08 the
 // units pf7b804cf95's review faulted (u41e2bf114f, u4decb4e657) sit before it in the plan.
+//
+// The integration unit is not one of those: it runs the port on the model end to end, so it
+// waits for every reopened unit. 11/10 16:01 it started while units
+// uf4e6ff5513, uf9f69c2c43, ua9684a588f and u0063babba8 were reopened, and judged the code
+// before their fixes.
 func nextUnitIndex(plan *DevPlan, leaves []DevPlanNode) int {
-	reopened := -1
+	reopened, integration := -1, -1
 	for i, l := range leaves {
 		if plan.UnitPass(l) {
+			continue
+		}
+		if l.Integration {
+			if integration < 0 {
+				integration = i
+			}
 			continue
 		}
 		if !plan.Reopened(l.ID) {
@@ -1122,5 +1133,8 @@ func nextUnitIndex(plan *DevPlan, leaves []DevPlanNode) int {
 			reopened = i
 		}
 	}
-	return reopened
+	if reopened >= 0 {
+		return reopened
+	}
+	return integration
 }

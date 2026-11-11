@@ -286,3 +286,20 @@ func TestUnitsOutsideThePlanAreNamed(t *testing.T) {
 		t.Fatalf("outside: %v", got)
 	}
 }
+
+// The plan of 11/10 16:01 on einsteinOS/dev-3089b9ac95: units 2, 3, 9 and 11 reopened, 33 to
+// 40 passed, the integration unit last. The reopened units run before it.
+func TestReopenedUnitsRunBeforeTheIntegrationUnit(t *testing.T) {
+	leaves := []DevPlanNode{{ID: "u62b936371e", Sources: []string{"a"}}, {ID: "uf4e6ff5513", Sources: []string{"b"}},
+		{ID: "pfd5ae1e7e0", Sources: []string{"c"}}, {ID: "uintegratione5509707730d", Integration: true}}
+	p := &DevPlan{PortPass: map[string]bool{"u62b936371e": true, "pfd5ae1e7e0": true}}
+	p.MarkReopen("uf4e6ff5513", DevFailure{Kind: "review_fail", Text: "mrope"})
+	if got := nextUnitIndex(p, leaves); got != 1 {
+		t.Fatalf("the reopened unit runs first: %d", got)
+	}
+	p.TakeReopen("uf4e6ff5513")
+	p.PortPass["uf4e6ff5513"] = true
+	if got := nextUnitIndex(p, leaves); got != 3 {
+		t.Fatalf("then the integration unit: %d", got)
+	}
+}
