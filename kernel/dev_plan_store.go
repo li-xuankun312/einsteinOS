@@ -838,10 +838,21 @@ func (p *DevPlan) Reopened(id string) bool { _, ok := p.Reopen[id]; return ok }
 // two units whose reviews fault each other's files would reopen each other without end.
 const devMaxReopens = 2
 
-// ReopenableUnits: of ids, the units that have not reached devMaxReopens.
+// ReopenableUnits: of ids, the units of this plan that have not reached devMaxReopens. A unit
+// that is not a leaf of the plan never runs, so reopening it would only let the reviewed unit
+// pass: 11/10 14:36 p81030368e8 passed on the reopen of four units of earlier plans, and the
+// bug its review named stayed. With none of ids reopenable the verdict is the reviewed unit's.
+// (A plan without a tree, as tests build it, takes ids as they are.)
 func (p *DevPlan) ReopenableUnits(ids []string) []string {
+	leaves := map[string]bool{}
+	for _, l := range p.Leaves() {
+		leaves[l.ID] = true
+	}
 	var out []string
 	for _, id := range ids {
+		if len(leaves) > 0 && !leaves[id] {
+			continue
+		}
 		if p.ReopenCount[id] < devMaxReopens {
 			out = append(out, id)
 		}

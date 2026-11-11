@@ -267,3 +267,15 @@ func TestABlameOnUnitsOutsideThePlanIsNoBlame(t *testing.T) {
 		t.Fatalf("no unit of this plan owns src/ilu_kv_q8.cu: the verdict is p81030368e8's own, got %v", got)
 	}
 }
+
+// A unit that is not a leaf of the plan is not reopenable: it would never run.
+func TestOnlyUnitsOfThePlanAreReopened(t *testing.T) {
+	p := &DevPlan{Nodes: []DevPlanNode{{ID: "p81030368e8", Sources: []string{"a.hpp"}}, {ID: "u0063babba8", Sources: []string{"b.cu"}}}}
+	got := p.ReopenableUnits([]string{"u02c65ed515", "u0063babba8", "uebd9b81357"})
+	if len(got) != 1 || got[0] != "u0063babba8" {
+		t.Fatalf("reopenable: %v", got)
+	}
+	if got := p.ReopenableUnits([]string{"u02c65ed515", "u649794726a"}); len(got) != 0 {
+		t.Fatalf("units of earlier plans only: nothing to reopen, the verdict is the reviewed unit's: %v", got)
+	}
+}
