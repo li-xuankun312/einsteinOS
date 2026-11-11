@@ -43,7 +43,7 @@ func (f *fakeModel) exec(prompt string) (string, string) {
 	SetConvID(GetLastForkedPid(), id)
 
 	switch {
-	case strings.Contains(prompt, "[YOU ARE A REVIEWER"):
+	case strings.Contains(prompt, "[VERDICT] the kernel reads the last line"):
 		return "looked at it.\nPASS", ""
 	case strings.Contains(prompt, "[TASK] group the") || strings.Contains(prompt, "is too big for one session"):
 		if f.planner != nil {
@@ -195,7 +195,7 @@ func TestDevFromTheorems_HappyPath_KernelVerifiesAndPushes(t *testing.T) {
 			planners++
 		case strings.Contains(p, "[THEORY — unit "):
 			works++
-		case strings.Contains(p, "[YOU ARE A REVIEWER"):
+		case strings.Contains(p, "[VERDICT] the kernel reads the last line"):
 			reviews++
 		}
 	}
@@ -204,7 +204,7 @@ func TestDevFromTheorems_HappyPath_KernelVerifiesAndPushes(t *testing.T) {
 	}
 	// the reviewer was told the kernel's measurement and not to rebuild
 	for _, p := range env.model.prompts {
-		if strings.Contains(p, "[YOU ARE A REVIEWER") && (!strings.Contains(p, "compile = pass") || !strings.Contains(p, "do NOT re-run the build")) {
+		if strings.Contains(p, "[VERDICT] the kernel reads the last line") && (!strings.Contains(p, "compile = pass") || !strings.Contains(p, reviewMeasuredFact)) {
 			t.Fatalf("reviewer prompt lacks the kernel status / the no-rebuild rule:\n%s", p)
 		}
 	}

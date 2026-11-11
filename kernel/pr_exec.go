@@ -1248,9 +1248,18 @@ func dev_review_unit(pid int64, repo, branch string, unitNum, totalUnits int, un
 // reference definition (masked: the reviewer, like the developer, does not see the
 // reference) has a counterpart — and checks each counterpart against the theory module that
 // specifies it (arg: the port map).
-const reviewPortStepFmt = "4. read %[1]s: each line pairs a measured definition of the reference with its counterpart here;\n" +
-	"   the kernel measured that every counterpart exists. for each one, check it does what the theory module specifying it says.\n" +
-	"   one that does not = FAIL, naming it.\n"
+const reviewPortStepFmt = "[PORT MAP] %[1]s: each line pairs a measured definition of the reference with its counterpart here; the kernel measured that every counterpart exists\n"
+
+// what happened, for a review: %[1]d/%[2]d the unit, %[3]s/%[4]s the kernel's exit codes
+const reviewWhatFmt = "unit %[1]d/%[2]d 已经由内核在真机上 build 和 test，compile=%[3]s smoke=%[4]s"
+
+// %[1]d the unit, %[2]s its modules
+const reviewModulesFmt = "[UNIT %[1]d MODULES] %[2]s\n"
+
+// facts the reviewer's judgement stands on
+const reviewMeasuredFact = "compile= and smoke= are the exit codes of the unit's build.sh and test.sh, run by the kernel on the real machine; this sandbox has no real toolchain.\n"
+const reviewTheoryFact = "[THEORY] .einsteinOS/theory.md, its sections headed '## FILE: <path>' or '## MODULE: <name>'\n"
+const reviewVerdictFact = "[VERDICT] the kernel reads the last line: PASS, or FAIL: <one line reason>\n"
 
 func dev_review_unit_inner(pid int64, repo, branch string, unitNum, totalUnits int, unit devUnit, status map[string]string) string {
 	devRepos := GetDevRepos()
@@ -1270,71 +1279,39 @@ func dev_review_unit_inner(pid int64, repo, branch string, unitNum, totalUnits i
 	parts := strings.Split(devRepos[0], "/")
 	repoName := parts[len(parts)-1]
 
-	var prompt strings.Builder
-	prompt.WriteString(fmt.Sprintf("[TASK] review whether dev unit %d/%d is complete and correct.\n\n", unitNum, totalUnits))
-	prompt.WriteString("[YOU ARE A REVIEWER — NOT A DEVELOPER]\n")
-	prompt.WriteString("- do NOT write code, fix bugs, or modify any files\n")
-	prompt.WriteString("- do NOT clone repositories other than the dev repo\n")
-	prompt.WriteString("- ONLY read, check, and judge\n\n")
-
-	prompt.WriteString(fmt.Sprintf("[BRANCH] %s\n", branch))
-	prompt.WriteString(fmt.Sprintf("[DEV REPO] %s → /home/claude/%s/\n\n", devRepos[0], repoName))
-
-	prompt.WriteString(fmt.Sprintf("[UNIT %d MODULES]\n%s\n\n", unitNum, strings.Join(unit.Files, ", ")))
-
-	prompt.WriteString(fmt.Sprintf("[DEV UNIT STATUS from kernel]\n"))
+	var c strings.Builder
+	c.WriteString(fmt.Sprintf("[DEV REPO] %s → /home/claude/%s/\n", devRepos[0], repoName))
+	c.WriteString(fmt.Sprintf(reviewModulesFmt, unitNum, strings.Join(unit.Files, ", ")))
+	c.WriteString("[DEV UNIT STATUS from kernel]\n")
 	for k, v := range status {
-		prompt.WriteString(fmt.Sprintf("  %s = %s\n", k, v))
+		c.WriteString(fmt.Sprintf("  %s = %s\n", k, v))
 	}
-	prompt.WriteString("\n")
-
+	c.WriteString(reviewMeasuredFact)
 	if tbl := Proofs.Table(SpecTheorems(unit.Theory)); tbl != "" {
-		prompt.WriteString("[PROOF STATUS — checked by the kernel against Axle; this is fact]\n")
-		prompt.WriteString(tbl)
-		prompt.WriteString("do NOT run Axle and do NOT give a Lean verdict. judge the code against the LAYER 1a spec only.\n")
-		prompt.WriteString("the kernel enforces the proof gate separately and will override a PASS if a proof failed.\n\n")
+		c.WriteString("[PROOF STATUS]\n" + tbl)
 	}
-
-	prompt.WriteString("[WHAT TO CHECK]\n")
-	prompt.WriteString("1. git clone the dev repo, checkout the branch\n")
 	if status["port_map"] != "" {
-		prompt.WriteString(fmt.Sprintf(reviewPortStepFmt, status["port_map"]))
-	} else {
-		prompt.WriteString("4. check: does source code exist for EACH module listed above?\n")
-		prompt.WriteString("   grep for the module names in the source files.\n")
-		prompt.WriteString("   a module with no corresponding source file = incomplete.\n")
+		c.WriteString(fmt.Sprintf(reviewPortStepFmt, status["port_map"]))
 	}
-	prompt.WriteString("5. the KERNEL already built this unit and ran its tests on the REAL machine; compile= and smoke= in [DEV UNIT STATUS] are\n")
-	prompt.WriteString("   exit codes. do NOT re-run the build (your sandbox has no real toolchain). READ the unit's tests instead:\n")
-	prompt.WriteString("   do they check the LAYER 1 invariants of this unit's modules, and could they fail? a test that cannot fail is a FAIL.\n")
-	prompt.WriteString("6. compare code structure against theory:\n")
-	prompt.WriteString("   grep -n 'MODULE:' .einsteinOS/theory.md — find sections for THIS unit's modules\n")
-	prompt.WriteString("   read the LAYER 1a spec — does the code match the math?\n\n")
-
-	prompt.WriteString("[OUTPUT FORMAT]\n")
-	prompt.WriteString("your LAST line must be exactly one of:\n")
-	prompt.WriteString("  PASS\n")
-	prompt.WriteString("  FAIL: <one line reason>\n")
-	prompt.WriteString(DoneInstruction())
-	prompt.WriteString("nothing else on that line. you may write analysis above it.\n")
+	c.WriteString(reviewTheoryFact)
+	if f, ok := reviewDevConvFile(repo, status); ok {
+		c.WriteString(fmt.Sprintf(reviewDevConvFmt, localUploadsPath(f.Name)))
+		SetForkFiles([]ForkFile{f})
+	}
+	c.WriteString(reviewVerdictFact + DoneInstruction())
+	what := fmt.Sprintf(reviewWhatFmt, unitNum, totalUnits, status["compile"], status["smoke"])
+	reviewPrompt := Bagu(fmt.Sprintf(devWhereFmt, branch), what, c.String(), fmt.Sprint(len(unit.Files)), devRepos[0])
 
 	log.Printf("dev_review_unit: %s unit %d/%d forking review_conv (%d bytes prompt)",
-		repo, unitNum, totalUnits, prompt.Len())
+		repo, unitNum, totalUnits, len(reviewPrompt))
 
 	// reviewer termination: let the reviewer FINISH its analysis (theory comparison
 	// + compile check + verdict), then stop. Do NOT terminate on CompileResult —
-	// compile is one piece of evidence, not the verdict. The reviewer's job is to
-	// compare implementation against theory spec; cutting it short on compile
-	// skips the most valuable check.
+	// compile is one piece of evidence, not the verdict.
 	reviewTerm := WithDoneMarker(OrConditions(
 		&ConsecutiveTextRounds{Threshold: 2}, // reviewer done reading → writes verdict
 		&MaxRounds{Limit: 10},
 	))
-	reviewPrompt := prompt.String()
-	if f, ok := reviewDevConvFile(repo, status); ok {
-		reviewPrompt += fmt.Sprintf(reviewDevConvFmt, localUploadsPath(f.Name))
-		SetForkFiles([]ForkFile{f})
-	}
 	child, err := ForkWithTermination(maskShownPrompt(repo, reviewPrompt), ".", "review_conv", reviewTerm)
 	if err != nil {
 		log.Printf("dev_review_unit: %s unit %d fork failed: %v, using compile status",
