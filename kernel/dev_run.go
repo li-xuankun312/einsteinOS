@@ -558,6 +558,7 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 	var status map[string]string
 	for try := 1; try <= 5; try++ {
 		var ferr error
+		waitRoleEnded(role, r.repo, unit.ID)
 		RegisterPreVerify(role, func() (bool, string) {
 			if changed, removed, err := treeDelta(mirror, base); err == nil && pre.sameRejected(deltaDigest(mirror, changed, removed)) {
 				log.Printf("dev_preverify: %s unit %s (%s): the files are those of the last rejected verification (gate=%q) — its result is sent back, not measured again",
@@ -1087,6 +1088,28 @@ func waitAbandoned(child int64, repo, unitID string) {
 			return
 		case <-time.After(waitAbandonedReport):
 			log.Printf("dev_from_theorems: %s unit %s: waiting for the conversation given up on (pid %d) to end before another is started", repo, unitID, child)
+		}
+	}
+}
+
+// waitRoleEnded: the check of role is registered only when no conversation of role runs. The
+// check is kept per role; 11/10 the verification that decided the integration unit at 23:33
+// was run from 9a378854's done line through the check e8e9ed00's start had registered, on a
+// tree three conversations had written.
+func waitRoleEnded(role, repo, unitID string) {
+	for {
+		pid, alive := liveRole(role)
+		if !alive {
+			return
+		}
+		m := getMeta(pid)
+		if m == nil || m.Done == nil {
+			return
+		}
+		log.Printf("dev_from_theorems: %s unit %s: a conversation of role %s (pid %d) still runs — its check stays until it ends", repo, unitID, role, pid)
+		select {
+		case <-m.Done:
+		case <-time.After(waitAbandonedReport):
 		}
 	}
 }

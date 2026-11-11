@@ -66,3 +66,20 @@ func TestASecondConversationOfADevRoleIsNotStarted(t *testing.T) {
 		t.Fatalf("an ended conversation is not live: %d", p)
 	}
 }
+
+// The unit's check is registered only once the conversation of its role that is still running
+// has ended, so a verification belongs to one conversation.
+func TestTheCheckOfARoleWaitsForItsRunningConversation(t *testing.T) {
+	const pid, role = int64(990006), "dev_fix_1"
+	m := &TaskMeta{Role: role, Done: make(chan struct{})}
+	metaMu.Lock()
+	taskMeta[pid] = m
+	metaMu.Unlock()
+	defer func() { metaMu.Lock(); delete(taskMeta, pid); metaMu.Unlock() }()
+	go func() { time.Sleep(60 * time.Millisecond); close(m.Done) }()
+	start := time.Now()
+	waitRoleEnded(role, "o/r", "u0063babba8")
+	if time.Since(start) < 50*time.Millisecond {
+		t.Fatal("returned while a conversation of the role ran")
+	}
+}
