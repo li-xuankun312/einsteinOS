@@ -119,7 +119,28 @@ func evalAcceptRepo(repo string) (bool, string) {
 	for _, x := range b {
 		names = append(names, x.Kind+":"+x.Name)
 	}
+	// what a searched repository adds to the evaluation is its published numbers compared with
+	// the port's end-to-end rates (eval_compare.go): one that publishes none in the port's
+	// unit adds nothing. 11/10 triton-lang/triton was taken for bench_dense_matmul.py and
+	// three other scripts, and the planner found none of the numbers comparable.
+	if n := evalCluesInUnit(evalClues(repo, evalBareDir(repo), "HEAD"), evalPortUnit); n == 0 {
+		return false, fmt.Sprintf("%d runnable benchmark(s) (%s) but no published number in %s, the unit of the port's end-to-end run", len(b), shortList(names, 4), evalPortUnit)
+	}
 	return true, fmt.Sprintf("%d runnable benchmark(s): %s", len(b), shortList(names, 8))
+}
+
+// evalPortUnit: the unit the port's end-to-end run is measured in (e2eGate: prefill and decode).
+const evalPortUnit = "tok/s"
+
+// evalCluesInUnit: how many of clues are in unit.
+func evalCluesInUnit(clues []EvalClue, unit string) int {
+	n := 0
+	for _, c := range clues {
+		if c.Metric.Unit == unit {
+			n++
+		}
+	}
+	return n
 }
 
 // cmakeSources: the source files an add_executable lists, relative to the repository.

@@ -1,6 +1,10 @@
 package kernel
 
 import (
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -142,5 +146,46 @@ func TestTheCommitIsMeasuredOnceForVerificationsSideBySide(t *testing.T) {
 	evalBaseFor(repo, sha, nil)
 	if one == 0 || asks != one || one > 3 {
 		t.Fatalf("asks: %d side by side, %d after", one, asks)
+	}
+}
+
+// 11/10 triton-lang/triton was taken for its benchmark scripts; its documents publish no
+// number in tok/s, and none of its numbers was comparable with the port's run. A repository
+// is taken only when it publishes a number in the port's unit.
+func TestARepositoryWithoutANumberInThePortsUnitIsNotTaken(t *testing.T) {
+	for _, c := range []struct {
+		name, readme string
+		taken        bool
+	}{
+		{"matmul", "dense matmul reaches 812 TFLOPS on H100\n", false},
+		{"engine", "decode: 45.2 tok/s on Qwen3.6-35B-A3B\n", true},
+	} {
+		repo := fmt.Sprintf("einsteinos-test-%d/%s", os.Getpid(), c.name)
+		work, bare := t.TempDir(), evalBareDir(repo)
+		defer os.RemoveAll(bare)
+		run := func(dir string, a ...string) {
+			cmd := exec.Command("git", append([]string{"-C", dir}, a...)...)
+			cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("git %v: %s", a, out)
+			}
+		}
+		os.MkdirAll(filepath.Join(work, "benchmarks"), 0o755)
+		os.WriteFile(filepath.Join(work, "benchmarks", "bench_run.py"), []byte("if __name__ == \"__main__\":\n    print('x')\n"), 0o755)
+		os.WriteFile(filepath.Join(work, "README.md"), []byte(c.readme), 0o644)
+		run(work, "init", "-q", "-b", "main")
+		run(work, "add", "-A")
+		run(work, "commit", "-qm", "x")
+		os.RemoveAll(bare)
+		if out, err := exec.Command("git", "clone", "-q", "--bare", work, bare).CombinedOutput(); err != nil {
+			t.Fatalf("clone: %s", out)
+		}
+		ok, why := evalAcceptRepo(repo)
+		if ok != c.taken {
+			t.Fatalf("%s: taken=%v (%s)", c.name, ok, why)
+		}
+		if !ok && !strings.Contains(why, "no published number in tok/s") {
+			t.Fatalf("%s: why %q", c.name, why)
+		}
 	}
 }
