@@ -248,11 +248,20 @@ func prefetchCommitBlobs(cloneDir, sha string) {
 		// --filter=blob:none makes it a promisor fetch: the pack is kept as a promisor pack and
 		// the connectivity check accepts what it does not hold (11/06 git 2.25 without it:
 		// "bad revision … did not send all necessary objects")
-		args := append([]string{"--git-dir", cloneDir, "-c", "fetch.negotiationAlgorithm=noop", "fetch", "-q", "origin", "--no-tags", "--filter=blob:none"}, oids[i:end]...)
-		fetch := exec.CommandContext(ctx, "git", args...)
-		fetch.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
-		if fo, err := fetch.CombinedOutput(); err != nil {
-			log.Printf("ref_prefetch: %s: %d blob(s) not fetched in one request (%v: %s) — files will be fetched one by one", short_sha(sha), end-i, err, strings.TrimSpace(string(fo)))
+		// direct first, then through the machine's proxy (ref_proxy.go)
+		var ferr error
+		var fout []byte
+		for _, proxy := range refFetchRoutes() {
+			args := append(append([]string{"--git-dir", cloneDir}, refProxyArgs(proxy)...), "-c", "fetch.negotiationAlgorithm=noop", "fetch", "-q", "origin", "--no-tags", "--filter=blob:none")
+			fetch := exec.CommandContext(ctx, "git", append(args, oids[i:end]...)...)
+			fetch.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+			if fout, ferr = fetch.CombinedOutput(); ferr == nil {
+				break
+			}
+			log.Printf("ref_prefetch: %s: %d object(s) not fetched in one request %s (%v: %s)", short_sha(sha), end-i, refRouteName(proxy), ferr, tailText(strings.TrimSpace(string(fout)), 200))
+		}
+		if ferr != nil {
+			log.Printf("ref_prefetch: %s: files will be fetched one by one", short_sha(sha))
 			return
 		}
 	}
