@@ -1017,7 +1017,26 @@ func (r *devRun) reviewBlame(unit DevPlanNode, verdict string) []string {
 			sources[l.ID] = req.Sources
 		}
 	}
-	return blameOnBranch(dir, r.branch, unit.ID, verdict, sources, inPlan)
+	blames := blameOnBranch(dir, r.branch, unit.ID, verdict, sources, inPlan)
+	if dropped := outsidePlan(blameOnBranch(dir, r.branch, unit.ID, verdict, sources, nil), inPlan); len(dropped) > 0 {
+		log.Printf(reviewOutsidePlanFmt, r.repo, unit.ID, strings.Join(dropped, " "), map[bool]string{true: "the verdict is unit " + unit.ID + "'s", false: "units of this plan: " + strings.Join(blames, " ")}[len(blames) == 0])
+	}
+	return blames
+}
+
+// reviewOutsidePlanFmt: said whenever a verdict names code that port maps of earlier plans give
+// to units that will not run — 11/10 14:36 it went unsaid, and the bug with it.
+const reviewOutsidePlanFmt = "dev_from_theorems: %[1]s unit %[2]s: the review faulted files the port maps give to %[3]s, units of earlier plans that do not run — %[4]s"
+
+// outsidePlan: the ids not in inPlan.
+func outsidePlan(ids []string, inPlan map[string]bool) []string {
+	var out []string
+	for _, id := range ids {
+		if !inPlan[id] {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // blameOnBranch: the units other than unitID that own what verdict faults, measured on the

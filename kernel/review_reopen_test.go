@@ -279,3 +279,10 @@ func TestOnlyUnitsOfThePlanAreReopened(t *testing.T) {
 		t.Fatalf("units of earlier plans only: nothing to reopen, the verdict is the reviewed unit's: %v", got)
 	}
 }
+
+func TestUnitsOutsideThePlanAreNamed(t *testing.T) {
+	got := outsidePlan([]string{"u02c65ed515", "u0063babba8", "uebd9b81357"}, map[string]bool{"u0063babba8": true})
+	if strings.Join(got, " ") != "u02c65ed515 uebd9b81357" {
+		t.Fatalf("outside: %v", got)
+	}
+}
