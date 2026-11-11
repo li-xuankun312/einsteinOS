@@ -8,6 +8,7 @@ package kernel
 import (
 	"debug/elf"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 	"unicode"
@@ -61,7 +62,7 @@ func resolveLaunches(pl probeLog) []KernelLaunch {
 	cache := map[string]objSyms{}
 	var out []KernelLaunch
 	for _, l := range pl.Launches {
-		k := KernelLaunch{PID: l.PID, Object: l.Object, API: l.API, Symbol: l.Symbol}
+		k := KernelLaunch{PID: l.PID, Object: launchObject(pl, l), API: l.API, Symbol: l.Symbol}
 		switch {
 		case k.Symbol != "":
 		case l.API == "cuLaunchKernel":
@@ -69,10 +70,10 @@ func resolveLaunches(pl probeLog) []KernelLaunch {
 		case l.Object == "?":
 			k.Why = fmt.Sprintf("no loaded object holds the launched address %#x", l.Addr)
 		default:
-			o, ok := cache[l.Object]
+			o, ok := cache[k.Object]
 			if !ok {
-				o.syms, o.pic, o.err = elfFuncSymbols(l.Object)
-				cache[l.Object] = o
+				o.syms, o.pic, o.err = elfFuncSymbols(k.Object)
+				cache[k.Object] = o
 			}
 			addr := l.Addr
 			if o.pic {
@@ -80,12 +81,12 @@ func resolveLaunches(pl probeLog) []KernelLaunch {
 			}
 			switch {
 			case o.err != nil:
-				k.Why = fmt.Sprintf("%s could not be read (%v)", l.Object, o.err)
+				k.Why = fmt.Sprintf("%s could not be read (%v)", k.Object, o.err)
 			case len(o.syms) == 0:
-				k.Why = l.Object + " has no symbol table (stripped?)"
+				k.Why = k.Object + " has no symbol table (stripped?)"
 			default:
 				if k.Symbol = o.syms[addr]; k.Symbol == "" {
-					k.Why = fmt.Sprintf("%s has no function symbol at %#x", l.Object, addr)
+					k.Why = fmt.Sprintf("%s has no function symbol at %#x", k.Object, addr)
 				}
 			}
 		}
@@ -96,6 +97,20 @@ func resolveLaunches(pl probeLog) []KernelLaunch {
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].PID < out[j].PID })
 	return out
+}
+
+// launchObject: the file holding a launch's stub. dladdr names the main executable by the
+// path it was started with, which is relative when a test ran "build/test_x" from its own
+// directory; that path means nothing in the kernel's directory, so the executable the probe
+// was loaded into (its /proc/self/exe, from the same process's load line) stands for it.
+func launchObject(pl probeLog, l probeLaunch) string {
+	if l.Object == "" || l.Object == "?" || filepath.IsAbs(l.Object) {
+		return l.Object
+	}
+	if exe, ok := pl.Loaded[l.PID]; ok && filepath.Base(exe) == filepath.Base(l.Object) {
+		return exe
+	}
+	return l.Object
 }
 
 // kernelIdent extracts the kernel's identifier from its stub symbol: the (last) name of an
