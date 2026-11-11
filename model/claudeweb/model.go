@@ -95,6 +95,30 @@ type Model struct {
 	effortCooldown map[string]time.Time // effort → earliest retry time
 }
 
+// webThinkingMode is the thinking_mode claude.ai's own client sends for Opus 5.5 ("auto": the
+// model decides). The kernel picks an effort, never thinking: 11/11 15:27 a rate limit on
+// effort=medium switched to high with thinking_mode "extended", which the proxy counts as
+// another model (claude-opus-5-5-high-thinking) with its own exhausted quota.
+const webThinkingMode = "auto"
+
+// newCompletionRequest: a completion request as the claude.ai client builds it, at the
+// model's current effort.
+func (m *Model) newCompletionRequest(prompt string) *CompletionRequest {
+	return &CompletionRequest{
+		Prompt:        prompt,
+		Model:         m.modelName,
+		Timezone:      "Asia/Shanghai",
+		Locale:        "en-US",
+		Effort:        m.effort,
+		ThinkingMode:  webThinkingMode,
+		RenderingMode: "messages",
+		Attachments:   []json.RawMessage{},
+		Files:         []json.RawMessage{},
+		SyncSources:   []json.RawMessage{},
+		Tools:         []WebTool{},
+	}
+}
+
 func NewModel(client *Client, modelName string, effort string) *Model {
 	if effort == "" {
 		effort = "medium"
@@ -491,19 +515,7 @@ func (m *Model) GenerateContent(ctx context.Context, req *model.LLMRequest, stre
 	}
 	fullPrompt += prompt
 
-	webReq := &CompletionRequest{
-		Prompt:        fullPrompt,
-		Model:         m.modelName,
-		Timezone:      "Asia/Shanghai",
-		Locale:        "en-US",
-		Effort:        m.effort,
-		ThinkingMode:  "off",
-		RenderingMode: "messages",
-		Attachments:   []json.RawMessage{},
-		Files:         []json.RawMessage{},
-		SyncSources:   []json.RawMessage{},
-		Tools:         []WebTool{},
-	}
+	webReq := m.newCompletionRequest(fullPrompt)
 	if isNewConv {
 		webReq.CreateConversationParams = &CreateConversationParams{
 			Name:                           "",
@@ -681,12 +693,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 					log.Printf("claudeweb: rate limit on effort=%s, switching to %s (available now)", curEffort, other)
 					m.effort = other
 					m.mu.Unlock()
-					webReq.Effort = other
-					if other == "high" {
-						webReq.ThinkingMode = "extended"
-					} else {
-						webReq.ThinkingMode = ""
-					}
+					webReq.Effort = other // only the effort: thinking stays as the client sends it
 					continue
 				} else if otherReady.Before(curReady) {
 					// other tier recovers sooner — switch and wait for it
@@ -694,12 +701,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 					log.Printf("claudeweb: rate limit on effort=%s, switching to %s (ready in %v, vs %v)", curEffort, other, wait.Truncate(time.Second), time.Until(curReady).Truncate(time.Second))
 					m.effort = other
 					m.mu.Unlock()
-					webReq.Effort = other
-					if other == "high" {
-						webReq.ThinkingMode = "extended"
-					} else {
-						webReq.ThinkingMode = ""
-					}
+					webReq.Effort = other // only the effort: thinking stays as the client sends it
 					sleepWithHeartbeat(wait)
 					continue
 				} else {
@@ -1299,19 +1301,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 		for _, tb := range collectedTools {
 			st.ledger.markDelivered(tb.id) // sent (or deliberately left to the remote's own result)
 		}
-		webReq = &CompletionRequest{
-			Prompt:        localDiff.String(),
-			Model:         m.modelName,
-			Timezone:      "Asia/Shanghai",
-			Locale:        "en-US",
-			Effort:        m.effort,
-			ThinkingMode:  "off",
-			RenderingMode: "messages",
-			Attachments:   []json.RawMessage{},
-			Files:         []json.RawMessage{},
-			SyncSources:   []json.RawMessage{},
-			Tools:         []WebTool{},
-		}
+		webReq = m.newCompletionRequest(localDiff.String())
 	}
 
 	if termCond != nil {
@@ -1411,19 +1401,7 @@ func parseKV(text string) map[string]string {
 // the conversation is alive in the registry (d2aaf709: don't kill, index for reuse).
 // used when a child produces too little output (e.g. 502 interrupted it).
 func (m *Model) ContinueConversation(existingConvID, prompt string) (string, string) {
-	webReq := &CompletionRequest{
-		Prompt:        localExecPrefix + prompt,
-		Model:         m.modelName,
-		Timezone:      "Asia/Shanghai",
-		Locale:        "en-US",
-		Effort:        m.effort,
-		ThinkingMode:  "off",
-		RenderingMode: "messages",
-		Attachments:   []json.RawMessage{},
-		Files:         []json.RawMessage{},
-		SyncSources:   []json.RawMessage{},
-		Tools:         []WebTool{},
-	}
+	webReq := m.newCompletionRequest(localExecPrefix + prompt)
 
 	log.Printf("claudeweb: continue %s prompt=%q", existingConvID[:8], truncate(prompt, 80))
 
@@ -1468,24 +1446,12 @@ func (m *Model) ContinueConversation(existingConvID, prompt string) (string, str
 func (m *Model) RunConversation(prompt string) (string, string) {
 	convID := generateUUID()
 
-	webReq := &CompletionRequest{
-		Prompt:        prompt,
-		Model:         m.modelName,
-		Timezone:      "Asia/Shanghai",
-		Locale:        "en-US",
-		Effort:        m.effort,
-		ThinkingMode:  "off",
-		RenderingMode: "messages",
-		Attachments:   []json.RawMessage{},
-		Files:         []json.RawMessage{},
-		SyncSources:   []json.RawMessage{},
-		Tools:         []WebTool{},
-		CreateConversationParams: &CreateConversationParams{
-			Name:                           "",
-			Model:                          m.modelName,
-			IncludeConversationPreferences: true,
-			IsTemporary:                    false,
-		},
+	webReq := m.newCompletionRequest(prompt)
+	webReq.CreateConversationParams = &CreateConversationParams{
+		Name:                           "",
+		Model:                          m.modelName,
+		IncludeConversationPreferences: true,
+		IsTemporary:                    false,
 	}
 
 	fullPrompt := localExecPrefix + prompt
