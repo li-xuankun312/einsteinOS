@@ -962,6 +962,16 @@ func buildCompletionPR(refOwner, refName, refRepo, sha string, unitVerdicts []st
 //
 // no hardcoded GPU IDs, no hardcoded commands, no vllm assumption.
 
+// inserted into the shell for open_pr's check: %[1]s the dev repo
+const openPRWhereFmt = "%[1]s 的构建"
+
+// %[1]s the throughput the run measured
+const openPRWhatFmt = "这次运行测到 %[1]s"
+
+// %[1]s the dev repo: its build target and its output, and the lines the kernel reads
+const openPRContentFmt = "[BUILD] cd %[1]s && make so; its output is %[1]s/build/*.so\n" +
+	"[ANSWER] the kernel reads the lines verify=pass|fail and verify_error=<one line>\n"
+
 // open_pr: three steps, all kernel-driven.
 //  1. fork verify child: re-run numeric checks, output pass/fail
 //  2. if pass: fresh clone, copy new code in, single squashed commit, push
@@ -975,16 +985,8 @@ func open_pr(pid int64, step *Step) (string, error) {
 	devRepo := fmt.Sprintf("/home/claude/%s", step.Repo)
 
 	// step 1: fork a verify child — re-check the numbers are real
-	verifyPrompt := fmt.Sprintf(
-		"[TASK] verify the build in %s is working.\n"+
-			"run: cd %s && make so 2>&1 | tail -5\n"+
-			"run: ls -la %s/build/*.so 2>/dev/null\n"+
-			"check the .so exists and was built recently.\n\n"+
-			"[OUTPUT FORMAT]\n"+
-			"verify=pass|fail\n"+
-			"verify_error=<one line if fail>\n",
-		devRepo, devRepo, devRepo,
-	)
+	verifyPrompt := Bagu(fmt.Sprintf(openPRWhereFmt, devRepo), fmt.Sprintf(openPRWhatFmt, tokS),
+		fmt.Sprintf(openPRContentFmt, devRepo), "1", repo)
 
 	verifyChild, err := ForkWithRole(verifyPrompt, ".", "verify_conv")
 	if err != nil {
@@ -1071,6 +1073,12 @@ git push origin %s 2>&1`,
 	return fmt.Sprintf("PR: %s → %s\n%s\n%s", branch, baseBranch, pushResult, prResult), nil
 }
 
+// inserted into the shell for dev_fix: %[1]s the dev repo
+const devFixWhereFmt = "%[1]s 上最近的提交"
+
+// %[1]d the attempt, %[2]s the failure the kernel recorded
+const devFixWhatFmt = "这是第 %[1]d 次修复，上一次 status=%[2]s"
+
 // dev_fix: kernel-driven fix step. Step fields carry structured args:
 //
 //	Command = failure type (compile_fail | gpu_fail | smoke_fail | needs_source)
@@ -1099,17 +1107,7 @@ func dev_fix(pid int64, step *Step) (string, error) {
 	gpuAll, gpuUsable := pr_gpu_args(pid)
 
 	var prompt strings.Builder
-
-	prompt.WriteString(hardwareSection(hw_info))
-
-	if theory != "" {
-		prompt.WriteString(fmt.Sprintf("[THEORY from %s]\n%s\n\n", repo, theory))
-	}
-
-	prompt.WriteString(fmt.Sprintf("[TASK]\n%s\n\n", task))
-
-	// kernel-computed failure diagnosis — kv format, not prose
-	prompt.WriteString("[PRIOR RESULT]\n")
+	// the prior result first, as the user's review came first: kv, as the kernel measured it
 	prompt.WriteString(fmt.Sprintf("status=%s\n", step.Command))
 	if step.Path != "" {
 		prompt.WriteString(fmt.Sprintf("error=%s\n", step.Path))
@@ -1117,40 +1115,37 @@ func dev_fix(pid int64, step *Step) (string, error) {
 	if step.Result != "" {
 		prompt.WriteString(fmt.Sprintf("files_written=%s\n", step.Result))
 	}
-	if step.Command == "review_fail" && step.Path != "" {
-		prompt.WriteString("the REVIEWER rejected the last unit for exactly the reason in error= above.\n")
-		prompt.WriteString("fix that reason first; do not spend tools on unrelated probing.\n")
-	}
 	prompt.WriteString("\n")
-
-	// NO ref source files. the dev child must work from theory + existing dev
-	// repo code + compile errors. reading the ref source is "looking at the answer"
-	// — it produces code with K(I₂|I₁) ≈ 0 (identical structure, renamed identifiers).
-	// the theory (LAYER 1 math + LAYER 2 form template) is the specification;
-	// the implementation must be independently derived from it.
-
-	// dev repo listing
+	prompt.WriteString(hardwareSection(hw_info))
+	if theory != "" {
+		prompt.WriteString(fmt.Sprintf("[THEORY from %s]\n%s\n\n", repo, theory))
+	}
+	prompt.WriteString(fmt.Sprintf("[TASK]\n%s\n\n", task))
+	// NO ref source files: the theory is the specification (K(I₂|I₁) ≈ 0 otherwise)
 	devRepos := GetDevRepos()
+	to := repo
 	if len(devRepos) > 0 {
+		to = devRepos[0]
 		prompt.WriteString("[DEV REPO]\n")
 		for _, dr := range devRepos {
 			parts := strings.Split(dr, "/")
 			prompt.WriteString(fmt.Sprintf("  %s → /home/claude/%s/\n", dr, parts[len(parts)-1]))
 		}
-		prompt.WriteString("\n")
 	}
-
 	prompt.WriteString(fmt.Sprintf(dev_verify_instruction, gpuAll, gpuUsable, gpuUsable, gpuAll))
-
-	feedback := pr_feedback(pid)
-	if feedback != "" {
-		prompt.WriteString(fmt.Sprintf("\n\n[PRIOR FEEDBACK]\n%s", feedback))
+	if feedback := pr_feedback(pid); feedback != "" {
+		prompt.WriteString(fmt.Sprintf("\n[PRIOR FEEDBACK]\n%s\n", feedback))
 	}
+	commits := 1
+	if step.Result != "" {
+		commits = len(strings.Split(step.Result, ","))
+	}
+	fixPrompt := Bagu(fmt.Sprintf(devFixWhereFmt, to), fmt.Sprintf(devFixWhatFmt, attempt, step.Command), prompt.String(), fmt.Sprint(commits), to)
 
 	log.Printf("dev_fix: %s attempt=%d failure=%s gpu_usable=%s",
 		repo, attempt, step.Command, gpuUsable)
 
-	child, err := ForkWithRole(maskShownPrompt(repo, prompt.String()), ".", fmt.Sprintf("dev_fix_%d", attempt))
+	child, err := ForkWithRole(maskShownPrompt(repo, fixPrompt), ".", fmt.Sprintf("dev_fix_%d", attempt))
 	if err != nil {
 		return "", err
 	}
@@ -1959,40 +1954,21 @@ VERIFICATION STEPS:
 `
 
 const dev_verify_instruction = `
-
 [GPU CONFIGURATION]
-all GPUs on this machine: %s
-usable GPUs (from prior P2P test): %s
-use CUDA_VISIBLE_DEVICES=%s for all GPU operations.
-
-[OUTPUT FORMAT]
-write code, compile it, test it on the real machine. then output a status block:
-
+all GPUs on this machine: %[1]s
+usable GPUs (from the P2P test): %[2]s (CUDA_VISIBLE_DEVICES=%[3]s)
+a model, when this machine has one, is at /tmp/model.
+[STATUS] the kernel reads these lines from the last message:
 compile=pass|fail
 compile_error=<one line if fail>
-gpu_pairs_ok=<pairs that pass P2P, e.g. 0-1,1-2,2-3>
-gpu_pairs_fail=<pairs that fail P2P, e.g. 0-3,1-3>
+gpu_pairs_ok=<GPU pairs, of %[4]s, a peer transfer passed between, e.g. 0-1,1-2>
+gpu_pairs_fail=<pairs it failed between>
 gpu_test=pass|fail
-gpu_test_detail=<what you tested: p2p, allreduce, memory>
+gpu_test_detail=<what was tested: p2p, allreduce, memory>
 smoke=pass|fail
 smoke_error=<one line if fail>
-files_written=<comma-separated paths of code you wrote>
-
-VERIFICATION STEPS (do all of these before outputting the status block):
-1. write the code to the dev repo
-2. compile — if fail, fix and recompile until pass or 3 tries
-3. test GPU-to-GPU P2P: for EVERY pair of GPUs in {%s},
-   try cudaMemcpyPeer or equivalent transfer. report each pair
-   as pass or fail in gpu_pairs_ok / gpu_pairs_fail.
-   THIS IS NOT OPTIONAL. you must test every pair.
-4. if a model exists at /tmp/model, check its size vs available memory.
-   if it won't fit with the usable GPU count, report smoke=fail.
-5. smoke test: run the code with a minimal workload end to end
-   using only the GPUs that passed P2P.
-   if it hangs or crashes, read the error, fix, retry.
-
-do NOT output the status block until you have actually run steps 1-5.
-the tool results are from the REAL machine.
+files_written=<comma-separated paths of code written>
+the tool results are from the real machine.
 `
 
 func PRRunAll(pid int64) []string {
