@@ -11,7 +11,7 @@ import (
 
 func TestHWProbePromptIsFactsOnlyOneBatchAndAsksForTheMarker(t *testing.T) {
 	p := hwProbePrompt()
-	for _, want := range []string{"FACTS ONLY", "ONE command", fmt.Sprint(LocalOutputCap()), DoneMarker} {
+	for _, want := range []string{"[HARDWARE]", "[ROUNDS] this conversation ends after", fmt.Sprint(LocalOutputCap()), DoneMarker} {
 		if !strings.Contains(p, want) {
 			t.Errorf("prompt lacks %q", want)
 		}

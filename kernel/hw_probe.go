@@ -13,13 +13,17 @@ import (
 // don't match the setup described..."); that sentence then became the [HARDWARE]
 // block of every dev prompt.
 func hwProbePrompt() string {
-	return fmt.Sprintf("probe this machine's hardware and report FACTS ONLY: GPU vendor/model/count, "+
-		"interconnect topology, CPU model and cores, memory, kernel version. do not compare what you find with anything.\n"+
-		"run ONE command that gathers all of it (lspci, nvidia-smi or ixsmi, lscpu, free, uname...). "+
-		"what a command prints is cut (head and tail kept) beyond about %d characters, so keep the output compact: "+
-		"pick the lines you need with grep/head/awk. if a tool is missing, say so in one line and go on.\n%s",
-		LocalOutputCap(), DoneInstruction())
+	return Bagu(hwProbeWhere, hwProbeWhat, fmt.Sprintf(hwProbeContentFmt, LocalOutputCap(), RoundBudget("hw_probe"))+DoneInstruction(), "6", "hw_init")
 }
+
+// inserted into the shell for the hardware probe
+const hwProbeWhere = "运行内核的这台机器"
+const hwProbeWhat = "内核要这台机器的硬件事实"
+
+// %[1]d the output cap, %[2]d the rounds; what the kernel takes from it
+const hwProbeContentFmt = "[HARDWARE] GPU vendor/model/count, interconnect topology, CPU model and cores, memory, kernel version — the kernel keeps them as facts of this machine, beside the GPUs and toolchain it measures itself.\n" +
+	"[OUTPUT CAP] what a command prints is cut (head and tail kept) beyond about %[1]d characters.\n" +
+	"[ROUNDS] this conversation ends after %[2]d rounds; each round is one round trip.\n"
 
 // gpuVendors are the device-node prefixes the kernel looks for under /dev, in order of
 // preference; the first vendor that has nodes is the machine's vendor. One vendor, not
