@@ -88,6 +88,9 @@ func SetEvalTask(task string) {
 // excluding the dev repositories and the ones in exclude (the reference itself is evaluated
 // as the baseline, not as a candidate). accept measures what a clone must hold
 // (evalAcceptRepo: a benchmark the kernel can run).
+// what the evaluation's search keeps of the answer (be244ef9, 6851fefd, a47fad18)
+const evalDiscoverKeepFact = "only a repository under 200 MiB, with benchmark code the kernel can run, that publishes a number in tok/s is kept; it is run beside the port, never built into it."
+
 func evalDiscover(task string, exclude []string, accept func(repo string) (bool, string)) ([]RefRepo, EvalDiscoverTrace) {
 	var tr EvalDiscoverTrace
 	skip := map[string]bool{}
@@ -95,7 +98,7 @@ func evalDiscover(task string, exclude []string, accept func(repo string) (bool,
 		skip[strings.ToLower(e)] = true
 	}
 	var good []RefRepo
-	prompt := fmt.Sprintf(refDiscoverPromptFmt, truncDiff(task, 3000), MAX_REFS)
+	prompt := refDiscoverPrompt(truncDiff(task, 3000), MAX_REFS, evalDiscoverKeepFact)
 	for tried := 1; tried <= 3 && len(good) < MAX_REFS; tried++ {
 		raw, err := evalAskFn(prompt)
 		tr.Asked++
@@ -150,7 +153,7 @@ func evalDiscover(task string, exclude []string, accept func(repo string) (bool,
 		if len(failed) == 0 && len(cands) > 0 {
 			break
 		}
-		prompt = fmt.Sprintf(refDiscoverPromptFmt, truncDiff(task, 3000), MAX_REFS-len(good))
+		prompt = refDiscoverPrompt(truncDiff(task, 3000), MAX_REFS-len(good), evalDiscoverKeepFact)
 	}
 	return good, tr
 }

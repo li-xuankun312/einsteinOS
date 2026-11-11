@@ -42,7 +42,7 @@ func TestEvalDiscoverRunsTheSealedSearch(t *testing.T) {
 	if len(got) != 1 || got[0].Owner+"/"+got[0].Name != "ggml-org/llama.cpp" {
 		t.Fatalf("kept %v", got)
 	}
-	if len(prompts) != 2 || !strings.Contains(prompts[0], task) || !strings.Contains(prompts[0], "reference repositories on github") {
+	if len(prompts) != 2 || !strings.Contains(prompts[0], task) || !strings.Contains(prompts[0], refDiscoverWhere) || !strings.Contains(prompts[0], evalDiscoverKeepFact) {
 		t.Fatalf("prompts: %q", prompts)
 	}
 	if strings.Contains(strings.Join(cloned, " "), "Strata") || !strings.Contains(strings.Join(cloned, " "), "/tmp/eval_ggml-org_llama.cpp.git") {

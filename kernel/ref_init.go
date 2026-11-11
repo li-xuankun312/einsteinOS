@@ -122,13 +122,30 @@ func ref_clone(owner, name string) {
 
 const MAX_REFS = 3
 
-// refDiscoverPromptFmt: the search for repositories beyond the ones a task names (%[1]s the
-// task, %[2]d how many). ref_discover only runs it when the task names none; the integration
-// unit's evaluation (eval_discover.go) runs it every time.
-const refDiscoverPromptFmt = "[USER TASK]\n%[1]s\n\n" +
-	"based on the task above, list %[2]d relevant open-source " +
-	"reference repositories on github.\n" +
-	"reply with ONLY owner/name lines, one per line, nothing else.\n"
+// refDiscoverPrompt: the search for repositories beyond the ones a task names — the shell
+// with the task, how many the kernel takes (n) and what it keeps of the answer (keep).
+// ref_discover only runs it when the task names none; the integration unit's evaluation
+// (eval_discover.go) runs it every time.
+func refDiscoverPrompt(task string, n int, keep string) string {
+	content := fmt.Sprintf(refDiscoverContentFmt, task, n, keep)
+	return Bagu(refDiscoverWhere, fmt.Sprintf(refDiscoverWhatFmt, n), content, fmt.Sprint(n), spawnTo())
+}
+
+// refNotFoundPrompt: the names the kernel could not clone, asked again through the shell
+func refNotFoundPrompt(notfound []string, n int, keep string) string {
+	content := fmt.Sprintf(refNotFoundContentFmt, strings.Join(notfound, ", "), n, keep)
+	return Bagu(refDiscoverWhere, fmt.Sprintf(refNotFoundWhatFmt, len(notfound)), content, fmt.Sprint(len(notfound)), spawnTo())
+}
+
+// inserted for the repository search: where, %[1]d how many, the task, what the kernel keeps
+const refDiscoverWhere = "GitHub 上的开源仓库"
+const refDiscoverWhatFmt = "内核要找 %[1]d 个和任务相关的仓库"
+const refNotFoundWhatFmt = "上一次给的 %[1]d 个名字在 GitHub 上不存在"
+const refDiscoverContentFmt = "[TASK]\n%[1]s\n\n[ANSWER] the kernel reads owner/name lines, up to %[2]d, and clones each: %[3]s\n"
+const refNotFoundContentFmt = "[NOT ON GITHUB] %[1]s\n[ANSWER] the kernel reads owner/name lines, up to %[2]d, and clones each: %[3]s\n"
+
+// what each search keeps of the answer
+const refDiscoverKeepFact = "the ones that exist become the references, read and theorized, never built."
 
 var (
 	dev_repos    = make(map[string]string) // key=owner/name, value=branch (empty="main")
@@ -169,6 +186,13 @@ func GetDevRepos() []string {
 	return out
 }
 
+// inserted for telling the dev repository from the references
+const detectDevWhere = "任务里提到的仓库"
+const detectDevWhatFmt = "任务里提到了 %[1]d 个仓库"
+
+// %[1]s the repositories, %[2]s the task; what the kernel does with the two lines
+const detectDevContentFmt = "[REPOS]\n%[1]s\n[TASK]\n%[2]s\n\n[ANSWER] the kernel reads two lines, dev=owner/name and branch=<branch>: the code is built in and pushed to dev at branch (main when the line is missing); every other repository named is a reference, read and theorized, never built.\n"
+
 func detect_dev_repos(task string) {
 	repos := extractRepoMentions(task)
 	if len(repos) <= 1 {
@@ -183,12 +207,8 @@ func detect_dev_repos(task string) {
 		repoList.WriteString(fmt.Sprintf("  %s/%s\n", r.Owner, r.Name))
 	}
 
-	prompt := fmt.Sprintf(
-		"repos mentioned:\n%s\nuser request:\n%s\n\n"+
-			"reply ONLY two lines:\ndev=owner/name\nbranch=branch_name\n"+
-			"dev = the repo to BUILD. branch = target branch mentioned by user (or main if not mentioned).\n",
-		repoList.String(), truncDiff(task, 1000),
-	)
+	prompt := Bagu(detectDevWhere, fmt.Sprintf(detectDevWhatFmt, len(repos)),
+		fmt.Sprintf(detectDevContentFmt, repoList.String(), truncDiff(task, 1000)), "1", "内核的 dev 仓库登记")
 
 	child, err := Fork(prompt, ".")
 	if err != nil {
@@ -253,7 +273,7 @@ func ref_discover(task string) []RefRepo {
 
 	need := MAX_REFS
 
-	prompt := fmt.Sprintf(refDiscoverPromptFmt, truncDiff(task, 3000), need)
+	prompt := refDiscoverPrompt(truncDiff(task, 3000), need, refDiscoverKeepFact)
 
 	var tried int
 	for tried < 3 && len(good) < MAX_REFS {
@@ -303,10 +323,7 @@ func ref_discover(task string) []RefRepo {
 		}
 
 		log.Printf("ref_discover: not found: %v", notfound)
-		prompt = fmt.Sprintf(
-			"these repos do not exist on github: %s\n"+
-				"correct the owner/name. reply with ONLY owner/name lines.",
-			strings.Join(notfound, ", "))
+		prompt = refNotFoundPrompt(notfound, MAX_REFS-len(good), refDiscoverKeepFact)
 	}
 	return good
 }
