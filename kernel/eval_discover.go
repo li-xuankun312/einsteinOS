@@ -96,6 +96,11 @@ func evalDiscover(task string, exclude []string, accept func(repo string) (bool,
 				continue
 			}
 			skip[strings.ToLower(key)] = true
+			if why := evalTooLarge(r.Owner, r.Name); why != "" {
+				log.Printf("eval_discover: %s not taken: %s", key, why)
+				tr.NotTaken = append(tr.NotTaken, key+": "+why)
+				continue
+			}
 			if err := evalCloneFn(r.Owner, r.Name, evalBareDir(key)); err != nil {
 				log.Printf("eval_discover: %s not taken: does not clone (%v)", key, err)
 				tr.NotTaken = append(tr.NotTaken, fmt.Sprintf("%s: does not clone (%v)", key, err))
