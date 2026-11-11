@@ -45,7 +45,12 @@ func TestThePreVerifyCheckOutlivesTheForkCall(t *testing.T) {
 	}
 	s := string(src)
 	fork := strings.Index(s, "child, ferr = ForkWithTermination(prompt")
-	if fork < 0 || !strings.Contains(s[fork:], "Wait(child)\n\t\tUnregisterPreVerify(role)") {
-		t.Fatal("UnregisterPreVerify must come after Wait(child)")
+	if fork < 0 {
+		t.Fatal("no fork")
+	}
+	after := s[fork:]
+	wait, unreg := strings.Index(after, "\t\tWait(child)\n"), strings.Index(after, "\t\tUnregisterPreVerify(role)\n\t\tif m := getMeta(child)")
+	if wait < 0 || unreg < wait {
+		t.Fatal("UnregisterPreVerify must come after Wait(child) (and after waitAbandoned)")
 	}
 }
