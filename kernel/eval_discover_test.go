@@ -92,3 +92,26 @@ func TestATimedOutCommandIsKilledWithItsChildren(t *testing.T) {
 		t.Fatalf("a command that ends: %q %v", out, err)
 	}
 }
+
+// A repository the search did not take is not cloned again when the search runs again.
+func TestARepositoryNotTakenIsNotMeasuredAgain(t *testing.T) {
+	oa, oc, os := evalAskFn, evalCloneFn, evalSizeFn
+	defer func() { evalAskFn, evalCloneFn, evalSizeFn = oa, oc, os }()
+	evalNotTakenMu.Lock()
+	evalNotTaken = map[string]string{}
+	evalNotTakenMu.Unlock()
+	evalAskFn = func(string) (string, error) { return "llvm/llvm-project\n", nil }
+	evalSizeFn = func(string, string) (int64, error) { return 0, errNotExist }
+	clones := 0
+	evalCloneFn = func(owner, name, dir string) error { clones++; return errNotExist }
+	for i := 0; i < 2; i++ {
+		evalDiscover("task", nil, func(string) (bool, string) { return true, "" })
+	}
+	if clones != 1 {
+		t.Fatalf("cloned %d times", clones)
+	}
+	_, tr := evalDiscover("task", nil, func(string) (bool, string) { return true, "" })
+	if !strings.Contains(strings.Join(tr.NotTaken, " "), "llvm/llvm-project: does not clone (repository not found) (measured before in this run)") {
+		t.Fatalf("not taken: %v", tr.NotTaken)
+	}
+}

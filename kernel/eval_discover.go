@@ -115,20 +115,28 @@ func evalDiscover(task string, exclude []string, accept func(repo string) (bool,
 				continue
 			}
 			skip[strings.ToLower(key)] = true
+			if why, ok := evalNotTakenBefore(key); ok {
+				tr.NotTaken = append(tr.NotTaken, key+": "+why+" (measured before in this run)")
+				failed = append(failed, key)
+				continue
+			}
 			if why := evalTooLarge(r.Owner, r.Name); why != "" {
 				log.Printf("eval_discover: %s not taken: %s", key, why)
 				tr.NotTaken = append(tr.NotTaken, key+": "+why)
+				evalRecordNotTaken(key, why)
 				continue
 			}
 			if err := evalCloneFn(r.Owner, r.Name, evalBareDir(key)); err != nil {
 				log.Printf("eval_discover: %s not taken: does not clone (%v)", key, err)
 				tr.NotTaken = append(tr.NotTaken, fmt.Sprintf("%s: does not clone (%v)", key, err))
+				evalRecordNotTaken(key, fmt.Sprintf("does not clone (%v)", err))
 				failed = append(failed, key)
 				continue
 			}
 			if ok, why := accept(key); !ok {
 				log.Printf("eval_discover: %s not taken: %s", key, why)
 				tr.NotTaken = append(tr.NotTaken, key+": "+why)
+				evalRecordNotTaken(key, why)
 				continue
 			} else {
 				log.Printf("eval_discover: %s taken: %s", key, why)
@@ -145,6 +153,27 @@ func evalDiscover(task string, exclude []string, accept func(repo string) (bool,
 		prompt = fmt.Sprintf(refDiscoverPromptFmt, truncDiff(task, 3000), MAX_REFS-len(good))
 	}
 	return good, tr
+}
+
+// evalNotTaken: the repositories the search measured and did not take in this run, and why.
+// 11/10 llvm/llvm-project was named, cloned and not taken at 16:48, 19:52 and 22:28, each time
+// after the same clone; a repository not taken is not measured again.
+var (
+	evalNotTakenMu sync.Mutex
+	evalNotTaken   = map[string]string{}
+)
+
+func evalRecordNotTaken(repo, why string) {
+	evalNotTakenMu.Lock()
+	evalNotTaken[strings.ToLower(repo)] = why
+	evalNotTakenMu.Unlock()
+}
+
+func evalNotTakenBefore(repo string) (string, bool) {
+	evalNotTakenMu.Lock()
+	defer evalNotTakenMu.Unlock()
+	why, ok := evalNotTaken[strings.ToLower(repo)]
+	return why, ok
 }
 
 // EvalDiscoverTrace: what the search did, kept in the evaluation record — 11/09 the first
