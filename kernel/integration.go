@@ -248,8 +248,8 @@ func (u UnitRequirements) IntegrationBlock(repo, sha, unitID string) string {
 	if u.RequireGPU {
 		b.WriteString(integrationGPULine)
 	}
-	name, _, _, _ := readModelConditions(evalModelDir)
-	b.WriteString(fmt.Sprintf(integrationE2ELine, devE2EScript(unitID), evalModelDir, name))
+	name, _, _, _ := readModelConditions(evalModel())
+	b.WriteString(fmt.Sprintf(integrationE2ELine, devE2EScript(unitID), evalModel(), name))
 	return b.String()
 }
 

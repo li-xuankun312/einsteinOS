@@ -9,16 +9,91 @@ package kernel
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // evalModelDir: where the model the port runs end to end is on this machine (11/08: a link
 // to /root/public-storage/models/Qwen/Qwen3.6-35B-A3B).
-var evalModelDir = "/tmp/model"
+var evalModelDir = evalModelDefault
+
+const evalModelDefault = "/tmp/model"
+
+// evalModelRoots: where a machine keeps its models, searched when evalModelDefault holds none.
+var evalModelRoots = []string{"/root/public-storage/models", "/root/shared-storage/models", "/models"}
+
+var (
+	evalModelOnce     sync.Once
+	evalModelResolved string
+)
+
+// evalModel: the model directory every evaluation of this run uses, resolved once. 11/10 the
+// machine had been rebuilt and /tmp/model did not exist until a conversation linked it: the
+// integration's end-to-end run failed at 22:39 and 23:15 and passed at 23:07 and 23:33 on the
+// same code, by whether the link existed at that moment. The kernel now takes evalModelDir
+// when it holds a model, else the first directory under evalModelRoots that does (sorted),
+// and keeps that for the run. A value set by a caller (tests) is taken as it is.
+func evalModel() string {
+	if evalModelDir != evalModelDefault {
+		return evalModelDir
+	}
+	evalModelOnce.Do(func() {
+		evalModelResolved = evalModelDefault
+		if hasModel(evalModelDefault) {
+			return
+		}
+		for _, root := range evalModelRoots {
+			if d := findModel(root, 3); d != "" {
+				evalModelResolved = d
+				log.Printf("eval: %s holds no model; the run's model is %s", evalModelDefault, d)
+				return
+			}
+		}
+		log.Printf("eval: no model in %s nor under %v", evalModelDefault, evalModelRoots)
+	})
+	return evalModelResolved
+}
+
+// hasModel: dir holds a config.json and a weight file.
+func hasModel(dir string) bool {
+	if !fileExists(filepath.Join(dir, "config.json")) {
+		return false
+	}
+	for _, pat := range []string{"*.safetensors", "*.gguf", "*.bin"} {
+		if m, _ := filepath.Glob(filepath.Join(dir, pat)); len(m) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// findModel: the first directory (sorted, depth-first, at most depth levels below root) that
+// holds a model.
+func findModel(root string, depth int) string {
+	if hasModel(root) {
+		return root
+	}
+	if depth == 0 {
+		return ""
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return ""
+	}
+	for _, e := range entries {
+		if e.IsDir() || e.Type()&os.ModeSymlink != 0 {
+			if d := findModel(filepath.Join(root, e.Name()), depth-1); d != "" {
+				return d
+			}
+		}
+	}
+	return ""
+}
 
 // EvalGPU is one GPU as ixsmi reports it.
 type EvalGPU struct {
@@ -74,8 +149,9 @@ func fileExists(p string) bool { _, err := os.Stat(p); return err == nil }
 
 // measureEvalConditions measures the conditions of an evaluation of repo at sha.
 func measureEvalConditions(repo, sha string) EvalConditions {
-	c := EvalConditions{ModelDir: evalModelDir, RefRepo: repo, RefSHA: sha}
-	c.ModelName, c.Model, c.ModelBytes, c.ModelErr = readModelConditions(evalModelDir)
+	dir := evalModel()
+	c := EvalConditions{ModelDir: dir, RefRepo: repo, RefSHA: sha}
+	c.ModelName, c.Model, c.ModelBytes, c.ModelErr = readModelConditions(dir)
 	if out, err := evalGPUQuery(); err != nil {
 		c.GPUErr = err.Error()
 	} else {

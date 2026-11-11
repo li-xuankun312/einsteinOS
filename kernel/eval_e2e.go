@@ -3,7 +3,7 @@ package kernel
 // eval_e2e.go — the integration unit's port runs the model on this machine end to end.
 //
 // The kernel runs the unit's .einsteinOS/verify/<unit>/e2e.sh in the integration workspace,
-// after its build, with MODEL_DIR set to the model directory (evalModelDir), and reads the
+// after its build, with MODEL_DIR set to the model directory (evalModel()), and reads the
 // prefill and decode rates it prints (the reference's generate prints them as
 // "<what> N tokens in T ms -> R tok/s"). No script, a failed run, or no prefill or no decode
 // rate in tok/s: the integration does not pass.
@@ -32,7 +32,7 @@ func evalRunE2E(ws, unitID string) EvalBenchRun {
 		br.Tail = "missing"
 		return br
 	}
-	cmd := fmt.Sprintf("MODEL_DIR=%q bash %q 2>&1", evalModelDir, script)
+	cmd := fmt.Sprintf("MODEL_DIR=%q bash %q 2>&1", evalModel(), script)
 	code, out, tr, err := runWatched(cmd, ws, evalBuildTimeout)
 	br.Exit, br.Metrics, br.Tail, br.Devices = code, metricsIn(out), tailText(out, 1500), tr.Devices
 	if err != nil {
@@ -45,9 +45,9 @@ func evalRunE2E(ws, unitID string) EvalBenchRun {
 func e2eGate(br EvalBenchRun) (kind, text string) {
 	switch {
 	case br.Tail == "missing":
-		return "integration_e2e_missing", fmt.Sprintf(gateE2EMissingFmt, br.Bench.File, evalModelDir)
+		return "integration_e2e_missing", fmt.Sprintf(gateE2EMissingFmt, br.Bench.File, evalModel())
 	case br.Exit != 0:
-		return "integration_e2e_failed", fmt.Sprintf(gateE2EFailedFmt, br.Bench.File, br.Exit, evalModelDir, br.Tail)
+		return "integration_e2e_failed", fmt.Sprintf(gateE2EFailedFmt, br.Bench.File, br.Exit, evalModel(), br.Tail)
 	}
 	for _, want := range []string{"prefill", "decode"} {
 		found := false

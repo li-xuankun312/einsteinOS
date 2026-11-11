@@ -3,6 +3,7 @@ package kernel
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -41,5 +42,37 @@ func TestEvalConditionsAreMeasured(t *testing.T) {
 	evalModelDir = filepath.Join(t.TempDir(), "absent")
 	if c := measureEvalConditions("o/r", "x"); c.ModelErr == "" {
 		t.Fatal("a missing model is recorded as such")
+	}
+}
+
+// 11/10 /tmp/model did not exist on the rebuilt machine; the model was at
+// /root/public-storage/models/Qwen/Qwen3.6-35B-A3B. The run's model is found there once and
+// kept, whatever links appear later.
+func TestTheRunsModelIsFoundOnceWhereTheMachineKeepsIt(t *testing.T) {
+	root := t.TempDir()
+	model := filepath.Join(root, "Qwen", "Qwen3.6-35B-A3B")
+	os.MkdirAll(model, 0o755)
+	os.WriteFile(filepath.Join(model, "config.json"), []byte(`{"model_type":"qwen3_5_moe"}`), 0o644)
+	os.WriteFile(filepath.Join(model, "model-00001-of-00002.safetensors"), []byte("x"), 0o644)
+	os.MkdirAll(filepath.Join(root, "Empty", "config-only"), 0o755)
+	os.WriteFile(filepath.Join(root, "Empty", "config-only", "config.json"), []byte(`{}`), 0o644)
+	oldRoots, oldDir := evalModelRoots, evalModelDir
+	defer func() {
+		evalModelRoots, evalModelDir, evalModelOnce, evalModelResolved = oldRoots, oldDir, sync.Once{}, ""
+	}()
+	evalModelRoots, evalModelDir, evalModelOnce = []string{filepath.Join(root, "absent"), root}, evalModelDefault, sync.Once{}
+	if hasModel(evalModelDefault) {
+		t.Skip("this machine has a model at /tmp/model")
+	}
+	if got := evalModel(); got != model {
+		t.Fatalf("model: %q", got)
+	}
+	os.WriteFile(filepath.Join(root, "Empty", "config-only", "w.gguf"), []byte("x"), 0o644)
+	if got := evalModel(); got != model {
+		t.Fatalf("kept for the run: %q", got)
+	}
+	evalModelDir = "/tmp/some-model"
+	if evalModel() != "/tmp/some-model" {
+		t.Fatal("a directory set by the caller is taken as it is")
 	}
 }
