@@ -999,24 +999,30 @@ func (r *devRun) reviewBlame(unit DevPlanNode, verdict string) []string {
 		return nil
 	}
 	sources := map[string][]string{}
+	inPlan := map[string]bool{}
 	for _, l := range r.plan.Leaves() {
+		inPlan[l.ID] = true
 		if req := r.rawRequirements(l); len(req.Sources) > 0 {
 			sources[l.ID] = req.Sources
 		}
 	}
-	return blameOnBranch(dir, r.branch, unit.ID, verdict, sources)
+	return blameOnBranch(dir, r.branch, unit.ID, verdict, sources, inPlan)
 }
 
 // blameOnBranch: the units other than unitID that own what verdict faults, measured on the
 // dev branch in the clone at dir — by the files it names, else by the definitions it names.
-// Nobody, when unitID owns any of it.
-func blameOnBranch(dir, branch, unitID, verdict string, sources map[string][]string) []string {
-	owners := reviewOwners(verdict, portMapOwners(dir, branch), sources)
+// Nobody, when unitID owns any of it. Only units of this plan (inPlan; nil: every port map)
+// are owners: the dev branch keeps the port maps of earlier commits' plans, whose units never
+// run again — 11/10 14:36 unit p81030368e8's review faulted src/ilu_kv_q8.cu, owned only by
+// u02c65ed515, u649794726a, ub6cd72ef49 and uebd9b81357 of earlier plans; those four were
+// "reopened", none ran, and p81030368e8 passed with the bug in place.
+func blameOnBranch(dir, branch, unitID, verdict string, sources map[string][]string, inPlan map[string]bool) []string {
+	owners := planOwners(reviewOwners(verdict, portMapOwners(dir, branch), sources), inPlan)
 	if len(owners) == 0 {
-		owners = reviewSymbolOwners(verdict, portMapEntries(dir, branch), func(f string) string {
+		owners = planOwners(reviewSymbolOwners(verdict, portMapEntries(dir, branch), func(f string) string {
 			b, _ := exec.Command("git", "-C", dir, "show", branch+":"+f).Output()
 			return string(b)
-		})
+		}), inPlan)
 	}
 	for _, units := range owners {
 		for _, u := range units {
@@ -1026,6 +1032,23 @@ func blameOnBranch(dir, branch, unitID, verdict string, sources map[string][]str
 		}
 	}
 	return reviewBlames(unitID, owners)
+}
+
+// planOwners: owners with every unit outside inPlan dropped, and files left with no owner
+// dropped (nil inPlan keeps every unit).
+func planOwners(owners map[string][]string, inPlan map[string]bool) map[string][]string {
+	if inPlan == nil {
+		return owners
+	}
+	out := map[string][]string{}
+	for f, units := range owners {
+		for _, u := range units {
+			if inPlan[u] {
+				out[f] = append(out[f], u)
+			}
+		}
+	}
+	return out
 }
 
 // resumeStoredReviewFailure: a unit that comes back from the plan with a review failure

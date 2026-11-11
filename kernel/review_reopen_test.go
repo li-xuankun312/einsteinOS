@@ -175,7 +175,7 @@ func TestStoredReviewFailuresAreAttributedOnResume(t *testing.T) {
 		t.Fatal("as it stands the plan asks to split it")
 	}
 	blame := func(u DevPlanNode, verdict string) []string {
-		return blameOnBranch(dir, branch, u.ID, verdict, map[string][]string{u.ID: u.Sources})
+		return blameOnBranch(dir, branch, u.ID, verdict, map[string][]string{u.ID: u.Sources}, nil)
 	}
 	blames := resumeStoredReviewFailure(p, unit, branch, blame)
 	if len(blames) != 1 || blames[0] != "u41e2bf114f" {
@@ -227,5 +227,43 @@ func TestADeferredReviewFailureSaysTheAttributionFoundNobody(t *testing.T) {
 	p.MarkDeferred("u1", deferredFailure(DevFailure{Kind: "compile_fail", Text: "error"}))
 	if got := p.Deferred["u1"].Attribution; got != "" {
 		t.Fatalf("a compile failure was never attributed: %q", got)
+	}
+}
+
+// 11/10 14:36: unit p81030368e8's review said kv_append_q8_step in src/ilu_kv_q8.cu quantizes
+// with the unrounded 127/amax. The dev branch's port maps gave that file only to units of
+// earlier plans; with the plan's units as the only owners nobody else is blamed, and the
+// verdict is the reviewed unit's own failure.
+func TestABlameOnUnitsOutsideThePlanIsNoBlame(t *testing.T) {
+	const branch = "einsteinOS/dev-3089b9ac95"
+	dir := t.TempDir()
+	git := func(a ...string) {
+		c := exec.Command("git", append([]string{"-C", dir}, a...)...)
+		c.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+		if out, err := c.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %s", a, out)
+		}
+	}
+	write := func(f, text string) {
+		p := filepath.Join(dir, f)
+		os.MkdirAll(filepath.Dir(p), 0o755)
+		os.WriteFile(p, []byte(text), 0o644)
+	}
+	git("init", "-q", "-b", branch)
+	write(PortMapPath("u02c65ed515"), "src/kernels/cuda/kv_q8.cu\tkv_append_q8\tsrc/ilu_kv_q8.cu\tkv_append_q8_step\n")
+	write(PortMapPath("u0063babba8"), "src/kernels/cuda/kv_q8.cu\tkv_append_q8_kernel\tsrc/kernels/cuda/kv_q8.cu\tkv_append_q8_kernel\n")
+	write(PortMapPath("p81030368e8"), "include/strata/kernels/kv_q8.hpp\tkv_append_q8\tinclude/baloon/kv_q8_kernels.hpp\tkv_append_q8_step\n")
+	write("src/ilu_kv_q8.cu", "cudaError_t kv_append_q8_step(const float* x, int8_t* q, int n) {\n    const float inv = 127.f / amax;\n}\n")
+	write("include/baloon/kv_q8_kernels.hpp", "cudaError_t kv_append_q8_step(const float* x, int8_t* q, int n);\n")
+	git("add", "-A")
+	git("commit", "-qm", "units")
+
+	verdict := "kv_append_q8_step (kv_q8_kernels.hpp, implemented in src/ilu_kv_q8.cu) quantizes with unrounded 127/amax instead of the stored fp16 scale the kv_cache_q8 theory requires, and this unit's test never exercises it."
+	if got := blameOnBranch(dir, branch, "p81030368e8", verdict, nil, nil); len(got) != 1 || got[0] != "u02c65ed515" {
+		t.Fatalf("with every port map an owner the unit of the earlier plan is blamed: %v", got)
+	}
+	plan := map[string]bool{"p81030368e8": true, "u0063babba8": true}
+	if got := blameOnBranch(dir, branch, "p81030368e8", verdict, nil, plan); len(got) != 0 {
+		t.Fatalf("no unit of this plan owns src/ilu_kv_q8.cu: the verdict is p81030368e8's own, got %v", got)
 	}
 }
