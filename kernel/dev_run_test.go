@@ -32,6 +32,8 @@ type fakeModel struct {
 	attempts map[string]int
 	planner  func(prompt string) string
 	reply    func(unit string, attempt int) string // what a unit conversation says at the end; nil: a normal summary
+	review   func(n int) string                    // what the n-th review says; nil: PASS
+	reviews  int
 }
 
 func (f *fakeModel) exec(prompt string) (string, string) {
@@ -44,6 +46,13 @@ func (f *fakeModel) exec(prompt string) (string, string) {
 
 	switch {
 	case strings.Contains(prompt, "[VERDICT] the kernel reads the last line"):
+		f.mu.Lock()
+		f.reviews++
+		n := f.reviews
+		f.mu.Unlock()
+		if f.review != nil {
+			return f.review(n), ""
+		}
 		return "looked at it.\nPASS", ""
 	case strings.Contains(prompt, "[UNITS] the kernel reads lines") || strings.Contains(prompt, "[GROUPS] the kernel reads lines"):
 		if f.planner != nil {
@@ -560,5 +569,62 @@ func TestTheSilentStreakEndsWhenAConversationWritesSomething(t *testing.T) {
 	}
 	if q.Silent(id) != 0 {
 		t.Fatal("the streak must not survive a restart")
+	}
+}
+
+// A review that ends without a verdict judged nothing: the unit is reviewed again in a new
+// conversation, not passed and not sent to a fix. 11/11 19:34 unit 2's review spent its rounds
+// on quota refusals and the unit passed as "review gave no verdict, compile=pass".
+func TestAReviewWithoutAVerdictIsAskedAgainNotPassed(t *testing.T) {
+	env := newDevEnv(t, theory2("Alpha"))
+	env.model.unitWork = func(prompt, unit string, n int) {
+		mustWrite(env.mirror, "src/impl.cu", "// implementation\n")
+		env.model.writeScripts(unit, 0, 0, "built")
+	}
+	env.model.review = func(n int) string {
+		if n < 3 {
+			return "rate limited, nothing read"
+		}
+		return "looked at it.\nPASS"
+	}
+	if _, err := dev_from_theorems(9101, &Step{Owner: "ref", Repo: "proj"}); err != nil {
+		t.Fatalf("dev_from_theorems: %v", err)
+	}
+	works := 0
+	for _, p := range env.model.prompts {
+		if strings.Contains(p, "[THEORY — unit ") {
+			works++
+		}
+	}
+	if env.model.reviews != 3 || works != 1 {
+		t.Fatalf("reviews=%d works=%d: the third review's PASS decides, and no fix conversation is started", env.model.reviews, works)
+	}
+	branch := devBranchFor("ref/proj", "refsha1", 9101)
+	if plan := bareShow(env.bare, devStateBranch+":"+devStatePlanPath(branch)); !strings.Contains(plan, `"pass": true`) {
+		t.Fatalf("the unit passed on its third review:\n%s", plan)
+	}
+}
+
+// A unit whose reviews never reach a verdict is not passed: the failure says so.
+func TestAUnitNoReviewJudgedIsNotPassed(t *testing.T) {
+	env := newDevEnv(t, theory2("Alpha"))
+	env.model.unitWork = func(prompt, unit string, n int) {
+		mustWrite(env.mirror, "src/impl.cu", fmt.Sprintf("// implementation %d\n", n))
+		env.model.writeScripts(unit, 0, 0, "built")
+	}
+	env.model.review = func(int) string { return "rate limited, nothing read" }
+	dev_from_theorems(9102, &Step{Owner: "ref", Repo: "proj"})
+	branch := devBranchFor("ref/proj", "refsha1", 9102)
+	if plan := bareShow(env.bare, devStateBranch+":"+devStatePlanPath(branch)); strings.Contains(plan, `"pass": true`) {
+		t.Fatalf("no review judged the unit, yet it passed:\n%s", plan)
+	}
+	told := false
+	for _, p := range env.model.prompts {
+		if strings.Contains(p, fmt.Sprintf(reviewNoVerdictFailFmt, reviewVerdictTries)[len("FAIL: "):]) {
+			told = true
+		}
+	}
+	if !told {
+		t.Fatal("the next attempt is told that no review reached a verdict")
 	}
 }

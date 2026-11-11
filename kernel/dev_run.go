@@ -737,6 +737,15 @@ func (r *devRun) reviewUnit(unit DevPlanNode, idx, total int, convID string, st 
 		st["dev_conv"] = convID
 	}
 	verdict := dev_review_unit(r.pid, r.repo, r.branch, idx+1, total, du, st)
+	// a review that ended without a verdict judged nothing: the code is not at fault, so the
+	// review is asked again, in a new conversation, not counted against the unit
+	for try := 2; try <= reviewVerdictTries && strings.HasPrefix(verdict, reviewNoVerdict); try++ {
+		log.Printf("dev_from_theorems: %s unit %d/%d id=%s review %d/%d gave no verdict — asking a new review", r.repo, idx+1, total, unit.ID, try-1, reviewVerdictTries)
+		verdict = dev_review_unit(r.pid, r.repo, r.branch, idx+1, total, du, st)
+	}
+	if strings.HasPrefix(verdict, reviewNoVerdict) {
+		verdict = fmt.Sprintf(reviewNoVerdictFailFmt, reviewVerdictTries)
+	}
 	log.Printf("dev_from_theorems: %s unit %d/%d id=%s review → %s", r.repo, idx+1, total, unit.ID, verdict)
 	if strings.HasPrefix(verdict, "PASS") {
 		plan.MarkUnitPass(unit)
@@ -855,6 +864,12 @@ func (r *devRun) unitPrompt(unit DevPlanNode, idx, total, attempt int, fail DevF
 	}
 	return maskShownPrompt(r.repo, Bagu(fmt.Sprintf(devWhereFmt, baseRef), what, c.String(), fmt.Sprint(commits), r.devRepo))
 }
+
+// how many review conversations a unit is given to reach a verdict, and what is said when
+// none did (%[1]d of them)
+var reviewVerdictTries = 3
+
+const reviewNoVerdictFailFmt = "FAIL: %[1]d review conversations ended without a verdict"
 
 // inserted into the shell for a dev unit: %[1]s the branch to build on
 const devWhereFmt = "分支 %[1]s 上最近的提交"

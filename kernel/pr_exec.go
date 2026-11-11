@@ -1244,6 +1244,9 @@ func dev_review_unit(pid int64, repo, branch string, unitNum, totalUnits int, un
 // specifies it (arg: the port map).
 const reviewPortStepFmt = "[PORT MAP] %[1]s: each line pairs a measured definition of the reference with its counterpart here; the kernel measured that every counterpart exists\n"
 
+// what dev_review_unit returns when the review conversation ended without a verdict
+const reviewNoVerdict = "NO VERDICT: the review conversation ended without one ("
+
 // what happened, for a review: %[1]d/%[2]d the unit, %[3]s/%[4]s the kernel's exit codes
 const reviewWhatFmt = "unit %[1]d/%[2]d 已经由内核在真机上 build 和 test，compile=%[3]s smoke=%[4]s"
 
@@ -1383,17 +1386,17 @@ func dev_review_unit_inner(pid int64, repo, branch string, unitNum, totalUnits i
 		}
 	}
 
-	// no verdict from reviewer at all — compile evidence is last resort,
-	// but we note that theory comparison was not performed
+	// no verdict from the reviewer: the unit is not judged. 11/11 19:34 unit 2's review spent
+	// its rounds on quota refusals and the unit passed as "review gave no verdict, compile=pass".
 	if compileEvidence == "pass" {
-		return "PASS (review gave no verdict, compile=pass, theory comparison unknown)"
+		return reviewNoVerdict + "compile=pass)"
 	}
 	if compileEvidence == "fail" {
 		return "FAIL: review gave no verdict, compile failed"
 	}
 	// no compile evidence either — fall back to parent's compile status
 	if status["compile"] == "pass" {
-		return "PASS (review gave no verdict, compile=pass, theory comparison unknown)"
+		return reviewNoVerdict + "compile=pass)"
 	}
 	return "FAIL: review gave no verdict, compile=" + status["compile"]
 }
