@@ -185,13 +185,13 @@ func TestMissingPlanSectionIsAskedForAlone(t *testing.T) {
 		return "<survey>\nheavy=" + strings.Join(heavy, ",") + "\nlight=\n</survey>\n" + DoneMarker
 	})
 	m := useSeqModel(t, func(prompt string) string {
-		if strings.Contains(prompt, "[TASK] group") {
+		if strings.Contains(prompt, "[CHUNKS] each chunk is one theory conversation") {
 			return chunkLines(heavy, 20)
 		}
 		return ""
 	})
 	_, _, chunks := surveyAndPlan(1, "o", "r", "abcdef0123456789", heavy, light, "task")
-	if len(m.prompts) != 1 || !strings.Contains(m.prompts[0], "[TASK] group") {
+	if len(m.prompts) != 1 || !strings.Contains(m.prompts[0], "[CHUNKS] each chunk is one theory conversation") {
 		t.Fatalf("exactly the planner should have been asked again, got %d prompts", len(m.prompts))
 	}
 	if len(chunks) != 3 {

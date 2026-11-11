@@ -578,6 +578,18 @@ func copyFile(src, dst string) error {
 // finish (read source + write 3-layer theory + Axle verify) within budget.
 // ---------------------------------------------------------------------------
 
+// inserted into the shell for the chunk planner: %[1]s/%[2]s the reference
+const theoryPlanWhereFmt = "参考仓库 %[1]s/%[2]s 的源文件"
+
+// %[1]d files in %[2]d directories
+const theoryPlanWhatFmt = "共 %[1]d 个源文件，分在 %[2]d 个目录"
+
+// %[1]s the files by directory, %[2]d/%[3]d the tool calls a round and the rounds of one
+// chunk's conversation; the line the kernel reads and what it does with what is not named
+const theoryPlanContentFmt = "[FILES by directory]\n%[1]s" +
+	"[CHUNKS] each chunk is one theory conversation: up to %[2]d tool calls a round, up to %[3]d rounds.\n" +
+	"the kernel reads lines 'chunk: <exact paths from the list>', one chunk per line; files no line names are spread over the chunks, and output without such lines is cut into chunks of 12 files by the kernel.\n"
+
 func theory_plan(parent_pid int64, owner, repo string, files []string) [][]string {
 	// build file list grouped by directory for the planner
 	dirOrder := []string{}
@@ -601,25 +613,13 @@ func theory_plan(parent_pid int64, owner, repo string, files []string) [][]strin
 		}
 	}
 
-	prompt := fmt.Sprintf(
-		"[TASK] group %d source files into chunks for theory analysis.\n\n"+
-			"[IMPORTANT] the file list below IS the complete input. just group them.\n\n"+
-			"[FILES by directory]\n%s\n"+
-			"[RULES]\n"+
-			"- each chunk will be analyzed by one conversation with ~50 tool calls budget\n"+
-			"- each file needs ~4 tool calls (read source + write theory + verify)\n"+
-			"- so each chunk should have roughly 8-12 files — enough to fill one session\n"+
-			"- don't split too fine: a chunk with 1-3 files wastes a conversation\n"+
-			"- don't lump too much: a chunk with 20+ files won't finish in one session\n"+
-			"- files in the same directory should stay together when possible\n"+
-			"- if a directory has many files, split it into multiple chunks\n"+
-			"- related directories (e.g. include/x/ and src/x/) can go together\n\n"+
-			"[OUTPUT FORMAT]\n"+
-			"output ONLY lines like:\n"+
-			"chunk: path/to/file1.hpp, path/to/file2.cpp, path/to/file3.cu\n"+
-			"chunk: path/to/file4.hpp, path/to/file5.cpp\n"+
-			"use EXACT paths from the list. one line per chunk. nothing else.\n%s",
-		len(files), fileList.String(), DoneInstruction())
+	to := "einsteinOS/theory"
+	if d := GetDevRepos(); len(d) > 0 {
+		to = d[0] + " 的 einsteinOS/theory"
+	}
+	prompt := Bagu(fmt.Sprintf(theoryPlanWhereFmt, owner, repo), fmt.Sprintf(theoryPlanWhatFmt, len(files), len(dirOrder)),
+		fmt.Sprintf(theoryPlanContentFmt, fileList.String(), TurnToolBudget, RoundBudget("theorize_chunk_1"))+DoneInstruction(),
+		fmt.Sprint(len(files)), to)
 
 	child, err := ForkWithRole(prompt, ".", "theory_planner")
 	if err != nil {
