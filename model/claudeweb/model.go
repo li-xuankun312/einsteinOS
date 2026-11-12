@@ -307,6 +307,12 @@ func writebackText(results []ToolResult) string {
 const writebackWhere = "这台机器上执行的工具调用"
 const writebackWhatFmt = "这一轮有 %[1]d 个在这台机器上执行完了，结果是这台机器的，不是沙箱的"
 const writebackNoneWhat = "这一轮没有工具调用"
+
+// a round whose stream broke and whose message the kernel could not get back
+const sseLostWhat = "上一轮的流断了，内核没能取回它的工具结果"
+
+// a round whose stream ended before its stop reason, with no tool calls
+const sseBrokeWhat = "上一轮的流在结束之前断了，这一轮没有工具调用"
 const writebackTo = "这台机器"
 
 func shapeToolResults(in []ToolResult) []ToolResult {
@@ -862,7 +868,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 			if st.consecutiveContinues <= 3 {
 				log.Printf("claudeweb: empty stop_reason round %d (no tools), sending Continue (%d/3)",
 					st.rounds, st.consecutiveContinues)
-				webReq.Prompt = "Continue"
+				webReq.Prompt = kernel.Bagu(writebackWhere, sseBrokeWhat, "", "0", writebackTo)
 				webReq.CreateConversationParams = nil
 				continue
 			}
@@ -881,7 +887,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 			if st.sseRecovery {
 				st.sseRecovery = false
 				log.Printf("claudeweb: SSE recovery round — skipping decideNext, sending Continue")
-				webReq.Prompt = "Continue"
+				webReq.Prompt = kernel.Bagu(writebackWhere, sseLostWhat, "", "0", writebackTo)
 				webReq.CreateConversationParams = nil
 				continue
 			}
@@ -1250,7 +1256,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 					}
 				}
 				st.sseRecovery = true
-				webReq.Prompt = "Continue"
+				webReq.Prompt = kernel.Bagu(writebackWhere, sseLostWhat, "", "0", writebackTo)
 				webReq.CreateConversationParams = nil
 			}
 			continue
