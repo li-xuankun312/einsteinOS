@@ -206,7 +206,7 @@ func detect_dev_repos(task string) {
 
 	prompt := Plain(detectDevWhere, fmt.Sprintf(detectDevWhatFmt, len(repos)), fmt.Sprintf(detectDevContentFmt, repoList.String(), truncDiff(task, 1000)))
 
-	child, err := Fork(prompt, ".")
+	child, err := ForkWithRole(prompt, ".", "detect_dev")
 	if err != nil {
 		log.Printf("detect_dev_repos: fork failed: %v", err)
 		return
@@ -274,7 +274,7 @@ func ref_discover(task string) []RefRepo {
 	var tried int
 	for tried < 3 && len(good) < MAX_REFS {
 		tried++
-		pid, err := Fork(prompt, ".")
+		pid, err := ForkWithRole(prompt, ".", "ref_discover")
 		if err != nil {
 			log.Printf("ref_discover: fork: %v", err)
 			return good

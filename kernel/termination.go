@@ -481,6 +481,13 @@ func terminationForRoleBase(role string) TerminationCondition {
 	// hard timeouts were killing active dev_units (theory_chunk_5 took 85min,
 	// dev_unit_2 took 194min, both legitimately working). removing them.
 	switch {
+	case role == "detect_dev":
+		// two lines of text are the whole answer (11/12: unnamed, it ran the task itself
+		// for an hour and pushed nine commits to the dev repository's main)
+		return OrConditions(
+			&MaxRounds{Limit: 1},
+			&ConsecutiveTextRounds{Threshold: 1},
+		)
 	case role == "hw_probe" || role == "ref_discover":
 		return OrConditions(
 			&MaxRounds{Limit: 3},
