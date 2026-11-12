@@ -112,8 +112,13 @@ func (c *Client) Completion(convID string, req *CompletionRequest) (io.ReadClose
 			httpReq = httpReq.WithContext(httptrace.WithClientTrace(httpReq.Context(), c.stats.trace()))
 		}
 
-		// every attempt that reaches the proxy is a question to it (api_window.go)
+		// every attempt that reaches the proxy is a question to it (api_window.go). Waiting
+		// for a slot is the kernel sleeping on purpose, not a silent stream: 11/12 03:47 a
+		// 5m7s wait for a slot was judged "no byte from the stream for 5m0s" and the
+		// request, not yet sent, was cancelled.
+		watch.pause()
 		slot := apiWin.acquire()
+		watch.touch()
 		resp, err := c.httpClient.Do(httpReq)
 		if err == nil {
 			c.markOK()
@@ -189,7 +194,9 @@ func (c *Client) Completion(convID string, req *CompletionRequest) (io.ReadClose
 		httpReq.Header.Set("anthropic-client-version", "1.0.0")
 		httpReq.Header.Set("Cookie", c.cookie)
 		httpReq = httpReq.WithContext(httptrace.WithClientTrace(httpReq.Context(), c.stats.trace()))
+		watch.pause()
 		slot := apiWin.acquire()
+		watch.touch()
 		resp, err := c.httpClient.Do(httpReq)
 		if err == nil {
 			c.markOK()
