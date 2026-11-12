@@ -29,3 +29,25 @@ func TestTellingTheDevRepositoryIsForkedWithItsRole(t *testing.T) {
 		t.Fatalf("its answer is one round: %s", s)
 	}
 }
+
+// The repository conversations read the task with its credentials masked: 11/12 the
+// dev-repository question pushed with the token the task carried.
+func TestTheRepositoryConversationsReadNoToken(t *testing.T) {
+	var prompts []string
+	useSeqModel(t, func(prompt string) string {
+		ConsumeForkRole()
+		prompts = append(prompts, prompt)
+		return ""
+	})
+	tok := "ghp_" + strings.Repeat("A1b2", 9)
+	detect_dev_repos("项目在 github.com/zeng-bin3123/baloon，参考 github.com/Niko1221/Strata，api限流就用这个: 20210820209@stu.usc.edu.cn zeng-bin3123 " + tok)
+	if len(prompts) != 1 {
+		t.Fatalf("prompts=%d", len(prompts))
+	}
+	if strings.Contains(prompts[0], tok) || strings.Contains(prompts[0], "20210820209@") {
+		t.Fatalf("the token reached the conversation:\n%s", prompts[0])
+	}
+	if !strings.Contains(prompts[0], "zeng-bin3123/baloon") {
+		t.Fatal("the repositories are still there")
+	}
+}

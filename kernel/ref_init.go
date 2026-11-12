@@ -204,7 +204,7 @@ func detect_dev_repos(task string) {
 		repoList.WriteString(fmt.Sprintf("  %s/%s\n", r.Owner, r.Name))
 	}
 
-	prompt := Plain(detectDevWhere, fmt.Sprintf(detectDevWhatFmt, len(repos)), fmt.Sprintf(detectDevContentFmt, repoList.String(), truncDiff(task, 1000)))
+	prompt := Plain(detectDevWhere, fmt.Sprintf(detectDevWhatFmt, len(repos)), fmt.Sprintf(detectDevContentFmt, repoList.String(), truncDiff(strip_credentials(task), 1000)))
 
 	child, err := ForkWithRole(prompt, ".", "detect_dev")
 	if err != nil {
@@ -269,7 +269,7 @@ func ref_discover(task string) []RefRepo {
 
 	need := MAX_REFS
 
-	prompt := refDiscoverPrompt(truncDiff(task, 3000), need, refDiscoverKeepFact)
+	prompt := refDiscoverPrompt(truncDiff(strip_credentials(task), 3000), need, refDiscoverKeepFact)
 
 	var tried int
 	for tried < 3 && len(good) < MAX_REFS {
@@ -295,7 +295,7 @@ func ref_discover(task string) []RefRepo {
 				"your previous response did not contain valid owner/name pairs.\n"+
 					"the task is:\n%s\n\n"+
 					"reply with ONLY lines like: owner/name\n"+
-					"one per line, nothing else.\n", truncDiff(task, 2000))
+					"one per line, nothing else.\n", truncDiff(strip_credentials(task), 2000))
 			continue
 		}
 
