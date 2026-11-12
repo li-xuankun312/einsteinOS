@@ -51,6 +51,14 @@ func Plain(where, what, content string) string {
 // %[1]s where, %[2]s what happened, %[3]s the content
 const plainFmt = "[%[1]s] %[2]s\n\n%[3]s"
 
+// RoleAnswersInText: the conversations whose whole answer is a few lines of text about
+// what their prompt already holds; a tool call from one of them is not the answer. 11/12
+// the dev-repository question (unnamed then) ran the task with the token in it and pushed
+// nine commits to the dev repository's main.
+func RoleAnswersInText(role string) bool {
+	return role == "detect_dev"
+}
+
 // RoleWritesCode: the conversations the shell is for — the ones whose work is code (a dev
 // unit, its fix, the legacy dev step, a spawned work conversation) or theory (a theory
 // conversation, a proof repair). The others give a judgement or a list.

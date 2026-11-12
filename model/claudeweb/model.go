@@ -780,6 +780,14 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 					}
 				}
 				if ev.ContentBlock.Type == "tool_use" {
+					if st.isChild && kernel.RoleAnswersInText(childRole) {
+						// the answer is the text; a tool would run in the sandbox (kernel/bagu.go)
+						log.Printf("claudeweb: role=%s answers in text and started %s: stopped, its answer is what it wrote", childRole, ev.ContentBlock.Name)
+						m.client.StopResponse(st.convID)
+						body.Close()
+						doExit(exitNormal, textBuf.String())
+						return
+					}
 					toolBlocks[ev.Index] = &toolBlock{
 						id:   ev.ContentBlock.ID,
 						name: ev.ContentBlock.Name,
