@@ -1203,7 +1203,9 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 			for _, tb := range collectedTools {
 				want = append(want, RecoveredTool{ID: tb.id, Name: tb.name, Input: tb.inputJSON.String()})
 			}
-			tools, rerr := waitForRoundTools(m.client, convID, want, defaultRecoverCfg())
+			rcfg := defaultRecoverCfg()
+			rcfg.Touch = func() { kernel.TouchByConv(convID) }
+			tools, rerr := waitForRoundTools(m.client, convID, want, rcfg)
 			if rerr != nil {
 				log.Printf("claudeweb: SSE recovery: %v", rerr)
 			} else {

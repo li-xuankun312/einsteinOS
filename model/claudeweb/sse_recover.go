@@ -44,20 +44,24 @@ type recoverClient interface {
 
 type recoverCfg struct {
 	Interval time.Duration // between polls
-	Window   time.Duration // give up after this long
+	Window   time.Duration // give up after this long; 0: wait until the message or a server error
+	Touch    func()        // called at every poll: the conversation is alive while it waits
 	Grace    time.Duration // once only SOME wanted IDs are visible, wait this long for the rest
 	Now      func() time.Time
 	Sleep    func(time.Duration)
 	Logf     func(format string, args ...any)
 }
 
-// Defaults are generous on purpose. A theory chunk's first turn legitimately
-// takes 15+ minutes to generate; chunk 4's persisted message showed up ~16
-// minutes after the break. Waiting costs nothing; guessing wrong loses the round.
+// No window by default: the server keeps generating after the stream breaks, and a round of
+// Opus 5.5 runs longer than any fixed window — a theory chunk's first turn took 15+ minutes,
+// and 11/12 02:58 unit 5's round was still being generated when the 30-minute window it then
+// had would have given up and sent a new message into it. The wait ends when the round's
+// message appears or the server reports an error for the conversation; each poll touches the
+// conversation so the kernel's idle watchdog (150 minutes) sees the wait.
 func defaultRecoverCfg() recoverCfg {
 	return recoverCfg{
 		Interval: 10 * time.Second,
-		Window:   30 * time.Minute,
+		Window:   0,
 		Grace:    60 * time.Second,
 		Now:      time.Now,
 		Sleep:    time.Sleep,
@@ -141,9 +145,12 @@ func waitForRoundTools(c recoverClient, convID string, want []RecoveredTool, cfg
 	if len(want) == 0 {
 		return nil, errRecoverNoIDs
 	}
-	deadline := cfg.Now().Add(cfg.Window)
+	start := cfg.Now()
 	var partialSince time.Time
 	for poll := 1; ; poll++ {
+		if cfg.Touch != nil {
+			cfg.Touch()
+		}
 		tools, derr := c.DownloadLastTools(convID)
 		if derr == nil {
 			matched, n, via := matchRound(tools, want)
@@ -171,20 +178,18 @@ func waitForRoundTools(c recoverClient, convID string, want []RecoveredTool, cfg
 			if derr != nil {
 				state = "download: " + derr.Error()
 			}
-			elapsed := cfg.Now().Sub(deadline.Add(-cfg.Window))
-			remaining := deadline.Sub(cfg.Now())
-			// this is deliberately the ONLY evidence a caller gets while waiting:
-			// whether the server is still working is unknowable from here (see
-			// sse_recover.go's package doc). The remaining-time figure at least
-			// tells a person watching the log how much longer this will wait
-			// before giving up and falling back — for a long interactive wait,
-			// checking the conversation directly in the browser is the one
-			// reliable way to see whether it is still generating.
-			cfg.Logf("claudeweb: SSE recovery poll %d (%s; is_pending=%v — not trusted) [%s elapsed, giving up in %s if nothing changes]",
-				poll, state, pending, elapsed.Round(time.Second), remaining.Round(time.Second))
+			elapsed := cfg.Now().Sub(start)
+			until := "until the round's message appears or the server reports an error"
+			if cfg.Window > 0 {
+				until = fmt.Sprintf("giving up in %s", (cfg.Window - elapsed).Round(time.Second))
+			}
+			// is_pending is logged, never trusted (see the package doc); checking the
+			// conversation in the browser is the one way to see whether it still generates
+			cfg.Logf("claudeweb: SSE recovery poll %d (%s; is_pending=%v — not trusted) [%s elapsed, waiting %s]",
+				poll, state, pending, elapsed.Round(time.Second), until)
 		}
 
-		if !cfg.Now().Before(deadline) {
+		if cfg.Window > 0 && cfg.Now().Sub(start) >= cfg.Window {
 			return nil, fmt.Errorf("%w (%s, %d polls)", errRecoverWindow, cfg.Window, poll)
 		}
 		cfg.Sleep(cfg.Interval)
