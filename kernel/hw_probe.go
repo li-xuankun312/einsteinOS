@@ -13,7 +13,7 @@ import (
 // don't match the setup described..."); that sentence then became the [HARDWARE]
 // block of every dev prompt.
 func hwProbePrompt() string {
-	return Bagu(hwProbeWhere, hwProbeWhat, fmt.Sprintf(hwProbeContentFmt, LocalOutputCap(), RoundBudget("hw_probe"))+DoneInstruction(), "6", "hw_init")
+	return Plain(hwProbeWhere, hwProbeWhat, fmt.Sprintf(hwProbeContentFmt, LocalOutputCap(), RoundBudget("hw_probe"))+DoneInstruction())
 }
 
 // inserted into the shell for the hardware probe

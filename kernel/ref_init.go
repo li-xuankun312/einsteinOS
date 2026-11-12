@@ -125,13 +125,13 @@ const MAX_REFS = 3
 // (eval_discover.go) runs it every time.
 func refDiscoverPrompt(task string, n int, keep string) string {
 	content := fmt.Sprintf(refDiscoverContentFmt, task, n, keep)
-	return Bagu(refDiscoverWhere, fmt.Sprintf(refDiscoverWhatFmt, n), content, fmt.Sprint(n), spawnTo())
+	return Plain(refDiscoverWhere, fmt.Sprintf(refDiscoverWhatFmt, n), content)
 }
 
 // refNotFoundPrompt: the names the kernel could not clone, asked again through the shell
 func refNotFoundPrompt(notfound []string, n int, keep string) string {
 	content := fmt.Sprintf(refNotFoundContentFmt, strings.Join(notfound, ", "), n, keep)
-	return Bagu(refDiscoverWhere, fmt.Sprintf(refNotFoundWhatFmt, len(notfound)), content, fmt.Sprint(len(notfound)), spawnTo())
+	return Plain(refDiscoverWhere, fmt.Sprintf(refNotFoundWhatFmt, len(notfound)), content)
 }
 
 // inserted for the repository search: where, %[1]d how many, the task, what the kernel keeps
@@ -204,8 +204,7 @@ func detect_dev_repos(task string) {
 		repoList.WriteString(fmt.Sprintf("  %s/%s\n", r.Owner, r.Name))
 	}
 
-	prompt := Bagu(detectDevWhere, fmt.Sprintf(detectDevWhatFmt, len(repos)),
-		fmt.Sprintf(detectDevContentFmt, repoList.String(), truncDiff(task, 1000)), "1", "内核的 dev 仓库登记")
+	prompt := Plain(detectDevWhere, fmt.Sprintf(detectDevWhatFmt, len(repos)), fmt.Sprintf(detectDevContentFmt, repoList.String(), truncDiff(task, 1000)))
 
 	child, err := Fork(prompt, ".")
 	if err != nil {

@@ -282,8 +282,7 @@ func buildSurveyPlanPrompt(owner, name, sha, task string, files []string, lines 
 
 // surveyShell: a survey prompt — the shell with the reference's files inserted
 func surveyShell(owner, name, sha string, files, dirs int, content string) string {
-	to := theoryTo()
-	return Bagu(fmt.Sprintf(theorizeWhereFmt, owner, name, shortSHA12(sha)), fmt.Sprintf(theoryPlanWhatFmt, files, dirs), content, fmt.Sprint(files), to)
+	return Plain(fmt.Sprintf(theorizeWhereFmt, owner, name, shortSHA12(sha)), fmt.Sprintf(theoryPlanWhatFmt, files, dirs), content)
 }
 
 // the survey's facts: %[1]d directories in %[2]s/%[3]s

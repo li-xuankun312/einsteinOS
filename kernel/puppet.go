@@ -527,7 +527,7 @@ func (pe *ProcEngine) verifyCommit(pid int64, branch string, cursor int, sha str
 	}
 	c.WriteString("[CONV REGISTRY]\n" + convStatus + "\n\n")
 	c.WriteString(reviewVerdictFact + DoneInstruction())
-	verifyPrompt := Bagu(fmt.Sprintf(devWhereFmt, branch), fmt.Sprintf(puppetWhatFmt, cursor, short_sha(sha)), c.String(), "1", devRepo)
+	verifyPrompt := Plain(fmt.Sprintf(devWhereFmt, branch), fmt.Sprintf(puppetWhatFmt, cursor, short_sha(sha)), c.String())
 
 	log.Printf("proc_engine: commit %d forking verify_conv (%d bytes prompt)", cursor, len(verifyPrompt))
 

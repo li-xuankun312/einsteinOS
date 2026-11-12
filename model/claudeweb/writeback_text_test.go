@@ -8,10 +8,10 @@ import (
 
 func TestAWritebackWithNoResultsIsJustContinue(t *testing.T) {
 	// a round's writeback is the shell with that round's results inserted; none, and it says so
-	if got := writebackText(nil); !strings.HasPrefix(got, "这些问题的每一句话") || !strings.Contains(got, writebackNoneWhat) {
+	if got := writebackText("dev_unit_1", nil); !strings.HasPrefix(got, "这些问题的每一句话") || !strings.Contains(got, writebackNoneWhat) {
 		t.Fatalf("%q", got)
 	}
-	got := writebackText([]ToolResult{{ToolUseID: "toolu_1", Content: "exit=0"}})
+	got := writebackText("dev_unit_1", []ToolResult{{ToolUseID: "toolu_1", Content: "exit=0"}})
 	if !strings.HasPrefix(got, "这些问题的每一句话") || !strings.Contains(got, "内容如下评价：[toolu_1] exit=0") {
 		t.Fatalf("%q", got)
 	}
@@ -123,5 +123,17 @@ func TestALocalExitThatDiffersFromTheSandboxIsSaid(t *testing.T) {
 	}
 	if divergence("[pid 24 exit=0] ok", 0, true) != "" || divergence("[pid 24 exit=1] x", 0, false) != "" {
 		t.Fatal("same, or no sandbox result: nothing")
+	}
+}
+
+// A conversation whose work is not code (a review, a planner) gets its round's results as
+// plain facts: the shell asks for code. 11/12 05:53 a review answered the shell with
+// "未收到评价正文，本轮无代码修改、无 commit".
+func TestARoundOfAConversationThatWritesNoCodeIsPlainFacts(t *testing.T) {
+	for _, role := range []string{"review_conv", "dev_planner", "theory_planner", "spawn_judge", ""} {
+		got := writebackText(role, []ToolResult{{ToolUseID: "toolu_1", Content: "exit=0"}})
+		if strings.Contains(got, "这些问题的每一句话") || !strings.Contains(got, "[toolu_1] exit=0") {
+			t.Fatalf("%s: %q", role, got)
+		}
 	}
 }

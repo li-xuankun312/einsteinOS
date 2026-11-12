@@ -978,8 +978,7 @@ func open_pr(pid int64, step *Step) (string, error) {
 	devRepo := fmt.Sprintf("/home/claude/%s", step.Repo)
 
 	// step 1: fork a verify child — re-check the numbers are real
-	verifyPrompt := Bagu(fmt.Sprintf(openPRWhereFmt, devRepo), fmt.Sprintf(openPRWhatFmt, tokS),
-		fmt.Sprintf(openPRContentFmt, devRepo), "1", repo)
+	verifyPrompt := Plain(fmt.Sprintf(openPRWhereFmt, devRepo), fmt.Sprintf(openPRWhatFmt, tokS), fmt.Sprintf(openPRContentFmt, devRepo))
 
 	verifyChild, err := ForkWithRole(verifyPrompt, ".", "verify_conv")
 	if err != nil {
@@ -1297,7 +1296,7 @@ func dev_review_unit_inner(pid int64, repo, branch string, unitNum, totalUnits i
 	}
 	c.WriteString(reviewVerdictFact + DoneInstruction())
 	what := fmt.Sprintf(reviewWhatFmt, unitNum, totalUnits, status["compile"], status["smoke"])
-	reviewPrompt := Bagu(fmt.Sprintf(devWhereFmt, branch), what, c.String(), fmt.Sprint(len(unit.Files)), devRepos[0])
+	reviewPrompt := Plain(fmt.Sprintf(devWhereFmt, branch), what, c.String())
 
 	log.Printf("dev_review_unit: %s unit %d/%d forking review_conv (%d bytes prompt)",
 		repo, unitNum, totalUnits, len(reviewPrompt))
@@ -2189,7 +2188,7 @@ func ref_diff(pid int64, step *Step) (string, error) {
 	ref_lines := strings.Count(ref_content, "\n") + 1
 
 	content := fmt.Sprintf("[REFERENCE: %s/%s commit %s — %s (%d lines)]\n%s\n\n", step.Owner, step.Repo, short_sha(step.SHA), step.Path, ref_lines, ref_content) + refDiffAnswerFact
-	diffPrompt := Bagu(fmt.Sprintf(refDiffWhereFmt, step.Path), refDiffWhat, content, "1", spawnTo())
+	diffPrompt := Plain(fmt.Sprintf(refDiffWhereFmt, step.Path), refDiffWhat, content)
 
 	child, err := Fork(diffPrompt, step.Dir)
 	if err != nil {

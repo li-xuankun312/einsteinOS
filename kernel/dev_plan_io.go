@@ -296,11 +296,7 @@ func dev_run_planner(pid int64, repo string, mods []DevModule, branch string) []
 	}
 	maxBytes, maxModules := devUnitBudget()
 	content := fmt.Sprintf(devPlannerContentFmt, len(mods), list.String(), maxBytes, maxModules) + DoneInstruction()
-	to := branch
-	if d := GetDevRepos(); len(d) > 0 {
-		to = d[0]
-	}
-	prompt := Bagu(fmt.Sprintf(devPlannerWhereFmt, branch), fmt.Sprintf(devPlannerWhatFmt, len(mods), devTotalBytes(mods)), content, fmt.Sprint(len(mods)), to)
+	prompt := Plain(fmt.Sprintf(devPlannerWhereFmt, branch), fmt.Sprintf(devPlannerWhatFmt, len(mods), devTotalBytes(mods)), content)
 
 	out := devPlannerRunner(pid, repo, prompt)
 	log.Printf("dev_plan: %s planner returned %d bytes", repo, len(out))
@@ -388,8 +384,7 @@ func dev_split_node(pid int64, p *DevPlan, nodeID, repo, devRepo, branch, theory
 		for _, m := range mods {
 			list.WriteString(fmt.Sprintf("  %s (%d bytes)\n", m.Name, m.Bytes))
 		}
-		prompt := Bagu(fmt.Sprintf(devSplitWhereFmt, node.ID, branch), fmt.Sprintf(devSplitWhatFmt, len(mods), reason),
-			fmt.Sprintf(devSplitContentFmt, list.String())+DoneInstruction(), fmt.Sprint(len(mods)), devRepo)
+		prompt := Plain(fmt.Sprintf(devSplitWhereFmt, node.ID, branch), fmt.Sprintf(devSplitWhatFmt, len(mods), reason), fmt.Sprintf(devSplitContentFmt, list.String())+DoneInstruction())
 		out := devPlannerRunner(pid, repo, prompt)
 		g, _, unclaimed := parseDevPlanOutput(out, mods)
 		if len(unclaimed) > 0 && len(g) > 0 {
@@ -407,8 +402,7 @@ func dev_split_node(pid int64, p *DevPlan, nodeID, repo, devRepo, branch, theory
 			log.Printf("dev_plan: %s node %s (%s) has %d named items — too few to split below module level", repo, node.ID, name, len(idents))
 			return nil
 		}
-		prompt := Bagu(fmt.Sprintf(devItemSplitWhereFmt, name, branch), fmt.Sprintf(devItemSplitWhatFmt, len(body), len(idents), reason),
-			fmt.Sprintf(devItemSplitContentFmt, "  "+strings.Join(idents, "\n  ")+"\n")+DoneInstruction(), fmt.Sprint(len(idents)), devRepo)
+		prompt := Plain(fmt.Sprintf(devItemSplitWhereFmt, name, branch), fmt.Sprintf(devItemSplitWhatFmt, len(body), len(idents), reason), fmt.Sprintf(devItemSplitContentFmt, "  "+strings.Join(idents, "\n  ")+"\n")+DoneInstruction())
 		out := devPlannerRunner(pid, repo, prompt)
 		gs := parseItemGroups(out, idents)
 		if len(gs) < 2 {

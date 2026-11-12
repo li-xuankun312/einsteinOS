@@ -206,7 +206,7 @@ func BuildJudgePrompt(context string, items []JudgeItem) string {
 		b.WriteString(fmt.Sprintf("%d. %s\n", i+1, strings.TrimSpace(it.Question)))
 	}
 	b.WriteString(judgeAnswerFact + spawnLeafFact + DoneInstruction())
-	return Bagu(judgeWhere, fmt.Sprintf(judgeWhatFmt, len(items)), b.String(), fmt.Sprint(len(items)), spawnTo())
+	return Plain(judgeWhere, fmt.Sprintf(judgeWhatFmt, len(items)), b.String())
 }
 
 // inserted into the shell for a judge: where, and %[1]d how many questions
@@ -538,6 +538,9 @@ func spawnPrompt(parent, kind, scope, body string) string {
 	}
 	b.WriteString(DoneInstruction())
 	where := fmt.Sprintf(spawnWhereFmt, shortID(parent))
+	if kind != "work" {
+		return Plain(where, fmt.Sprintf(spawnWhatFmt, kind), b.String())
+	}
 	return Bagu(where, fmt.Sprintf(spawnWhatFmt, kind), b.String(), "1", spawnTo())
 }
 

@@ -30,3 +30,58 @@ func TestMoreContentGoesIntoTheShell(t *testing.T) {
 		t.Fatalf("%q", got)
 	}
 }
+
+// The shell is for the conversations whose work is code or theory; a review, a planner, a judge,
+// a search and the hardware probe get plain facts. 11/12 05:53 a review given the shell
+// answered it as a developer ("未收到评价正文，本轮无代码修改、无 commit"), and the planner
+// started next wrote code for 82 tool calls.
+func TestTheShellIsOnlyForTheConversationsThatWriteCode(t *testing.T) {
+	shell := "这些问题的每一句话都要有代码对应的commit解决"
+	env := newDevEnv(t, theory2("Alpha"))
+	env.model.unitWork = func(prompt, unit string, n int) {
+		mustWrite(env.mirror, "src/impl.cu", "// implementation\n")
+		env.model.writeScripts(unit, 0, 0, "built")
+	}
+	if _, err := dev_from_theorems(9201, &Step{Owner: "ref", Repo: "proj"}); err != nil {
+		t.Fatalf("dev_from_theorems: %v", err)
+	}
+	units, reviews := 0, 0
+	for _, p := range env.model.prompts {
+		switch {
+		case strings.Contains(p, "[THEORY — unit "):
+			units++
+			if !strings.HasPrefix(p, shell) {
+				t.Fatalf("a dev unit's prompt is the shell:\n%.300s", p)
+			}
+		case strings.Contains(p, "[VERDICT] the kernel reads the last line"), strings.Contains(p, "[UNITS] the kernel reads lines"):
+			reviews++
+			if strings.Contains(p, shell) {
+				t.Fatalf("a review or planner prompt holds the shell:\n%.300s", p)
+			}
+		}
+	}
+	if units == 0 || reviews == 0 {
+		t.Fatalf("units=%d reviews/planners=%d", units, reviews)
+	}
+	for name, p := range map[string]string{
+		"judge":      BuildJudgePrompt("", []JudgeItem{{ID: "1", Question: "q"}}),
+		"hw_probe":   hwProbePrompt(),
+		"search":     refDiscoverPrompt("t", 3, refDiscoverKeepFact),
+		"spawn plan": spawnPrompt("p", "plan", "", "body"),
+	} {
+		if strings.Contains(p, shell) {
+			t.Fatalf("%s holds the shell:\n%.300s", name, p)
+		}
+	}
+	for name, p := range map[string]string{
+		"spawn work": spawnPrompt("p", "work", "", "body"),
+		"theorize":   theorizePrompt("o", "r", "0123456789ab", "w", "t", "src", 1, ""),
+	} {
+		if !strings.HasPrefix(p, shell) {
+			t.Fatalf("%s is the shell:\n%.300s", name, p)
+		}
+	}
+	if !RoleWritesCode("dev_unit_3") || !RoleWritesCode("dev_fix_1") || !RoleWritesCode("theorize_chunk_2") || RoleWritesCode("review_conv") || RoleWritesCode("dev_planner") {
+		t.Fatal("RoleWritesCode")
+	}
+}

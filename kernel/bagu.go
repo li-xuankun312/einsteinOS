@@ -39,3 +39,26 @@ func BaguInsert(prompt, more string) string {
 	}
 	return more + prompt
 }
+
+// Plain is how a conversation that does not write code is given its content: what happened
+// and the content, no shell. The shell's first sentence asks for code: 11/12 05:53 a review
+// given it answered "未收到评价正文，本轮无代码修改、无 commit" (taken as its FAIL), and the
+// planner the kernel then started to split the unit wrote code for 82 tool calls.
+func Plain(where, what, content string) string {
+	return fmt.Sprintf(plainFmt, where, what, content)
+}
+
+// %[1]s where, %[2]s what happened, %[3]s the content
+const plainFmt = "[%[1]s] %[2]s\n\n%[3]s"
+
+// RoleWritesCode: the conversations the shell is for — the ones whose work is code (a dev
+// unit, its fix, the legacy dev step, a spawned work conversation) or theory (a theory
+// conversation, a proof repair). The others give a judgement or a list.
+func RoleWritesCode(role string) bool {
+	for _, p := range []string{"dev_unit_", "dev_fix", "dev_legacy", "theorize_", "proof_fix_", "spawn_work"} {
+		if strings.HasPrefix(role, p) {
+			return true
+		}
+	}
+	return false
+}

@@ -291,15 +291,25 @@ func ownVerifyScripts(inputJSON string) (build, test bool) {
 	return build, test
 }
 
-func writebackText(results []ToolResult) string {
-	if len(results) == 0 {
-		return kernel.Bagu(writebackWhere, writebackNoneWhat, "", "0", writebackTo)
-	}
+func writebackText(role string, results []ToolResult) string {
+	what := writebackNoneWhat
 	var b strings.Builder
-	for _, tr := range results {
-		b.WriteString(fmt.Sprintf("[%s] %s\n\n", tr.ToolUseID, tr.Content))
+	if len(results) > 0 {
+		what = fmt.Sprintf(writebackWhatFmt, len(results))
+		for _, tr := range results {
+			b.WriteString(fmt.Sprintf("[%s] %s\n\n", tr.ToolUseID, tr.Content))
+		}
 	}
-	return kernel.Bagu(writebackWhere, fmt.Sprintf(writebackWhatFmt, len(results)), b.String(), fmt.Sprint(len(results)), writebackTo)
+	return roundMessage(role, what, b.String(), len(results))
+}
+
+// roundMessage: what the kernel sends into a running conversation — the shell for one whose
+// work is code (kernel.RoleWritesCode), the plain facts for the others.
+func roundMessage(role, what, content string, n int) string {
+	if kernel.RoleWritesCode(role) {
+		return kernel.Bagu(writebackWhere, what, content, fmt.Sprint(n), writebackTo)
+	}
+	return kernel.Plain(writebackWhere, what, content)
 }
 
 // the writeback of a round is the shell with that round's results inserted (the user's
@@ -868,7 +878,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 			if st.consecutiveContinues <= 3 {
 				log.Printf("claudeweb: empty stop_reason round %d (no tools), sending Continue (%d/3)",
 					st.rounds, st.consecutiveContinues)
-				webReq.Prompt = kernel.Bagu(writebackWhere, sseBrokeWhat, "", "0", writebackTo)
+				webReq.Prompt = roundMessage(childRole, sseBrokeWhat, "", 0)
 				webReq.CreateConversationParams = nil
 				continue
 			}
@@ -887,7 +897,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 			if st.sseRecovery {
 				st.sseRecovery = false
 				log.Printf("claudeweb: SSE recovery round — skipping decideNext, sending Continue")
-				webReq.Prompt = kernel.Bagu(writebackWhere, sseLostWhat, "", "0", writebackTo)
+				webReq.Prompt = roundMessage(childRole, sseLostWhat, "", 0)
 				webReq.CreateConversationParams = nil
 				continue
 			}
@@ -1223,7 +1233,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 					return m.shadowExecute(convID, name, input)
 				})
 				var localDiff strings.Builder
-				localDiff.WriteString(writebackText(shapeToolResults(rr)))
+				localDiff.WriteString(writebackText(childRole, shapeToolResults(rr)))
 				if len(rr) > 0 {
 					localDiff.WriteString(kernel.WritebackNote(childRole, convID))
 				}
@@ -1256,7 +1266,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 					}
 				}
 				st.sseRecovery = true
-				webReq.Prompt = kernel.Bagu(writebackWhere, sseLostWhat, "", "0", writebackTo)
+				webReq.Prompt = roundMessage(childRole, sseLostWhat, "", 0)
 				webReq.CreateConversationParams = nil
 			}
 			continue
@@ -1282,7 +1292,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 		}
 
 		var localDiff strings.Builder
-		localDiff.WriteString(writebackText(toolResults))
+		localDiff.WriteString(writebackText(childRole, toolResults))
 		if preRan && !preOK {
 			localDiff.WriteString(preReport)
 		}

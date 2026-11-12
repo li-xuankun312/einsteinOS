@@ -613,10 +613,7 @@ func theory_plan(parent_pid int64, owner, repo string, files []string) [][]strin
 		}
 	}
 
-	to := theoryTo()
-	prompt := Bagu(fmt.Sprintf(theoryPlanWhereFmt, owner, repo), fmt.Sprintf(theoryPlanWhatFmt, len(files), len(dirOrder)),
-		fmt.Sprintf(theoryPlanContentFmt, fileList.String(), TurnToolBudget, RoundBudget("theorize_chunk_1"))+DoneInstruction(),
-		fmt.Sprint(len(files)), to)
+	prompt := Plain(fmt.Sprintf(theoryPlanWhereFmt, owner, repo), fmt.Sprintf(theoryPlanWhatFmt, len(files), len(dirOrder)), fmt.Sprintf(theoryPlanContentFmt, fileList.String(), TurnToolBudget, RoundBudget("theorize_chunk_1"))+DoneInstruction())
 
 	child, err := ForkWithRole(prompt, ".", "theory_planner")
 	if err != nil {
