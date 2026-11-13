@@ -248,6 +248,17 @@ func legacyDevClone(ownerRepo string) string {
 	return ""
 }
 
+// gitLocalFailure: output that says the local repository itself is the problem.
+func gitLocalFailure(out string) bool {
+	o := strings.ToLower(out)
+	for _, m := range []string{"not a git repository", "does not have any commits yet", "src refspec"} {
+		if strings.Contains(o, m) {
+			return true
+		}
+	}
+	return false
+}
+
 // gitAuthFailure reports output that means GitHub rejected the credentials.
 // Retrying cannot change that, so callers stop at once instead of repeating a
 // failure that is deterministic (the Strata run retried 20 pushes).
@@ -540,6 +551,12 @@ func GitPushRetry(repoDir, ownerRepo, branch string, maxRetry int) error {
 			log.Printf("git_push: the token was refused — back to SSH")
 			usingSSH, streak = true, 0
 			continue
+		}
+		if gitLocalFailure(result) {
+			// nothing on the network can change this clone: 11/13 05:57:54 "not a git
+			// repository" was retried 49 times over SSH and HTTPS before the run was stopped
+			return fmt.Errorf("push of %s from %s cannot work (this clone, not the network) — not retrying: %s",
+				branch, repoDir, truncStr(strings.TrimSpace(result), 200))
 		}
 		failed(attempt)
 		if gitAuthFailure(result) {
