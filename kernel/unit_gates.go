@@ -57,6 +57,8 @@ type GateInput struct {
 	// PortForeign: port map lines whose counterpart is a name the reference file does not
 	// define (portForeignNames)
 	PortForeign []string
+	// PortScripts: the unit's verify files that read a port map (scriptsReadingPortMap)
+	PortScripts []string
 	// LeanCopied: the declarations of the unit's changed .lean files whose text is the
 	// theory's (lean_copy.go), one "file: kind name" each
 	LeanCopied []string
@@ -94,6 +96,7 @@ const (
 	gateIntegrationNoKernelFmt = "integration_kernel_not_launched: the reference builds CUDA and its %[1]d registered tests passed here, but none of them launched a kernel of this repository (it defines %[2]d: %[3]s); kernels launched: %[4]s"
 	gatePortExtraFmt           = "port_extra: %[1]d line(s) of %[2]s name no definition this unit ports — the map holds exactly the %[3]d the kernel measured from the reference:\n%[4]s"
 	gatePortForeignFmt         = "port_name_foreign: %[1]d line(s) of %[2]s give a counterpart the reference file does not define — a port keeps the reference's names:\n%[3]s"
+	gatePortScriptFmt          = "port_count_in_script: %[1]s read the port map — the kernel checks %[2]s against the %[3]d definitions it measured from the reference, and a count a script checks is the conversation's own number (remove the port check from the scripts; they test the code)"
 	gateLeanCopiedFmt          = "lean_copied: %[1]d declaration(s) of the unit's Lean are the theory's own text, not the unit's (.einsteinOS/theory.md holds each, comments and white space aside):\n%[2]s"
 	gateToolchainFmt           = "toolchain_missing: the unit's sources are CUDA but none of %[1]s exists in %[2]s on this machine; a build that skips the GPU here proves nothing"
 )
@@ -250,6 +253,9 @@ func unitGates(in GateInput) (kind, text string) {
 	}
 	if len(in.LeanCopied) > 0 {
 		fail("lean_copied", fmt.Sprintf(gateLeanCopiedFmt, len(in.LeanCopied), linesList(in.LeanCopied, 40)))
+	}
+	if len(in.PortScripts) > 0 {
+		fail("port_count_in_script", fmt.Sprintf(gatePortScriptFmt, strings.Join(in.PortScripts, ", "), PortMapPath(in.UnitID), len(in.Req.Symbols)))
 	}
 	if len(in.PortExtra) > 0 {
 		fail("port_extra", fmt.Sprintf(gatePortExtraFmt, len(in.PortExtra), PortMapPath(in.UnitID), len(in.Req.Symbols), strings.Join(in.PortExtra, "\n")))

@@ -80,3 +80,25 @@ func TestACounterpartTheReferenceFileDoesNotDefineDoesNotPass(t *testing.T) {
 		t.Fatalf("gate %q %q", r.Gate, r.GateText)
 	}
 }
+
+// 11/13 unit u7663fc74b8's test.sh counted its map's lines (n != 97, then 98): a script
+// that reads the port map does not pass; the count is the kernel's.
+func TestAVerifyScriptThatCountsThePortMapDoesNotPass(t *testing.T) {
+	realRunner(t)
+	ws := t.TempDir()
+	unit := "u7663fc74b8"
+	build, test := devVerifyScripts(unit)
+	write(t, ws, build, "true")
+	write(t, ws, "src/kernels/cuda/router_top10.cu", "__global__ void router_top10_kernel(int* o) {}\n")
+	write(t, ws, PortMapPath(unit), "src/kernels/cuda/router_top10.cu\trouter_top10_kernel\tsrc/kernels/cuda/router_top10.cu\trouter_top10_kernel\n")
+	req := UnitRequirements{Symbols: []RefSymbol{{File: "src/kernels/cuda/router_top10.cu", Kind: "kernel", Name: "router_top10_kernel"}}}
+	write(t, ws, test, "python3 - <<'PY'\nprint(len(open('.einsteinOS/port/u7663fc74b8.tsv').readlines()))\nPY")
+	r := runUnitVerifyWith(ws, unit, "", req, []string{test}, time.Minute, time.Minute)
+	if r.Passed() || r.Gate != "port_count_in_script" || !strings.Contains(r.GateText, ".einsteinOS/verify/u7663fc74b8/test.sh") {
+		t.Fatalf("gate %q %q", r.Gate, r.GateText)
+	}
+	write(t, ws, test, "true")
+	if r := runUnitVerifyWith(ws, unit, "", req, []string{test}, time.Minute, time.Minute); !r.Passed() {
+		t.Fatalf("a test of the code: gate %q %q", r.Gate, r.GateText)
+	}
+}

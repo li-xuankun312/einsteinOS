@@ -14,6 +14,7 @@ package kernel
 import (
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 )
@@ -223,4 +224,41 @@ func portForeignNames(ws, unitID string, fileNames map[string]map[string]bool) [
 		}
 	}
 	return out
+}
+
+// scriptsReadingPortMap: the files of the unit's verify directory (build.sh, test.sh and
+// what sits beside them) that read a port map. The kernel checks the map against the
+// definitions it measured from the reference; a count a script checks is a number the
+// conversation writes and can change: 11/13 15:38 unit u7663fc74b8 ran
+// sed -i 's/n != 97/n != 98/g' on its test.sh after adding a 98th line to its map.
+func scriptsReadingPortMap(ws, unitID string) []string {
+	build, _ := devVerifyScripts(unitID)
+	dir := filepath.Dir(filepath.Join(ws, filepath.FromSlash(build)))
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range ents {
+		if e.IsDir() {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			continue
+		}
+		if s := string(b); strings.Contains(s, ".einsteinOS/port") || strings.Contains(s, unitID+".tsv") {
+			out = append(out, path.Join(path.Dir(build), e.Name()))
+		}
+	}
+	return out
+}
+
+// unitPortScripts: scriptsReadingPortMap for a unit the kernel measures a port of; the
+// integration unit's test.sh is the kernel's own.
+func unitPortScripts(ws, unitID string, req UnitRequirements) []string {
+	if len(req.Tests) > 0 || len(req.Symbols) == 0 {
+		return nil
+	}
+	return scriptsReadingPortMap(ws, unitID)
 }
