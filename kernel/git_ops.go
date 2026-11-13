@@ -218,8 +218,7 @@ func devRepoLocalDir(ownerRepo string) (string, error) {
 	if i := strings.LastIndex(ownerRepo, "/"); i >= 0 {
 		name = ownerRepo[i+1:]
 	}
-	legacy := "/home/claude/" + name
-	if _, err := os.Stat(legacy + "/.git"); err == nil {
+	if legacy := legacyDevClone(ownerRepo); legacy != "" {
 		return legacy, nil
 	}
 	dir := "/tmp/ref_store_" + name
@@ -227,6 +226,26 @@ func devRepoLocalDir(ownerRepo string) (string, error) {
 		return "", fmt.Errorf("no local clone of %s: %w", ownerRepo, err)
 	}
 	return dir, nil
+}
+
+// legacyDevClone: an old clone at /home/claude/<name>, unless that is the unit's mirror
+// (devMirrorDir) — a .git a conversation starts there is not the kernel's clone. 11/13
+// 04:21:46 a dev conversation ran git init in /home/claude/baloon; from then on the kernel
+// primed the mirror from itself (the next conversation found it empty) and pushed from it
+// ("not a git repository", 90 attempts).
+func legacyDevClone(ownerRepo string) string {
+	name := ownerRepo
+	if i := strings.LastIndex(ownerRepo, "/"); i >= 0 {
+		name = ownerRepo[i+1:]
+	}
+	legacy := "/home/claude/" + name
+	if legacy == devMirrorDir(ownerRepo) {
+		return ""
+	}
+	if _, err := os.Stat(legacy + "/.git"); err == nil {
+		return legacy
+	}
+	return ""
 }
 
 // gitAuthFailure reports output that means GitHub rejected the credentials.
