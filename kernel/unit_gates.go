@@ -52,6 +52,8 @@ type GateInput struct {
 	UnitID string
 	// PortFiles: the files the unit's port map writes its counterparts into
 	PortFiles map[string]bool
+	// PortExtra: port map lines that name no definition the unit ports (portExtra)
+	PortExtra []string
 	// LeanCopied: the declarations of the unit's changed .lean files whose text is the
 	// theory's (lean_copy.go), one "file: kind name" each
 	LeanCopied []string
@@ -87,6 +89,7 @@ const (
 	gateKernelNotLaunchedFmt   = "gpu_kernel_not_launched: test.sh exited 0 but launched none of the unit's kernels (%[1]s); kernels its processes launched: %[2]s; executables the launch probe was in: %[3]s — a test that opens the device and checks on the CPU proves nothing about the kernels"
 	gateLaunchUnmeasuredFmt    = "gpu_launch_unmeasured: whether the unit's kernels ran on the device could not be measured: %[1]s"
 	gateIntegrationNoKernelFmt = "integration_kernel_not_launched: the reference builds CUDA and its %[1]d registered tests passed here, but none of them launched a kernel of this repository (it defines %[2]d: %[3]s); kernels launched: %[4]s"
+	gatePortExtraFmt           = "port_extra: %[1]d line(s) of %[2]s name no definition this unit ports — the map holds exactly the %[3]d the kernel measured from the reference:\n%[4]s"
 	gateLeanCopiedFmt          = "lean_copied: %[1]d declaration(s) of the unit's Lean are the theory's own text, not the unit's (.einsteinOS/theory.md holds each, comments and white space aside):\n%[2]s"
 	gateToolchainFmt           = "toolchain_missing: the unit's sources are CUDA but none of %[1]s exists in %[2]s on this machine; a build that skips the GPU here proves nothing"
 )
@@ -243,6 +246,9 @@ func unitGates(in GateInput) (kind, text string) {
 	}
 	if len(in.LeanCopied) > 0 {
 		fail("lean_copied", fmt.Sprintf(gateLeanCopiedFmt, len(in.LeanCopied), linesList(in.LeanCopied, 40)))
+	}
+	if len(in.PortExtra) > 0 {
+		fail("port_extra", fmt.Sprintf(gatePortExtraFmt, len(in.PortExtra), PortMapPath(in.UnitID), len(in.Req.Symbols), strings.Join(in.PortExtra, "\n")))
 	}
 	if len(in.PortMissing) > 0 {
 		fail("port_incomplete", fmt.Sprintf(gatePortFmt, len(in.PortMissing), len(in.Req.Symbols), strings.Join(in.PortMissing, "\n")))

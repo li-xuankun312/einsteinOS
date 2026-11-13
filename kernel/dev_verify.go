@@ -493,7 +493,7 @@ func portFiles(pm map[string]portEntry) map[string]bool {
 func unitGateInput(ws, unitID string, req UnitRequirements, changed []string, build, test ProcTrace, nt NoToolchainBuild) GateInput {
 	pm := readPortMap(ws, unitID)
 	return GateInput{Req: req, Changed: changed, Build: build, Test: test, Compilers: presentGPUCompilers(),
-		PortMissing: portMissing(ws, unitID, req.Symbols), Kernels: unitKernels(ws, changed), KernelsMeasured: true,
+		PortMissing: portMissing(ws, unitID, req.Symbols), PortExtra: portExtra(ws, unitID, req.Symbols), Kernels: unitKernels(ws, changed), KernelsMeasured: true,
 		ISAFuncs: isaPortFuncs(pm, req.FlagFiles), PortKernels: portKernels(ws, unitID), UnitID: unitID,
 		PortFiles:   portFiles(pm),
 		NoToolchain: nt, Includers: cuhIncluders(ws, changed), IncludersMeasured: true,

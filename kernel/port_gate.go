@@ -150,3 +150,56 @@ func portKernels(ws, unitID string) map[string]bool {
 	}
 	return out
 }
+
+const (
+	portExtraFmt     = "  %[1]s %[2]s → %[3]s:%[4]s: the line names no definition this unit ports"
+	portDuplicateFmt = "  %[1]s %[2]s → %[3]s:%[4]s: a second line for a definition line %[5]d already maps"
+)
+
+// readPortLines: the port map's lines in order, with their line numbers.
+func readPortLines(ws, unitID string) (lines []portEntry, nums []int) {
+	b, err := os.ReadFile(filepath.Join(ws, PortMapPath(unitID)))
+	if err != nil {
+		return nil, nil
+	}
+	for i, l := range strings.Split(string(b), "\n") {
+		f := strings.Split(strings.TrimRight(l, "\r"), "\t")
+		if len(f) < 4 {
+			continue
+		}
+		lines = append(lines, portEntry{strings.TrimSpace(f[0]), strings.TrimSpace(f[1]), strings.TrimSpace(f[2]), strings.TrimSpace(f[3])})
+		nums = append(nums, i+1)
+	}
+	return lines, nums
+}
+
+// portExtra returns one line per port map line beyond the unit's definitions, each mapped
+// once: the map is the measured definitions, no more. 11/13 15:37 unit u7663fc74b8 added a
+// 98th line (router_top10.cu RT_MAX_THREADS → u776_check.cu u776_router_probe_kernel) for
+// the definition its line 51 already mapped, so that a kernel written to pass
+// kernel_unported counted as a port (the map, read last line first, took line 98), and
+// raised the count its own test.sh checked from 97 to 98 to match.
+func portExtra(ws, unitID string, syms []RefSymbol) []string {
+	if len(syms) == 0 {
+		return nil
+	}
+	own := map[string]bool{}
+	for _, s := range syms {
+		own[s.File+"\t"+s.Name] = true
+	}
+	first := map[string]int{}
+	var out []string
+	lines, nums := readPortLines(ws, unitID)
+	for i, e := range lines {
+		k := e.refFile + "\t" + e.refName
+		switch {
+		case !own[k]:
+			out = append(out, fmt.Sprintf(portExtraFmt, e.refFile, e.refName, e.file, e.name))
+		case first[k] > 0:
+			out = append(out, fmt.Sprintf(portDuplicateFmt, e.refFile, e.refName, e.file, e.name, first[k]))
+		default:
+			first[k] = nums[i]
+		}
+	}
+	return out
+}

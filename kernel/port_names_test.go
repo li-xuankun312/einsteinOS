@@ -1,6 +1,10 @@
 package kernel
 
-import "testing"
+import (
+	"strings"
+	"testing"
+	"time"
+)
 
 // Every definition of a reference source is a name a port line may give as its counterpart,
 // also the ones another unit ports; masked as the conversation sees them.
@@ -22,5 +26,37 @@ func TestTheReferenceFilesNamesAreMeasured(t *testing.T) {
 	m := maskRequirements(req, newRefMask(refMaskIdent, "Niko1221/Strata"))
 	if mn := m.FileNames["src/kernels/cuda/router_top10.cu"]; !mn["router_top10_kernel"] || mn["strata_router"] {
 		t.Fatalf("masked %v", m.FileNames)
+	}
+}
+
+// 11/13 unit u7663fc74b8: a 98th line for a definition it does not port, pointing at a probe
+// kernel, does not pass — whatever count its test.sh checks.
+func TestAPortLineForADefinitionTheUnitDoesNotPortDoesNotPass(t *testing.T) {
+	realRunner(t)
+	ws := t.TempDir()
+	unit := "u7663fc74b8"
+	build, test := devVerifyScripts(unit)
+	write(t, ws, build, "true")
+	write(t, ws, test, "true")
+	write(t, ws, "src/kernels/cuda/router_top10.cu", "__global__ void router_top10_kernel(int* o) {}\n")
+	write(t, ws, "src/kernels/cuda/u776_check.cu", "static const int RT_MAX_THREADS = 512;\n__global__ void u776_router_probe_kernel(int* r) { *r = RT_MAX_THREADS; }\n")
+	write(t, ws, "src/kernels/cuda/router_top10.cu", "static const int RT_MAX_THREADS = 512;\n__global__ void router_top10_kernel(int* o) {}\n")
+	lines := "src/kernels/cuda/router_top10.cu\trouter_top10_kernel\tsrc/kernels/cuda/router_top10.cu\trouter_top10_kernel\n" +
+		"src/kernels/cuda/router_top10.cu\tRT_MAX_THREADS\tsrc/kernels/cuda/router_top10.cu\tRT_MAX_THREADS\n"
+	syms := []RefSymbol{{File: "src/kernels/cuda/router_top10.cu", Kind: "kernel", Name: "router_top10_kernel"}, {File: "src/kernels/cuda/router_top10.cu", Kind: "const", Name: "RT_MAX_THREADS"}}
+	req := UnitRequirements{Symbols: syms}
+	for name, extra := range map[string]string{
+		"a second line for line 2's definition":    "src/kernels/cuda/router_top10.cu\tRT_MAX_THREADS\tsrc/kernels/cuda/u776_check.cu\tu776_router_probe_kernel\n",
+		"a line for a definition it does not port": "src/kernels/cuda/router_top10.cu\tRT_PROBE\tsrc/kernels/cuda/u776_check.cu\tu776_router_probe_kernel\n",
+	} {
+		write(t, ws, PortMapPath(unit), lines+extra)
+		r := runUnitVerifyWith(ws, unit, "", req, []string{PortMapPath(unit)}, time.Minute, time.Minute)
+		if r.Passed() || r.Gate != "port_extra" || !strings.Contains(r.GateText, "→ src/kernels/cuda/u776_check.cu:u776_router_probe_kernel") {
+			t.Fatalf("%s: gate %q %q", name, r.Gate, r.GateText)
+		}
+	}
+	write(t, ws, PortMapPath(unit), lines)
+	if r := runUnitVerifyWith(ws, unit, "", req, []string{PortMapPath(unit)}, time.Minute, time.Minute); !r.Passed() {
+		t.Fatalf("the measured lines alone: gate %q %q", r.Gate, r.GateText)
 	}
 }
