@@ -59,3 +59,18 @@ func TestACommandOnTheKernelsCredentialsIsNotRunHere(t *testing.T) {
 		t.Fatal("a command in the unit's directory still runs here")
 	}
 }
+
+// No git run on this machine for a conversation can push, however it is called: 11/13
+// 04:26:55 a dev conversation's push ran here with the deploy key.
+func TestNoGitRunHereCanPush(t *testing.T) {
+	kernelInitOnce.Do(kernel.Init)
+	dir := t.TempDir()
+	cmd := "G=$(command -v git)\n$G init -q r && cd r && $G -c user.name=a -c user.email=a@b commit -q --allow-empty -m x && " +
+		"$G push https://github.com/o/r.git HEAD:main 2>&1; $G push git@github.com:o/r.git HEAD:main 2>&1; true"
+	in, _ := json.Marshal(map[string]string{"command": cmd})
+	s := &ShadowExecutor{WorkDir: dir, Enabled: true}
+	out := s.Execute("bash_tool", string(in))
+	if strings.Count(out, "einsteinos-no-push") < 2 {
+		t.Fatalf("a push left this machine: %q", out)
+	}
+}

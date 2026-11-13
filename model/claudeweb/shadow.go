@@ -186,7 +186,7 @@ func (s *ShadowExecutor) execute(toolName string, inputJSON string) string {
 			// and the kernel's verification found compile=missing. Such a command now runs
 			// here with git's network and remote commands as no-ops (gitShim), so the files
 			// it writes arrive; the sandbox's output still stands.
-			if pid, err := kernel.ForkExec(gitShim+command, s.WorkDir); err == nil {
+			if pid, err := kernel.ForkExec(noPush+gitShim+command, s.WorkDir); err == nil {
 				_, code, _ := kernel.Wait(pid)
 				log.Printf("[shadow] git command that also writes files: ran here with git clone/fetch/push/pull as no-ops (exit %d); the sandbox's output stands", code)
 			}
@@ -225,7 +225,7 @@ func (s *ShadowExecutor) execute(toolName string, inputJSON string) string {
 		return ""
 	}
 
-	pid, err := kernel.ForkExec(command, s.WorkDir)
+	pid, err := kernel.ForkExec(noPush+command, s.WorkDir)
 	if err != nil {
 		return fmt.Sprintf("[pid -1] fork: %v", err)
 	}
@@ -963,3 +963,13 @@ func touchesKernel(command, workDir string) string {
 	}
 	return ""
 }
+
+// noPush goes in front of every command run here: no git on this machine can push for a
+// conversation, however it is called (a path, a subshell, a script), because every push URL
+// is rewritten to a scheme git has no helper for and ssh is false. 11/13 04:26:55 a dev
+// conversation's "git push" ran here with the deploy key and replaced a wip branch's history.
+const noPush = "export GIT_CONFIG_COUNT=3 " +
+	"GIT_CONFIG_KEY_0=url.einsteinos-no-push://.pushInsteadOf GIT_CONFIG_VALUE_0=https:// " +
+	"GIT_CONFIG_KEY_1=url.einsteinos-no-push://.pushInsteadOf GIT_CONFIG_VALUE_1=git@ " +
+	"GIT_CONFIG_KEY_2=url.einsteinos-no-push://.pushInsteadOf GIT_CONFIG_VALUE_2=ssh:// " +
+	"GIT_SSH_COMMAND=false GIT_TERMINAL_PROMPT=0\n"
