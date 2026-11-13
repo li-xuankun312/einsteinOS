@@ -358,10 +358,24 @@ const gitShim = `git() { local a=("$@") i=0; while [ $i -lt ${#a[@]} ]; do case 
 
 var gitWriteRe = regexp.MustCompile(`(^|[^0-9&>])>>?\s*[^&\s/]|\btee\s|\bcp\s|\bmv\s|\bmkdir\s|\bsed\s+-i|\bpython3?\b|\btouch\s|\binstall\s|\bpatch\s|\bunzip\s|\btar\s+-?x`)
 
-// gitCommandWritesFiles: a command that runs git and also writes files on its own.
+// gitCommandWritesFiles: a command that runs git and does anything besides git and cd. Whatever
+// follows git after ; && || or a new line runs here (with gitShim), so a file it writes arrives
+// wherever it is written: 11/13 00:22:35 unit 7 wrote /tmp/guard.sh after git, the old pattern
+// (a redirect not to an absolute path) did not see it, and every later call exited 127 here.
 func gitCommandWritesFiles(command string) bool {
-	return gitWriteRe.MatchString(command)
+	for _, seg := range gitSegmentRe.Split(command, -1) {
+		seg = strings.TrimSpace(seg)
+		if seg == "" || seg == "git" || strings.HasPrefix(seg, "git ") || strings.HasPrefix(seg, "git\t") ||
+			strings.HasPrefix(seg, "GIT_DIR=") || strings.HasPrefix(seg, "cd ") {
+			continue
+		}
+		return true
+	}
+	return false
 }
+
+// gitSegmentRe: the separators between the commands of a shell line (a pipe stays in its command).
+var gitSegmentRe = regexp.MustCompile(`&&|\|\||;|\n`)
 
 func isGitCommand(command string) bool {
 	// match any command that starts with git or uses git --git-dir / GIT_DIR=
