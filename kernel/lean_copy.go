@@ -10,6 +10,9 @@ package kernel
 // Lean whose text (comments dropped, white space collapsed) occurs in the theory is a copy.
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -62,4 +65,40 @@ func leanCopied(lean, theory string) []leanDecl {
 		}
 	}
 	return out
+}
+
+// theoryPath: where a dev branch keeps the theory (dev_store_theory).
+const theoryPath = ".einsteinOS/theory.md"
+
+// unitLeanCopied: for the unit's changed .lean files, the declarations that are the theory's
+// text, as "file: kind name". No theory in the workspace measures nothing.
+func unitLeanCopied(ws string, changed []string) []string {
+	th, err := os.ReadFile(filepath.Join(ws, theoryPath))
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, f := range changed {
+		if !strings.HasSuffix(f, ".lean") {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(ws, filepath.FromSlash(f)))
+		if err != nil {
+			continue
+		}
+		for _, d := range leanCopied(string(b), string(th)) {
+			out = append(out, fmt.Sprintf("%s: %s %s", f, d.Kind, d.Name))
+		}
+	}
+	return out
+}
+
+// linesList: one indented line each, the first n of them.
+func linesList(xs []string, n int) string {
+	more := ""
+	if len(xs) > n {
+		more = fmt.Sprintf("\n  (+%d more)", len(xs)-n)
+		xs = xs[:n]
+	}
+	return "  " + strings.Join(xs, "\n  ") + more
 }

@@ -497,7 +497,7 @@ func unitGateInput(ws, unitID string, req UnitRequirements, changed []string, bu
 		ISAFuncs: isaPortFuncs(pm, req.FlagFiles), PortKernels: portKernels(ws, unitID), UnitID: unitID,
 		PortFiles:   portFiles(pm),
 		NoToolchain: nt, Includers: cuhIncluders(ws, changed), IncludersMeasured: true,
-		RepoKernels: integrationRepoKernels(ws, req)}
+		RepoKernels: integrationRepoKernels(ws, req), LeanCopied: unitLeanCopied(ws, changed)}
 }
 
 // ---- assembling and committing ------------------------------------------------------------
