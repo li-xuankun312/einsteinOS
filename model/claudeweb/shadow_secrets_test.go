@@ -31,3 +31,31 @@ func TestWhatThisMachinePrintsReachesTheConversationRedacted(t *testing.T) {
 		t.Fatalf("the token reached the conversation: %q", out)
 	}
 }
+
+// A command that reads the kernel's credentials or works in its directories is not run on
+// this machine: 11/13 a dev conversation read ~/.ssh/einsteinos_deploy and the bash
+// history, and reset the remote of the kernel's twin in /home/claude/work/baloon.
+func TestACommandOnTheKernelsCredentialsIsNotRunHere(t *testing.T) {
+	kernelInitOnce.Do(kernel.Init)
+	dir := t.TempDir()
+	mark := filepath.Join(dir, "ran")
+	s := &ShadowExecutor{WorkDir: dir, Enabled: true}
+	for _, c := range []string{
+		"touch " + mark + "; cat ~/.ssh/einsteinos_deploy",
+		"touch " + mark + "; grep ghp_ /root/.bash_history",
+		"touch " + mark + " && cd /home/claude/work/baloon && \\\n  git remote set-url origin x",
+	} {
+		in, _ := json.Marshal(map[string]string{"command": c})
+		if out := s.Execute("bash_tool", string(in)); out != "" {
+			t.Fatalf("ran here: %q -> %q", c, out)
+		}
+		if _, err := os.Stat(mark); err == nil {
+			t.Fatalf("ran here: %q", c)
+		}
+	}
+	in, _ := json.Marshal(map[string]string{"command": "touch " + mark})
+	s.Execute("bash_tool", string(in))
+	if _, err := os.Stat(mark); err != nil {
+		t.Fatal("a command in the unit's directory still runs here")
+	}
+}

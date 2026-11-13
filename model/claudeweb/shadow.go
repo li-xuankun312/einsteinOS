@@ -124,6 +124,14 @@ func (s *ShadowExecutor) execute(toolName string, inputJSON string) string {
 		return ""
 	}
 
+	// the kernel's credentials and its own directories are not a conversation's to read
+	// here: 11/13 04:50–05:39 a dev conversation read ~/.ssh/einsteinos_deploy, the bash
+	// history and env, reset the remote of the kernel's twin and walked einsteinOS's source.
+	if what := touchesKernel(command, s.WorkDir); what != "" {
+		log.Printf("[shadow] not run here: it touches %s (the sandbox's result stands)", what)
+		return ""
+	}
+
 	// Axle proof verification runs on the REAL MACHINE, not remote sandbox.
 	// remote sandbox has no network access to axle.axiommath.ai.
 	// every Axle request in the command is parsed like a shell would (see
@@ -935,4 +943,23 @@ func truncateCmd(s string, n int) string {
 		return s
 	}
 	return s[:n] + "..."
+}
+
+// kernelPlaces: what a command run here must not touch — the credentials this machine
+// holds and the directories the kernel works in (its twins and stores, and einsteinOS).
+var kernelPlaces = []string{".ssh", "bash_history", ".git-credentials", ".netrc", ".gh_token",
+	"einsteinos_deploy", "/environ", "/home/claude/work", "/tmp/ref_store_"}
+
+// touchesKernel: the kernel's place a command names, or "".
+func touchesKernel(command, workDir string) string {
+	places := kernelPlaces
+	if wd, err := os.Getwd(); err == nil && wd != "/" && !strings.HasPrefix(workDir, wd) {
+		places = append(places, wd) // where einsteinOS itself runs (11/13: /home/adk-go)
+	}
+	for _, p := range places {
+		if strings.Contains(command, p) {
+			return p
+		}
+	}
+	return ""
 }
