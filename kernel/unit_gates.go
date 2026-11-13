@@ -52,6 +52,9 @@ type GateInput struct {
 	UnitID string
 	// PortFiles: the files the unit's port map writes its counterparts into
 	PortFiles map[string]bool
+	// PortRefFiles: port map lines whose reference file is not one of the unit's
+	// (portRefFiles)
+	PortRefFiles []string
 	// PortExtra: port map lines that name no definition the unit ports (portExtra)
 	PortExtra []string
 	// PortForeign: port map lines whose counterpart is a name the reference file does not
@@ -94,6 +97,7 @@ const (
 	gateKernelNotLaunchedFmt   = "gpu_kernel_not_launched: test.sh exited 0 but launched none of the unit's kernels (%[1]s); kernels its processes launched: %[2]s; executables the launch probe was in: %[3]s — a test that opens the device and checks on the CPU proves nothing about the kernels"
 	gateLaunchUnmeasuredFmt    = "gpu_launch_unmeasured: whether the unit's kernels ran on the device could not be measured: %[1]s"
 	gateIntegrationNoKernelFmt = "integration_kernel_not_launched: the reference builds CUDA and its %[1]d registered tests passed here, but none of them launched a kernel of this repository (it defines %[2]d: %[3]s); kernels launched: %[4]s"
+	gatePortRefFileFmt         = "port_ref_file_unknown: %[1]d reference file(s) in %[2]s are not files of the reference the kernel measured — that column is the reference's, and a header written in this repository is not one of its files, whatever it is called:\n%[3]s\nthe unit's reference files: %[4]s"
 	gatePortExtraFmt           = "port_extra: %[1]d line(s) of %[2]s name no definition this unit ports — the map holds exactly the %[3]d the kernel measured from the reference:\n%[4]s"
 	gatePortForeignFmt         = "port_name_foreign: %[1]d line(s) of %[2]s give a counterpart the reference file does not define — a port keeps the reference's names:\n%[3]s"
 	gatePortScriptFmt          = "port_count_in_script: %[1]s read the port map — the kernel checks %[2]s against the %[3]d definitions it measured from the reference, and a count a script checks is the conversation's own number (remove the port check from the scripts; they test the code)"
@@ -258,6 +262,9 @@ func unitGates(in GateInput) (kind, text string) {
 	if len(in.PortScripts) > 0 {
 		fail("port_count_in_script", fmt.Sprintf(gatePortScriptFmt, strings.Join(in.PortScripts, ", "), PortMapPath(in.UnitID), len(in.Req.Symbols)))
 	}
+	if len(in.PortRefFiles) > 0 {
+		fail("port_ref_file_unknown", fmt.Sprintf(gatePortRefFileFmt, len(in.PortRefFiles), PortMapPath(in.UnitID), strings.Join(in.PortRefFiles, "\n"), shortList(sortedCopy(refFilesOf(in.Req.Symbols)), 12)))
+	}
 	if len(in.PortExtra) > 0 {
 		fail("port_extra", fmt.Sprintf(gatePortExtraFmt, len(in.PortExtra), PortMapPath(in.UnitID), len(in.Req.Symbols), strings.Join(in.PortExtra, "\n")))
 	}
@@ -272,6 +279,19 @@ func unitGates(in GateInput) (kind, text string) {
 		return "", ""
 	}
 	return kinds[0], strings.Join(texts, "\n")
+}
+
+// refFilesOf: the files the symbols come from, deduplicated.
+func refFilesOf(syms []RefSymbol) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, s := range syms {
+		if !seen[s.File] {
+			seen[s.File] = true
+			out = append(out, s.File)
+		}
+	}
+	return out
 }
 
 // changedGPUFiles: the .cu/.cuh among the changed files.

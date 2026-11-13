@@ -262,3 +262,31 @@ func unitPortScripts(ws, unitID string, req UnitRequirements) []string {
 	}
 	return scriptsReadingPortMap(ws, unitID)
 }
+
+const portRefFileFmt = "  %[1]s %[2]s → %[3]s:%[4]s: %[1]s is not one of the unit's reference files"
+
+// portRefFiles returns one line per port map line whose reference file is not one of the
+// unit's: that column is the reference, which only the kernel measures. 11/13 16:53 unit
+// u739c93b0c3 wrote include/ref/kernels/{rope,gr,fused_gr,native_gr_norm}.hpp into the
+// repository and gave them as its reference files (include/ref/ is the masked name of the
+// reference, so the names look right), and 17:34 unit u41a85163f4 wrote three more; the
+// port gate then checked the unit's code against headers the unit had written itself.
+func portRefFiles(ws, unitID string, syms []RefSymbol) []string {
+	if len(syms) == 0 {
+		return nil
+	}
+	refFiles := map[string]bool{}
+	for _, s := range syms {
+		refFiles[s.File] = true
+	}
+	seen := map[string]bool{}
+	var out []string
+	lines, _ := readPortLines(ws, unitID)
+	for _, e := range lines {
+		if !refFiles[e.refFile] && !seen[e.refFile] {
+			seen[e.refFile] = true
+			out = append(out, fmt.Sprintf(portRefFileFmt, e.refFile, e.refName, e.file, e.name))
+		}
+	}
+	return out
+}

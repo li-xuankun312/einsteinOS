@@ -102,3 +102,30 @@ func TestAVerifyScriptThatCountsThePortMapDoesNotPass(t *testing.T) {
 		t.Fatalf("a test of the code: gate %q %q", r.Gate, r.GateText)
 	}
 }
+
+// 11/13 units u739c93b0c3 and u41a85163f4 wrote include/ref/kernels/*.hpp into the
+// repository and gave them as their reference files: the reference column is the kernel's.
+func TestAReferenceFileTheUnitWroteItselfDoesNotPass(t *testing.T) {
+	realRunner(t)
+	ws := t.TempDir()
+	unit := "u739c93b0c3"
+	build, test := devVerifyScripts(unit)
+	write(t, ws, build, "true")
+	write(t, ws, test, "true")
+	write(t, ws, "include/ref/kernels/rope.hpp", "inline void build_rope_table(float* cs, int n) {}\n")
+	write(t, ws, "src/kernels/cuda/rope.cu", "__global__ void rope_neox_kernel(float* q, int n) {}\n")
+	req := UnitRequirements{
+		Symbols:   []RefSymbol{{File: "src/kernels/cuda/rope.cu", Kind: "kernel", Name: "rope_neox_kernel"}},
+		FileNames: map[string]map[string]bool{"src/kernels/cuda/rope.cu": {"rope_neox_kernel": true}},
+	}
+	good := "src/kernels/cuda/rope.cu\trope_neox_kernel\tsrc/kernels/cuda/rope.cu\trope_neox_kernel\n"
+	write(t, ws, PortMapPath(unit), good+"include/ref/kernels/rope.hpp\tbuild_rope_table\tinclude/ref/kernels/rope.hpp\tbuild_rope_table\n")
+	r := runUnitVerifyWith(ws, unit, "", req, []string{PortMapPath(unit)}, time.Minute, time.Minute)
+	if r.Passed() || r.Gate != "port_ref_file_unknown" || !strings.Contains(r.GateText, "include/ref/kernels/rope.hpp is not one of the unit's reference files") {
+		t.Fatalf("gate %q %q", r.Gate, r.GateText)
+	}
+	write(t, ws, PortMapPath(unit), good)
+	if r := runUnitVerifyWith(ws, unit, "", req, []string{PortMapPath(unit)}, time.Minute, time.Minute); !r.Passed() {
+		t.Fatalf("the measured reference files alone: gate %q %q", r.Gate, r.GateText)
+	}
+}
