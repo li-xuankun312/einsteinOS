@@ -85,6 +85,9 @@ type DevFailure struct {
 	Kind    string `json:"kind"`     // compile_fail | smoke_fail | missing | review_fail | nothing_written
 	Text    string `json:"text"`     // the build/test output tail, or the reviewer's reason
 	BaseRef string `json:"base_ref"` // branch holding the code to continue from (dev branch or the unit's wip branch)
+	// BaseSHA: the commit the kernel pushed to BaseRef; a wip branch found anywhere else is
+	// set back to it before the next attempt (dev_wip_own.go)
+	BaseSHA string `json:"base_sha,omitempty"`
 	// Attribution: for a deferred unit's review failure, what the kernel measured about whose
 	// code it faults (deferredFailure)
 	Attribution string `json:"attribution,omitempty"`

@@ -539,6 +539,9 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 		log.Printf("dev_run: %s no local clone: %v", r.repo, err)
 		return "", false, true
 	}
+	if baseRef != r.branch && fail.BaseSHA != "" {
+		keepKernelWip(cloneDir, r.devRepo, baseRef, fail.BaseSHA)
+	}
 	if err := gitUseBranchFromRemote(cloneDir, baseRef, r.branch); err != nil {
 		log.Printf("dev_run: %s checkout %s: %v", r.repo, baseRef, err)
 		return "", false, true
@@ -714,7 +717,7 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 		} else {
 			plan.ClearSilent(unit.ID) // it wrote something: whatever is wrong now is the unit's, not the conversation's
 		}
-		n := plan.Fail(unit.ID, DevFailure{Kind: kind, Text: text, BaseRef: next})
+		n := plan.Fail(unit.ID, DevFailure{Kind: kind, Text: text, BaseRef: next, BaseSHA: KernelPushed(r.devRepo, next)})
 		log.Printf("dev_from_theorems: %s unit %d/%d id=%s FAILED verification (%s), attempt %d; code on %q",
 			r.repo, idx+1, total, unit.ID, kind, n, out.Pushed)
 		devPlanSave(r.repo, r.devRepo, r.branch, plan, fmt.Sprintf("plan: %s %s attempt %d", unit.ID, kind, n))

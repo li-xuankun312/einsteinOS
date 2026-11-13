@@ -542,6 +542,7 @@ func commitDelta(cloneDir, devRepo, from, onto, mirrorDir string, changed, remov
 	if err := devGitPush(cloneDir, devRepo, onto, 20); err != nil {
 		return fmt.Errorf("push %s: %w", onto, err)
 	}
+	noteKernelPush(devRepo, onto, gitLine(cloneDir, "rev-parse", "HEAD"))
 	return nil
 }
 
