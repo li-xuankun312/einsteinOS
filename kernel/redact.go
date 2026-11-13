@@ -17,6 +17,9 @@ var secretRes = []struct {
 	re   *regexp.Regexp
 	repl string
 }{
+	// a private key, cut or whole: 11/13 04:52:57 a dev conversation printed
+	// ~/.ssh/einsteinos_deploy on this machine and the output went back to it
+	{regexp.MustCompile(`-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----(?s:.*?)(-----END [A-Z0-9 ]*PRIVATE KEY-----|$)`), "<private key redacted>"},
 	{regexp.MustCompile(`gh[pousr]_[A-Za-z0-9]{20,}`), "gh*_<redacted>"},
 	{regexp.MustCompile(`github_pat_[A-Za-z0-9_]{20,}`), "github_pat_<redacted>"},
 	// user:password@ or token@ inside a URL
@@ -39,6 +42,10 @@ func redactSecrets(s string) string {
 	}
 	return s
 }
+
+// RedactSecrets is redactSecrets for the model layer: what this machine printed, before a
+// conversation sees it.
+func RedactSecrets(s string) string { return redactSecrets(s) }
 
 // minSecretLen: shorter values are not replaced (they could match ordinary text).
 const minSecretLen = 12
