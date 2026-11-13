@@ -153,3 +153,31 @@ func cuhIncluders(ws string, changed []string) map[string][]string {
 }
 
 var cudaIncludeRe = regexp.MustCompile(`(?m)^[ \t]*#[ \t]*include[ \t]*["<]([^">]+)[">]`)
+
+// shadowedKernels: kernels the unit's port map names as its counterparts that a test file of
+// the unit also defines. The launch probe resolves a launch by name, so a test that defines
+// a kernel of the same name and launches that copy satisfies gpu_kernel_not_launched without
+// the ported kernel ever running. 11/13 unit ua1c077067b's tests/ua1c077067b/test_gpu.cu
+// defined eleven of them (kv_append_kernel, topk_kernel, qsa_attend_kernel and the rest),
+// each a line or two printing "launched", and unit u739c93b0c3's defined scale_kernel,
+// silu_kernel and rope_neox_kernel.
+func shadowedKernels(perFile map[string][]string, portKernels map[string]bool) []string {
+	if len(portKernels) == 0 {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []string
+	for f, ks := range perFile {
+		if !isTestPath(f) {
+			continue
+		}
+		for _, k := range ks {
+			if portKernels[k] && !seen[f+" "+k] {
+				seen[f+" "+k] = true
+				out = append(out, f+": "+k)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
