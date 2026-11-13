@@ -60,3 +60,23 @@ func TestAPortLineForADefinitionTheUnitDoesNotPortDoesNotPass(t *testing.T) {
 		t.Fatalf("the measured lines alone: gate %q %q", r.Gate, r.GateText)
 	}
 }
+
+// A counterpart named u776_* — not a name router_top10.cu defines — does not pass.
+func TestACounterpartTheReferenceFileDoesNotDefineDoesNotPass(t *testing.T) {
+	realRunner(t)
+	ws := t.TempDir()
+	unit := "u7663fc74b8"
+	build, test := devVerifyScripts(unit)
+	write(t, ws, build, "true")
+	write(t, ws, test, "true")
+	write(t, ws, "src/kernels/cuda/u776_check.cu", "__global__ void u776_router_probe_kernel(int* r) { *r = 512; }\n")
+	write(t, ws, PortMapPath(unit), "src/kernels/cuda/router_top10.cu\trouter_top10_kernel\tsrc/kernels/cuda/u776_check.cu\tu776_router_probe_kernel\n")
+	req := UnitRequirements{
+		Symbols:   []RefSymbol{{File: "src/kernels/cuda/router_top10.cu", Kind: "kernel", Name: "router_top10_kernel"}},
+		FileNames: map[string]map[string]bool{"src/kernels/cuda/router_top10.cu": {"router_top10_kernel": true, "RT_MAX_THREADS": true}},
+	}
+	r := runUnitVerifyWith(ws, unit, "", req, []string{PortMapPath(unit)}, time.Minute, time.Minute)
+	if r.Passed() || !strings.Contains(r.GateText, "port_name_foreign") || !strings.Contains(r.GateText, "u776_router_probe_kernel is not a name src/kernels/cuda/router_top10.cu defines") {
+		t.Fatalf("gate %q %q", r.Gate, r.GateText)
+	}
+}

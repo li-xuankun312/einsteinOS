@@ -203,3 +203,24 @@ func portExtra(ws, unitID string, syms []RefSymbol) []string {
 	}
 	return out
 }
+
+const portForeignNameFmt = "  %[1]s %[2]s → %[3]s:%[4]s: %[4]s is not a name %[1]s defines"
+
+// portForeignNames returns one line per port map line whose counterpart name is not a
+// definition of its reference file: a port keeps the reference's names. 11/13 unit
+// u7663fc74b8 named u776_router_probe_kernel, a kernel of its own that router_top10.cu does
+// not define, as a counterpart.
+func portForeignNames(ws, unitID string, fileNames map[string]map[string]bool) []string {
+	if len(fileNames) == 0 {
+		return nil
+	}
+	var out []string
+	lines, _ := readPortLines(ws, unitID)
+	for _, e := range lines {
+		names, ok := fileNames[e.refFile]
+		if ok && !names[symbolBase(e.name)] {
+			out = append(out, fmt.Sprintf(portForeignNameFmt, e.refFile, e.refName, e.file, e.name))
+		}
+	}
+	return out
+}
