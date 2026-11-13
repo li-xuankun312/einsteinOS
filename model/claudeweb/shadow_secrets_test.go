@@ -94,3 +94,19 @@ func TestGitAnywhereInTheLineIsGit(t *testing.T) {
 		}
 	}
 }
+
+// git init in a command run here makes no repository: 11/13 04:21:46 one in the unit's
+// directory was taken for the kernel's clone, and every later push failed.
+func TestGitInitMakesNoRepositoryHere(t *testing.T) {
+	kernelInitOnce.Do(kernel.Init)
+	dir := t.TempDir()
+	in, _ := json.Marshal(map[string]string{"command": "cd " + dir + "\n# start a repo\ngit init\necho x > f.txt"})
+	s := &ShadowExecutor{WorkDir: dir, Enabled: true}
+	s.Execute("bash_tool", string(in))
+	if _, err := os.Stat(filepath.Join(dir, "f.txt")); err != nil {
+		t.Fatal("the file the command writes still arrives here")
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+		t.Fatal("git init made a repository here")
+	}
+}

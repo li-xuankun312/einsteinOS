@@ -362,11 +362,13 @@ func isCurlOrWget(command string) bool {
 	return false
 }
 
-// gitShim makes git's network and remote commands no-ops for a command run on this machine
-// (the sandbox already ran them), lets every other git command touch the local tree, and
+// gitShim makes git's network and remote commands no-ops for a command run on this machine,
+// and init: a repository a conversation starts in the unit's directory is taken for the
+// kernel's clone of it (devRepoLocalDir), 11/13 04:21:46 → every push after "not a git
+// repository". The sandbox already ran them; lets every other git command touch the local tree, and
 // never stops a && chain.
 const gitShim = `git() { local a=("$@") i=0; while [ $i -lt ${#a[@]} ]; do case "${a[$i]}" in -C|-c) i=$((i+2));; -*) i=$((i+1));; *) break;; esac; done; ` +
-	`case "${a[$i]}" in clone|fetch|push|pull|remote|ls-remote|submodule) return 0;; esac; ` +
+	`case "${a[$i]}" in clone|fetch|push|pull|remote|ls-remote|submodule|init) return 0;; esac; ` +
 	`GIT_AUTHOR_NAME=shadow GIT_AUTHOR_EMAIL=shadow@local GIT_COMMITTER_NAME=shadow GIT_COMMITTER_EMAIL=shadow@local command git "$@" >/dev/null 2>&1; return 0; }
 `
 
