@@ -97,6 +97,7 @@ const (
 	gatePortExtraFmt           = "port_extra: %[1]d line(s) of %[2]s name no definition this unit ports — the map holds exactly the %[3]d the kernel measured from the reference:\n%[4]s"
 	gatePortForeignFmt         = "port_name_foreign: %[1]d line(s) of %[2]s give a counterpart the reference file does not define — a port keeps the reference's names:\n%[3]s"
 	gatePortScriptFmt          = "port_count_in_script: %[1]s read the port map — the kernel checks %[2]s against the %[3]d definitions it measured from the reference, and a count a script checks is the conversation's own number (remove the port check from the scripts; they test the code)"
+	gateResultUncheckedFmt     = "gpu_result_unchecked: %[1]s still exits 0 with the body of %[2]s skipped (rebuilt so each returns at once): the test checks that the kernel ran, not what it computed — compare its outputs with what the reference computes for the same input"
 	gateLeanCopiedFmt          = "lean_copied: %[1]d declaration(s) of the unit's Lean are the theory's own text, not the unit's (.einsteinOS/theory.md holds each, comments and white space aside):\n%[2]s"
 	gateToolchainFmt           = "toolchain_missing: the unit's sources are CUDA but none of %[1]s exists in %[2]s on this machine; a build that skips the GPU here proves nothing"
 )

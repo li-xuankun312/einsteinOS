@@ -466,7 +466,24 @@ func runUnitVerifyWith(ws, unitID, gpuUsable string, req UnitRequirements, chang
 		res.Smoke = "fail"
 	default:
 		res.Smoke = "pass"
-		res.Gate, res.GateText = unitGates(unitGateInput(ws, unitID, req, changed, res.Build, res.Test, res.NoToolchain))
+		gi := unitGateInput(ws, unitID, req, changed, res.Build, res.Test, res.NoToolchain)
+		res.Gate, res.GateText = unitGates(gi)
+		// the kernels it launched must be checked by its test: rebuilt with each one's body
+		// skipped, the test has to fail (gpu_mutation.go)
+		if res.Gate == "" && req.GPU() && len(req.Tests) == 0 && probeMeasured(res.Test) {
+			own := kernelSet(gi.Kernels)
+			if len(gi.PortKernels) > 0 {
+				own = gi.PortKernels
+			}
+			files := kernelFiles(ws, unitID, own, gi.Kernels, launchedNames(res.Test.Launches))
+			unchecked, inconclusive := resultUnchecked(ws, build, test, env, files, buildTimeout, testTimeout)
+			if len(inconclusive) > 0 {
+				log.Printf("dev_verify: unit %s: whether its test checks %s could not be measured", unitID, strings.Join(inconclusive, ", "))
+			}
+			if len(unchecked) > 0 {
+				res.Gate, res.GateText = "gpu_result_unchecked", fmt.Sprintf(gateResultUncheckedFmt, test, strings.Join(unchecked, " "))
+			}
+		}
 		// the integration unit: the port against the reference and the integration before,
 		// on this machine (eval_integration.go)
 		if fn := integrationEval(unitID); fn != nil && res.Gate == "" {

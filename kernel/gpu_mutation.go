@@ -10,8 +10,13 @@ package kernel
 // once) and runs test.sh again: a test that still exits 0 does not check that kernel.
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
+	"time"
 )
 
 // kernelSkipStmt is what each skipped kernel body starts with.
@@ -69,4 +74,92 @@ func skipKernelBodies(src, name string) (string, int) {
 	}
 	b.WriteString(src[last:])
 	return b.String(), n
+}
+
+// mutationMaxKernels: at most this many kernels are rebuilt skipped, one build and test each.
+const mutationMaxKernels = 6
+
+// kernelFiles: for each kernel the unit ports and its test launched, the files of the
+// workspace that define it (its port map lines and the unit's changed CUDA files).
+func kernelFiles(ws, unitID string, own map[string]bool, perFile map[string][]string, launched map[string]bool) map[string][]string {
+	out := map[string][]string{}
+	add := func(k, f string) {
+		for _, x := range out[k] {
+			if x == f {
+				return
+			}
+		}
+		out[k] = append(out[k], f)
+	}
+	lines, _ := readPortLines(ws, unitID)
+	for _, e := range lines {
+		if k := symbolBase(e.name); own[k] && launched[k] {
+			add(k, e.file)
+		}
+	}
+	for f, ks := range perFile {
+		for _, k := range ks {
+			if own[k] && launched[k] && !isTestPath(f) {
+				add(k, f)
+			}
+		}
+	}
+	return out
+}
+
+// resultUnchecked builds and tests a copy of the workspace once per kernel with that kernel's
+// body skipped. unchecked: the kernels whose test still exited 0; inconclusive: those the
+// copy could not be made, changed or built for (said, not failed).
+func resultUnchecked(ws, build, test, env string, files map[string][]string, buildTimeout, testTimeout time.Duration) (unchecked, inconclusive []string) {
+	names := make([]string, 0, len(files))
+	for k := range files {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	if len(names) > mutationMaxKernels {
+		names = names[:mutationMaxKernels]
+	}
+	for _, k := range names {
+		why := func() string {
+			dir, err := os.MkdirTemp("", "einsteinos_mutant_")
+			if err != nil {
+				return err.Error()
+			}
+			defer os.RemoveAll(dir)
+			if err := copyTree(ws, dir); err != nil {
+				return err.Error()
+			}
+			changed := 0
+			for _, f := range files[k] {
+				p := filepath.Join(dir, filepath.FromSlash(f))
+				b, err := os.ReadFile(p)
+				if err != nil {
+					continue
+				}
+				src, n := skipKernelBodies(string(b), k)
+				if n > 0 && os.WriteFile(p, []byte(src), 0o644) == nil {
+					changed += n
+				}
+			}
+			if changed == 0 {
+				return "no body found to skip"
+			}
+			if code, _, err := devVerifyRunner(env+"bash "+build+" 2>&1", dir, buildTimeout); err != nil || code != 0 {
+				return fmt.Sprintf("build.sh exited %d with the body skipped", code)
+			}
+			code, _, err := devVerifyRunner(env+"bash "+test+" 2>&1", dir, testTimeout)
+			if err == nil && code == 0 {
+				return "" // unchecked
+			}
+			return "checked"
+		}()
+		switch why {
+		case "":
+			unchecked = append(unchecked, k)
+		case "checked":
+		default:
+			inconclusive = append(inconclusive, k+" ("+why+")")
+		}
+	}
+	return unchecked, inconclusive
 }
