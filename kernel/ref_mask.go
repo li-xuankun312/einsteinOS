@@ -142,6 +142,16 @@ func maskRequirements(req UnitRequirements, m *refMasker) UnitRequirements {
 	for i, s := range req.Symbols {
 		out.Symbols[i] = RefSymbol{File: m.Replace(s.File), Kind: s.Kind, Name: m.Replace(s.Name)}
 	}
+	if req.FileNames != nil {
+		out.FileNames = map[string]map[string]bool{}
+		for f, names := range req.FileNames {
+			mn := map[string]bool{}
+			for n := range names {
+				mn[m.Replace(n)] = true
+			}
+			out.FileNames[m.Replace(f)] = mn
+		}
+	}
 	out.Tests = make([]RefTest, len(req.Tests))
 	for i, t := range req.Tests {
 		out.Tests[i] = RefTest{Name: m.Replace(t.Name), Command: m.Replace(t.Command)}

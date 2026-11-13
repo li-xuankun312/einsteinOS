@@ -166,6 +166,9 @@ type UnitRequirements struct {
 	// Symbols: every top-level definition of Sources at the reference commit (ref_symbols.go);
 	// the unit's port is checked against these (port_gate.go)
 	Symbols []RefSymbol
+	// FileNames: per reference source, the base names of every definition it holds (all of
+	// them, also those other units port): what a port map line may name as a counterpart
+	FileNames map[string]map[string]bool
 	// Tests: the reference's registered tests, for the integration unit (integration.go);
 	// RequireGPU: the reference builds CUDA, so they must open a GPU device
 	Tests []RefTest
@@ -302,7 +305,16 @@ func finishRequirements(bare, sha string, req *UnitRequirements) {
 	sort.Strings(req.Sources)
 	for _, f := range req.Sources {
 		if text, err := refGitFn(bare, "show", sha+":"+f); err == nil {
-			req.Symbols = append(req.Symbols, SymbolsOf(f, text)...)
+			syms := SymbolsOf(f, text)
+			req.Symbols = append(req.Symbols, syms...)
+			if req.FileNames == nil {
+				req.FileNames = map[string]map[string]bool{}
+			}
+			names := map[string]bool{}
+			for _, s := range syms {
+				names[symbolBase(s.Name)] = true
+			}
+			req.FileNames[f] = names
 		}
 	}
 	flags := refPerSourceFlags(bare, sha)
