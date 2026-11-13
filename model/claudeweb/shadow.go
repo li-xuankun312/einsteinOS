@@ -377,10 +377,8 @@ var gitWriteRe = regexp.MustCompile(`(^|[^0-9&>])>>?\s*[^&\s/]|\btee\s|\bcp\s|\b
 // wherever it is written: 11/13 00:22:35 unit 7 wrote /tmp/guard.sh after git, the old pattern
 // (a redirect not to an absolute path) did not see it, and every later call exited 127 here.
 func gitCommandWritesFiles(command string) bool {
-	for _, seg := range gitSegmentRe.Split(command, -1) {
-		seg = strings.TrimSpace(seg)
-		if seg == "" || seg == "git" || strings.HasPrefix(seg, "git ") || strings.HasPrefix(seg, "git\t") ||
-			strings.HasPrefix(seg, "GIT_DIR=") || strings.HasPrefix(seg, "cd ") {
+	for _, seg := range shellCommands(command) {
+		if startsWithGit(seg) || strings.HasPrefix(seg, "GIT_DIR=") || strings.HasPrefix(seg, "cd ") {
 			continue
 		}
 		return true
@@ -411,7 +409,49 @@ func isGitCommand(command string) bool {
 	if strings.Contains(command, "git clone") || strings.Contains(command, "git --git-dir") {
 		return true
 	}
+	// any command of the line, the way the shell reads it: 11/13 04:21–04:27 a dev
+	// conversation's "cd /home/claude/baloon\n\n# ...\ngit init / commit / push" was not
+	// seen as git and ran here whole, and 05:28:58 "cd … && \\\n  git remote set-url …" too
+	for _, seg := range shellCommands(command) {
+		if startsWithGit(seg) {
+			return true
+		}
+	}
 	return false
+}
+
+// shellCommands: the commands of a shell line — continuations joined, split at ; && || and
+// new lines, comments and empty pieces dropped.
+func shellCommands(command string) []string {
+	var out []string
+	for _, seg := range gitSegmentRe.Split(strings.ReplaceAll(command, "\\\n", " "), -1) {
+		seg = strings.TrimSpace(seg)
+		if seg == "" || strings.HasPrefix(seg, "#") {
+			continue
+		}
+		out = append(out, seg)
+	}
+	return out
+}
+
+// envAssignRe: VAR=value words in front of a command.
+var envAssignRe = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_]*=("[^"]*"|'[^']*'|\S*)\s+)+`)
+
+// startsWithGit: the command runs git (after VAR=… assignments, env, command, sudo).
+func startsWithGit(seg string) bool {
+	for {
+		seg = strings.TrimSpace(envAssignRe.ReplaceAllString(seg, ""))
+		trimmed := false
+		for _, w := range []string{"env ", "command ", "sudo ", "exec "} {
+			if strings.HasPrefix(seg, w) {
+				seg, trimmed = seg[len(w):], true
+			}
+		}
+		if !trimmed {
+			break
+		}
+	}
+	return seg == "git" || strings.HasPrefix(seg, "git ") || strings.HasPrefix(seg, "git\t")
 }
 
 // extractTheoremSig extracts the theorem signature from a code block.

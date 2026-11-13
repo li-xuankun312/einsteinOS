@@ -74,3 +74,23 @@ func TestNoGitRunHereCanPush(t *testing.T) {
 		t.Fatalf("a push left this machine: %q", out)
 	}
 }
+
+// git after a new line, a comment, a continuation or VAR=… is git: 11/13 04:21–04:27 and
+// 05:28:58 such commands ran here whole (git init, commit, push, remote set-url).
+func TestGitAnywhereInTheLineIsGit(t *testing.T) {
+	for _, c := range []string{
+		"cd /home/claude/baloon\n\n# Try to initialize git on local machine\ngit init",
+		"cd /home/claude/baloon && \\\n  git remote set-url origin https://x",
+		"cd /x\nGIT_SSH_COMMAND='ssh -i k' git push origin HEAD",
+		"cd /x\nenv GIT_TERMINAL_PROMPT=0 command git push",
+	} {
+		if !isGitCommand(c) {
+			t.Errorf("not seen as git: %q", c)
+		}
+	}
+	for _, c := range []string{"cd /x\nls -la", "echo '# git init'", "grep -n gitignore x"} {
+		if isGitCommand(c) {
+			t.Errorf("seen as git: %q", c)
+		}
+	}
+}
