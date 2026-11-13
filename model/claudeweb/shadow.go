@@ -52,6 +52,12 @@ type toolInput struct {
 }
 
 func (s *ShadowExecutor) Execute(toolName string, inputJSON string) string {
+	// what this machine printed goes back to the conversation: never with the kernel's
+	// secrets in it (11/13 05:01:42 the token came from this machine's bash history)
+	return kernel.RedactSecrets(s.execute(toolName, inputJSON))
+}
+
+func (s *ShadowExecutor) execute(toolName string, inputJSON string) string {
 	if !s.Enabled || inputJSON == "" {
 		return ""
 	}
