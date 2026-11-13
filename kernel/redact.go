@@ -47,6 +47,9 @@ func redactSecrets(s string) string {
 // conversation sees it.
 func RedactSecrets(s string) string { return redactSecrets(s) }
 
+// secretEnvNameRe: the names under which an environment holds credentials.
+var secretEnvNameRe = regexp.MustCompile(`(?i)token|secret|passw|api_?key|access_?key|private|cookie|credential|auth|session|csrf`)
+
 // minSecretLen: shorter values are not replaced (they could match ordinary text).
 const minSecretLen = 12
 
@@ -54,6 +57,13 @@ const minSecretLen = 12
 var knownSecretValuesFn = func() []string {
 	sess, csrf := axleCredentials()
 	vals := []string{sess, csrf, GetGHToken(), os.Getenv("GITHUB_TOKEN"), os.Getenv("GH_TOKEN"), os.Getenv("AXLE_COOKIE"), os.Getenv("AXLE_CSRF")}
+	// every value this process holds under a secret's name: 11/13 07:07:29 a dev conversation
+	// ran env | grep -iE "GH_|GITHUB_|TOKEN|PAT" on this machine
+	for _, kv := range os.Environ() {
+		if i := strings.Index(kv, "="); i > 0 && secretEnvNameRe.MatchString(kv[:i]) {
+			vals = append(vals, kv[i+1:])
+		}
+	}
 	// the claude.ai cookie: the whole header value and each of its values
 	if ck := os.Getenv("CLAUDE_WEB_COOKIE"); ck != "" {
 		vals = append(vals, ck)
