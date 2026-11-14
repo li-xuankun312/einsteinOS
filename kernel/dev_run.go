@@ -945,10 +945,19 @@ func devCollectLite(childPid int64, repo string) (string, map[string]string) {
 		stdout = GetResult(childPid)
 	}
 
-	apiErr := strings.Contains(stdout, "[API Error]") || strings.Contains(stdout, ModelDowngradeMarker) ||
+	apiErr := strings.Contains(stdout, "[API Error]") ||
 		strings.Contains(stdout, "http request:") || strings.Contains(stdout, "TLS handshake timeout") ||
 		strings.Contains(stdout, "net/http:")
-	if apiErr || (status["files_written"] == "" && len(strings.TrimSpace(stdout)) < 100) {
+	// a conversation that wrote files or had its scripts run on this machine did something:
+	// an API error that ends it is not "no response", and its mirror is judged, not reset.
+	// 11/14 13:50 dev_unit_16 (f0e4c486) ended on 502s after 11 rounds, 151 tool calls and 7
+	// verifications; it was read as no response, primeMirror reset the mirror, and the next
+	// conversation (14:37) found no port map and no verify scripts and started from theory.md.
+	worked := status["files_written"] != ""
+	if m := getMeta(childPid); m != nil && VerifySeen(m.ConvID) {
+		worked = true
+	}
+	if strings.Contains(stdout, ModelDowngradeMarker) || (!worked && (apiErr || len(strings.TrimSpace(stdout)) < 100)) {
 		status["compile"] = "no_response"
 	}
 	return stdout, status

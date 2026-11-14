@@ -358,6 +358,14 @@ func TestDevCollectLiteNeverPollsAndNeverTrustsTheChildsCompileClaim(t *testing.
 	if st(strings.Repeat("built ix_quant.h and the tests. ", 5))["compile"] == "no_response" {
 		t.Fatal("a real summary must not be retried as a dead child")
 	}
+	// 11/14 13:50: the API failed a conversation that had had its scripts run here seven
+	// times — its work is judged, not thrown away for a fresh child
+	worked := mk("[API Error] status 502: 请求处理失败，请稍后重试。")
+	getMeta(worked).ConvID = "f0e4c486-test"
+	NoteVerifySeen("f0e4c486-test")
+	if _, s := devCollectLite(worked, "o/r"); s["compile"] == "no_response" {
+		t.Fatal("an API error after verified work must not read as no response")
+	}
 }
 
 // The theory the theory phase really produces: one "## FILE: <sandbox path>" section per
