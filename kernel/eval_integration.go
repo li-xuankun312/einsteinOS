@@ -132,6 +132,8 @@ func evalIntegration(pid int64, repo, sha, devRepo, unitID string, benches []Eva
 			rec.Gate, rec.GateText = k, t
 		} else if k, t := e2ePortGate(rec.E2E, e2ePortKernels(ws, unitID)); k != "" {
 			rec.Gate, rec.GateText = k, t
+		} else if k, t := e2eUnchangedSince(repo, sha, ws, rec.E2E, prev); k != "" {
+			rec.Gate, rec.GateText = k, t
 		} else {
 			rec.Compared, rec.Compare = evalComparisons(pid, repo, rec.Conditions, rec.E2E, rec.Clues, base.docs)
 			rec.Gate, rec.GateText = evalGate(rec, prev, mask)
@@ -166,4 +168,18 @@ func evalClueDocs(clues []EvalClue) map[string]string {
 		}
 	}
 	return docs
+}
+
+// e2eUnchangedSince: e2eUnchangedGate against the previous record, the reference's changes
+// read from its bare clone.
+func e2eUnchangedSince(repo, sha, ws string, cur EvalBenchRun, prev *EvalRecord) (string, string) {
+	if prev == nil {
+		return "", ""
+	}
+	out, err := refGitFn(refBareDir(repo), "diff", "--name-only", prev.RefSHA, sha)
+	if err != nil {
+		log.Printf("eval: %s: the reference's changes since %s could not be read (%v)", repo, shortSHA(prev.RefSHA), err)
+		return "", ""
+	}
+	return e2eUnchangedGate(cur, prev.E2E, prev.RefSHA, strings.Fields(out), portMapRefFiles(ws))
 }

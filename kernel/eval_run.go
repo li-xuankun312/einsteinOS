@@ -29,6 +29,9 @@ type EvalBenchRun struct {
 	// ProbeErr: why that was not measured
 	Kernels  []string `json:"kernels,omitempty"`
 	ProbeErr string   `json:"probe_err,omitempty"`
+	// Programs: the executables of the workspace the run's processes ran, path → sha256 of
+	// the file (the end-to-end run only)
+	Programs map[string]string `json:"programs,omitempty"`
 }
 
 // EvalRun is a repository at one commit, built and benchmarked here.

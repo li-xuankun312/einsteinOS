@@ -9,6 +9,8 @@ package kernel
 // rate in tok/s: the integration does not pass.
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -24,6 +26,8 @@ const (
 	gateE2ENotPortFmt        = "integration_e2e_not_port: %[1]s launched %[2]d kernel(s) (%[3]s) and none of the kernels these units ported:\n%[4]s"
 	gateE2EPortUnmeasuredFmt = "integration_e2e_port_unmeasured: the launch probe was not in %[1]s's processes (%[2]s), so whether it ran the kernels the units ported is not known"
 	e2ePortUnitFmt           = "  %[1]s: %[2]s"
+	// the run must change when the reference did
+	gateE2EUnchangedFmt = "integration_e2e_unchanged: %[1]s ran the same program(s) as at the integration of %[2]s (%[3]s, byte for byte) while the reference changed %[4]d file(s) the port maps cover since then: %[5]s"
 )
 
 // devE2EScript: the end-to-end script of a unit.
@@ -56,6 +60,7 @@ func evalRunE2E(ws, unitID string) EvalBenchRun {
 	if err != nil {
 		br.Tail = err.Error()
 	}
+	br.Programs = workspacePrograms(ws, tr.Exes)
 	if logPath != "" {
 		names, loaded := e2eLaunchesFn(logPath)
 		br.Kernels = names
@@ -189,4 +194,80 @@ func e2eGate(br EvalBenchRun) (kind, text string) {
 		}
 	}
 	return "", ""
+}
+
+// workspacePrograms: the executables in exes that are files of the workspace ws, by their
+// path in it, each with the sha256 of its content.
+func workspacePrograms(ws string, exes []string) map[string]string {
+	root, err := filepath.EvalSymlinks(ws)
+	if err != nil {
+		root = ws
+	}
+	out := map[string]string{}
+	for _, exe := range exes {
+		rel, err := filepath.Rel(root, exe)
+		if err != nil || strings.HasPrefix(rel, "..") {
+			continue
+		}
+		b, err := os.ReadFile(exe)
+		if err != nil {
+			continue
+		}
+		sum := sha256.Sum256(b)
+		out[filepath.ToSlash(rel)] = hex.EncodeToString(sum[:])
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// portMapRefFiles: the reference files the port maps of the workspace ws cover (their first
+// column), every unit's.
+func portMapRefFiles(ws string) map[string]bool {
+	out := map[string]bool{}
+	maps, _ := filepath.Glob(filepath.Join(ws, filepath.FromSlash(PortMapPath("*"))))
+	for _, m := range maps {
+		b, err := os.ReadFile(m)
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(b), "\n") {
+			if fs := strings.Split(line, "\t"); len(fs) >= 3 && fs[0] != "" {
+				out[fs[0]] = true
+			}
+		}
+	}
+	return out
+}
+
+// e2eUnchangedGate: the run at this commit must not be the very program the previous
+// integration ran when the reference changed, in between, files the port maps cover.
+// changed: the reference's files that differ between the two commits. 11/10 commit
+// e5509707's end-to-end run printed the same 64 generated tokens as 6801c77f's on 11/09 — its
+// src/model/generate_model.cu had not changed since — so "compared with the integration
+// before" set the program against itself.
+func e2eUnchangedGate(cur, prev EvalBenchRun, prevSHA string, changed []string, covered map[string]bool) (kind, text string) {
+	if len(cur.Programs) == 0 || len(cur.Programs) != len(prev.Programs) {
+		return "", ""
+	}
+	var progs []string
+	for p, h := range cur.Programs {
+		if prev.Programs[p] != h {
+			return "", ""
+		}
+		progs = append(progs, p)
+	}
+	sort.Strings(progs)
+	var hit []string
+	for _, f := range changed {
+		if covered[f] {
+			hit = append(hit, f)
+		}
+	}
+	if len(hit) == 0 {
+		return "", ""
+	}
+	sort.Strings(hit)
+	return "integration_e2e_unchanged", fmt.Sprintf(gateE2EUnchangedFmt, cur.Bench.File, shortSHA(prevSHA), strings.Join(progs, " "), len(hit), strings.Join(hit, " "))
 }
