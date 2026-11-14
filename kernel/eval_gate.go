@@ -17,6 +17,7 @@ const (
 	gateEvalRegressedFmt = "integration_regressed: %[1]q: the port %[2]g %[3]s, at the integration of %[4]s it was %[5]g %[3]s (%[6]s is better)"
 	evalSourceReference  = "the reference at this commit"
 	evalSourcePrevFmt    = "the port at the integration of %[1]s"
+	evalSourcePrevE2EFmt = "the port's end-to-end run at the integration of %[1]s"
 )
 
 func evalKey(label, unit string) string { return evalLabel(label) + "|" + unit }
@@ -48,6 +49,22 @@ func evalGate(rec EvalRecord, prev *EvalRecord, mask func(string) string) (kind,
 		}
 	}
 	if prev != nil {
+		// the end-to-end rates against the previous integration's: 11/10 23:33 commit
+		// e5509707's run (57.50 / 11.19 tok/s) was never set against 6801c77f's (57.54 /
+		// 11.20) — only the port's benchmarks were, and there were none
+		e2e := map[string]Metric{}
+		for _, m := range rec.E2E.Metrics {
+			e2e[evalKey(m.Label, m.Unit)] = m
+		}
+		for _, p := range prev.E2E.Metrics {
+			d, ok := e2e[evalKey(p.Label, p.Unit)]
+			switch {
+			case !ok:
+				fail("integration_metric_missing", fmt.Sprintf(gateEvalMissingFmt, fmt.Sprintf(evalSourcePrevE2EFmt, shortSHA(prev.RefSHA)), p.Label, p.Unit))
+			case evalWorse(d.Value, p.Value, p.Better):
+				fail("integration_regressed", fmt.Sprintf(gateEvalRegressedFmt, p.Label, d.Value, p.Unit, shortSHA(prev.RefSHA), p.Value, p.Better))
+			}
+		}
 		for _, p := range prev.Dev.Metrics() {
 			d, ok := dev[evalKey(p.Label, p.Unit)]
 			switch {
