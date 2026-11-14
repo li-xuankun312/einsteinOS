@@ -443,9 +443,12 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 		// the cause is outside the unit — stop, say so, keep everything (the plan and the
 		// passed units are on the branch), and leave the decision to a person.
 		// no GPU toolchain on this machine: no retry or split can build a GPU unit here
-		if lf := plan.LastFailure[unit.ID]; !passed && !requeue && gateIsMachine(lf.Kind) {
-			msg := fmt.Sprintf("unit %s (%s): %s. this is a fact about the machine, not the unit; the code is kept on %s; fix the machine to continue",
-				unit.ID, nodeDesc(unit), lf.Text, lf.BaseRef)
+		if lf := plan.LastFailure[unit.ID]; !passed && !requeue && gateOutsideUnit(lf.Kind) {
+			stopFmt := devStopMachineFmt
+			if !gateIsMachine(lf.Kind) {
+				stopFmt = devStopNothingComparedFmt
+			}
+			msg := fmt.Sprintf(stopFmt, unit.ID, nodeDesc(unit), lf.Text, lf.BaseRef)
 			log.Printf("dev_from_theorems: %s %s", repo, msg)
 			PRFeedbackAdd(pid, "- dev_from_theorems: "+msg)
 			return lastStdout, fmt.Errorf("dev_from_theorems: %s", msg)
@@ -1204,3 +1207,10 @@ func nextUnitIndex(plan *DevPlan, leaves []DevPlanNode) int {
 	}
 	return integration
 }
+
+// why the run stops on a gate outside the unit: %[1]s unit, %[2]s what it is, %[3]s the
+// gate's text, %[4]s where its code is kept
+const (
+	devStopMachineFmt         = "unit %[1]s (%[2]s): %[3]s. this is a fact about the machine, not the unit; the code is kept on %[4]s; fix the machine to continue"
+	devStopNothingComparedFmt = "unit %[1]s (%[2]s): %[3]s. what the integration is compared with is not the unit's code; the code is kept on %[4]s; give the evaluation something outside the pipeline to compare with to continue"
+)

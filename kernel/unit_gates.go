@@ -120,9 +120,20 @@ func gateIsMachine(kind string) bool {
 	return kind == GateToolchainMissing || kind == GateToolchainDependenceUnmeasured
 }
 
+// GateNothingCompared: the integration's run was compared with nothing outside the pipeline
+// (eval_integration.go). What it would be compared with — the reference's runs here, the
+// previous integration, searched repositories, published numbers — is not the unit's code, so
+// a conversation cannot change it either.
+const GateNothingCompared = "integration_nothing_compared"
+
+// gateOutsideUnit: a gate no conversation on the unit can change — the machine's, or the
+// integration having nothing outside the pipeline to be judged against. The conversation is
+// let end and the run stops (dev_run), as for a machine gate.
+func gateOutsideUnit(kind string) bool { return gateIsMachine(kind) || kind == GateNothingCompared }
+
 // preverifyMayEnd: whether a done line ends the conversation — the unit passed, or what failed
 // is the machine.
-func preverifyMayEnd(passed bool, gate string) bool { return passed || gateIsMachine(gate) }
+func preverifyMayEnd(passed bool, gate string) bool { return passed || gateOutsideUnit(gate) }
 
 // unitGates returns the first failed gate's kind and the text of every failed gate.
 func unitGates(in GateInput) (kind, text string) {

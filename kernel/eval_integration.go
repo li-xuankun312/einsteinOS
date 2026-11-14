@@ -9,6 +9,7 @@ package kernel
 // kernel (it is never shown to a conversation), so dev_run registers the evaluation per unit.
 
 import (
+	"fmt"
 	"log"
 	"strings"
 	"sync"
@@ -143,6 +144,9 @@ func evalIntegration(pid int64, repo, sha, devRepo, unitID string, benches []Eva
 			if rec.Gate == "" {
 				rec.Gate, rec.GateText = evalExternalGate(external)
 			}
+			if rec.Gate == "" && len(rec.Compared) == 0 {
+				rec.Gate, rec.GateText = GateNothingCompared, evalNothingComparedText(rec, prev)
+			}
 		}
 		log.Printf("eval: %s %s: reference build=%d %d metric(s); port %d metric(s); end-to-end on %s exit=%d %d metric(s); %d searched repo(s); %d clue(s); previous %q; gate=%q",
 			repo, shortSHA(sha), rec.Reference.BuildExit, len(rec.Reference.Metrics()), len(rec.Dev.Metrics()),
@@ -185,4 +189,45 @@ func e2eUnchangedSince(repo, sha, ws string, cur EvalBenchRun, prev *EvalRecord)
 		return "", ""
 	}
 	return e2eUnchangedGate(cur, prev.E2E, prev.RefSHA, strings.Fields(out), portMapRefFiles(ws))
+}
+
+// gateNothingComparedFmt: why each side gave nothing to compare with
+const (
+	gateNothingComparedFmt = GateNothingCompared + ": the port's end-to-end run was compared with nothing outside the pipeline — the reference here: %[1]s; the previous integration: %[2]s; searched repositories: %[3]s; published numbers: %[4]s"
+	evalNoPrevFirst        = "none, this is the first integrated commit"
+	evalNoPrevRatesFmt     = "%[1]s has no rate the port's run also printed"
+	evalRefNothingFmt      = "built exit %[1]d, %[2]d benchmark(s) run, %[3]d number(s)%[4]s"
+	evalExtNothingFmt      = "%[1]s %[2]s"
+	evalPublishedFmt       = "%[1]d read, the planner named %[2]d comparable%[3]s"
+)
+
+// evalNothingComparedText: integration_nothing_compared's text, from the record. 11/09 and
+// 11/10 the integration passed with nothing compared: the reference shipped no runnable
+// benchmark, the one searched repository (triton-lang/triton) failed its checkout, and the
+// planner found none of 68 published numbers comparable — an empty verdict passed.
+func evalNothingComparedText(rec EvalRecord, prev *EvalRecord) string {
+	why := func(s string) string {
+		if s == "" {
+			return ""
+		}
+		return " (" + s + ")"
+	}
+	ref := fmt.Sprintf(evalRefNothingFmt, rec.Reference.BuildExit, len(rec.Reference.Benches), len(rec.Reference.Metrics()), why(rec.Reference.Err))
+	p := evalNoPrevFirst
+	if prev != nil {
+		p = fmt.Sprintf(evalNoPrevRatesFmt, shortSHA(prev.RefSHA))
+	}
+	var ext []string
+	for _, e := range rec.External {
+		w := e.Err
+		if w == "" {
+			w = fmt.Sprintf("%d number(s)", len(e.Metrics()))
+		}
+		ext = append(ext, fmt.Sprintf(evalExtNothingFmt, e.Repo, tailText(w, 200)))
+	}
+	if len(ext) == 0 {
+		ext = append(ext, fmt.Sprintf("none taken of %d named", len(rec.Discover.Named)))
+	}
+	pub := fmt.Sprintf(evalPublishedFmt, rec.Compare.Published, rec.Compare.Named, why(rec.Compare.NotAsked))
+	return fmt.Sprintf(gateNothingComparedFmt, ref, p, strings.Join(ext, "; "), pub)
 }
