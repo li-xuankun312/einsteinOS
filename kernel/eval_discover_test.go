@@ -200,3 +200,26 @@ func resetEvalSearch() {
 	evalNotTaken = map[string]string{}
 	evalNotTakenMu.Unlock()
 }
+
+// The search for repositories to compare with is given what the kernel measured on this
+// machine beside the task. 11/10 it had the task alone and named llvm/llvm-project, ROCm/HIP
+// and triton-lang/triton — compilers, none running the model here — and none of the 68
+// published numbers the planner then read had been measured on that model.
+func TestTheSearchIsGivenTheMeasuredConditions(t *testing.T) {
+	model := filepath.Join(t.TempDir(), "Qwen3.6-35B-A3B")
+	os.MkdirAll(model, 0o755)
+	os.WriteFile(filepath.Join(model, "config.json"), []byte(`{"architectures":["Qwen3_5MoeForCausalLM"],"model_type":"qwen3_5_moe","num_experts":256}`), 0o644)
+	os.WriteFile(filepath.Join(model, "model-00001-of-00026.safetensors"), []byte("x"), 0o644)
+	old, oldAsk := evalModelDir, evalAskFn
+	defer func() { evalModelDir, evalAskFn = old, oldAsk }()
+	evalModelDir = model
+	var prompt string
+	evalAskFn = func(p string) (string, error) { prompt = p; return "", nil }
+	task := "把 Niko1221/Strata 移植到这台机器"
+	evalDiscover(evalTaskWithConditions(task, measureEvalConditions("Niko1221/Strata", "07b4a6263ab9")), []string{"Niko1221/Strata"}, evalAcceptRepo)
+	for _, want := range []string{task, `"model_name":"Qwen3.6-35B-A3B"`, "Qwen3_5MoeForCausalLM", `"num_experts":256`} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("the search prompt lacks %s:\n%s", want, prompt)
+		}
+	}
+}

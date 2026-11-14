@@ -9,6 +9,7 @@ package kernel
 // kernel (it is never shown to a conversation), so dev_run registers the evaluation per unit.
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"strings"
@@ -94,7 +95,7 @@ func evalBaseFor(repo, sha string, benches []EvalBench) evalBase {
 	evalTaskMu.Lock()
 	task := evalTask
 	evalTaskMu.Unlock()
-	taken, trace := evalDiscover(task, []string{repo}, evalAcceptRepo)
+	taken, trace := evalDiscover(evalTaskWithConditions(task, measureEvalConditions(repo, sha)), []string{repo}, evalAcceptRepo)
 	b.discover = trace
 	for _, r := range taken {
 		name := r.Owner + "/" + r.Name
@@ -233,4 +234,21 @@ func evalNothingComparedText(rec EvalRecord, prev *EvalRecord) string {
 	}
 	pub := fmt.Sprintf(evalPublishedFmt, rec.Compare.Published, rec.Compare.Named, why(rec.Compare.NotAsked))
 	return fmt.Sprintf(gateNothingComparedFmt, ref, p, strings.Join(ext, "; "), pub)
+}
+
+// evalTaskConditionsFmt: the task and, inserted as they are, the conditions the kernel
+// measured on this machine (the model, the GPUs, the memory)
+const evalTaskConditionsFmt = "%[1]s\n\n%[2]s"
+
+// evalTaskWithConditions: the search for repositories to compare with is given the measured
+// conditions beside the task. 11/10 it was given the task alone and named llvm/llvm-project,
+// ROCm/HIP and triton-lang/triton — compilers, none running the model on this machine
+// (Qwen3.6-35B-A3B) — and of the 68 published numbers the planner then read, none was
+// measured on that model, so none was comparable.
+func evalTaskWithConditions(task string, cond EvalConditions) string {
+	cj, err := json.Marshal(cond)
+	if err != nil {
+		return task
+	}
+	return fmt.Sprintf(evalTaskConditionsFmt, task, cj)
 }
