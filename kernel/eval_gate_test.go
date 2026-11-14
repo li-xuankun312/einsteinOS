@@ -1,6 +1,7 @@
 package kernel
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -55,5 +56,29 @@ func TestTheEndToEndRatesAreComparedWithThePreviousIntegration(t *testing.T) {
 	rec.E2E = e2e(60, 12)
 	if k, txt := evalGate(rec, prev, id); k != "" {
 		t.Fatalf("faster on both: %q %s", k, txt)
+	}
+}
+
+// Every comparison the verdict made is kept in the record. 11/09 and 11/10 both records said
+// "compared": null, and what the verdict had been set against could not be read from them.
+func TestTheRecordKeepsEveryComparison(t *testing.T) {
+	id := func(s string) string { return s }
+	rec := EvalRecord{RefSHA: "e5509707730d31f9", Reference: evalRunOf(Metric{"decode", 50, "tok/s", "higher"}),
+		Dev: evalRunOf(Metric{"decode", 55, "tok/s", "higher"}),
+		E2E: EvalBenchRun{Metrics: []Metric{{"prefill", 57.50, "tok/s", "higher"}, {"decode", 11.19, "tok/s", "higher"}}}}
+	prev := &EvalRecord{RefSHA: "6801c77ff6f7a1e0", E2E: EvalBenchRun{Metrics: []Metric{{"prefill", 57.54, "tok/s", "higher"}, {"decode", 11.20, "tok/s", "higher"}}}}
+	k, _, done := evalGateCompared(rec, prev, id)
+	if k != "integration_regressed" || len(done) != 3 {
+		t.Fatalf("the reference's decode and the previous run's two rates: %q %+v", k, done)
+	}
+	if done[0].Source != evalSourceReference || done[0].Other.Value != 50 || done[0].Worse {
+		t.Fatalf("against the reference: %+v", done[0])
+	}
+	if !strings.Contains(done[1].Source, "6801c77f") || done[1].Other.Value != 57.54 || !done[1].Worse {
+		t.Fatalf("against the previous run: %+v", done[1])
+	}
+	b, _ := json.Marshal(EvalRecord{Compared: done})
+	if !strings.Contains(string(b), `"source":"the reference at this commit"`) || strings.Contains(string(b), `"compared":null`) {
+		t.Fatalf("record: %s", b)
 	}
 }

@@ -32,6 +32,18 @@ func evalWorse(port, other float64, better string) bool {
 // evalGate judges rec against the reference's numbers in it and the previous record (nil for
 // the first integrated commit). mask maps the reference's labels to the names the port uses.
 func evalGate(rec EvalRecord, prev *EvalRecord, mask func(string) string) (kind, text string) {
+	kind, text, _ = evalGateCompared(rec, prev, mask)
+	return kind, text
+}
+
+// evalGateCompared is evalGate with the comparisons it made, each kept in the record: 11/09
+// and 11/10 both records said "compared": null — what the verdict had been set against
+// could not be read from the record at all.
+func evalGateCompared(rec EvalRecord, prev *EvalRecord, mask func(string) string) (kind, text string, done []EvalComparison) {
+	compared := func(source string, port, other Metric) {
+		o := other
+		done = append(done, EvalComparison{Source: source, Port: port, Other: &o, Worse: evalWorse(port.Value, other.Value, other.Better)})
+	}
 	dev := map[string]Metric{}
 	for _, m := range rec.Dev.Metrics() {
 		dev[evalKey(m.Label, m.Unit)] = m
@@ -41,6 +53,9 @@ func evalGate(rec EvalRecord, prev *EvalRecord, mask func(string) string) (kind,
 	for _, r := range rec.Reference.Metrics() {
 		label := mask(r.Label)
 		d, ok := dev[evalKey(label, r.Unit)]
+		if ok {
+			compared(evalSourceReference, d, r)
+		}
 		switch {
 		case !ok:
 			fail("integration_metric_missing", fmt.Sprintf(gateEvalMissingFmt, evalSourceReference, label, r.Unit))
@@ -58,6 +73,9 @@ func evalGate(rec EvalRecord, prev *EvalRecord, mask func(string) string) (kind,
 		}
 		for _, p := range prev.E2E.Metrics {
 			d, ok := e2e[evalKey(p.Label, p.Unit)]
+			if ok {
+				compared(fmt.Sprintf(evalSourcePrevE2EFmt, shortSHA(prev.RefSHA)), d, p)
+			}
 			switch {
 			case !ok:
 				fail("integration_metric_missing", fmt.Sprintf(gateEvalMissingFmt, fmt.Sprintf(evalSourcePrevE2EFmt, shortSHA(prev.RefSHA)), p.Label, p.Unit))
@@ -67,6 +85,9 @@ func evalGate(rec EvalRecord, prev *EvalRecord, mask func(string) string) (kind,
 		}
 		for _, p := range prev.Dev.Metrics() {
 			d, ok := dev[evalKey(p.Label, p.Unit)]
+			if ok {
+				compared(fmt.Sprintf(evalSourcePrevFmt, shortSHA(prev.RefSHA)), d, p)
+			}
 			switch {
 			case !ok:
 				fail("integration_metric_missing", fmt.Sprintf(gateEvalMissingFmt, fmt.Sprintf(evalSourcePrevFmt, shortSHA(prev.RefSHA)), p.Label, p.Unit))
@@ -76,7 +97,7 @@ func evalGate(rec EvalRecord, prev *EvalRecord, mask func(string) string) (kind,
 		}
 	}
 	if len(kinds) == 0 {
-		return "", ""
+		return "", "", done
 	}
-	return kinds[0], strings.Join(texts, "\n")
+	return kinds[0], strings.Join(texts, "\n"), done
 }

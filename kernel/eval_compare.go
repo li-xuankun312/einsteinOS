@@ -24,11 +24,15 @@ import (
 	"sync"
 )
 
-// EvalComparison is one published number the planner found comparable, against the port's.
+// EvalComparison is one comparison the integration's verdict made: a published number the
+// planner found comparable (Clue), or — Source set — a number of the reference run here or of
+// the previous integration (Other), against the port's.
 type EvalComparison struct {
-	Clue  EvalClue `json:"clue"`
-	Port  Metric   `json:"port"`
-	Worse bool     `json:"worse"`
+	Clue   EvalClue `json:"clue"`
+	Port   Metric   `json:"port"`
+	Worse  bool     `json:"worse"`
+	Source string   `json:"source,omitempty"`
+	Other  *Metric  `json:"other,omitempty"`
 }
 
 const (

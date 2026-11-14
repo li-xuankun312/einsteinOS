@@ -135,10 +135,13 @@ func evalIntegration(pid int64, repo, sha, devRepo, unitID string, benches []Eva
 		} else if k, t := e2eUnchangedSince(repo, sha, ws, rec.E2E, prev); k != "" {
 			rec.Gate, rec.GateText = k, t
 		} else {
-			rec.Compared, rec.Compare = evalComparisons(pid, repo, rec.Conditions, rec.E2E, rec.Clues, base.docs)
-			rec.Gate, rec.GateText = evalGate(rec, prev, mask)
+			external, trace := evalComparisons(pid, repo, rec.Conditions, rec.E2E, rec.Clues, base.docs)
+			rec.Compare = trace
+			var own []EvalComparison
+			rec.Gate, rec.GateText, own = evalGateCompared(rec, prev, mask)
+			rec.Compared = append(own, external...)
 			if rec.Gate == "" {
-				rec.Gate, rec.GateText = evalExternalGate(rec.Compared)
+				rec.Gate, rec.GateText = evalExternalGate(external)
 			}
 		}
 		log.Printf("eval: %s %s: reference build=%d %d metric(s); port %d metric(s); end-to-end on %s exit=%d %d metric(s); %d searched repo(s); %d clue(s); previous %q; gate=%q",
