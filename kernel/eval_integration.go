@@ -141,6 +141,8 @@ func evalIntegration(pid int64, repo, sha, devRepo, unitID string, benches []Eva
 			rec.Gate, rec.GateText = k, t
 		} else if k, t := e2eTokensGate(rec.E2E); k != "" {
 			rec.Gate, rec.GateText = k, t
+		} else if k, t := evalCorrectGate(rec.E2E, evalModel()); k != "" {
+			rec.Gate, rec.GateText = k, t
 		} else {
 			external, trace := evalComparisons(pid, repo, rec.Conditions, rec.E2E, rec.Clues, base.docs)
 			rec.Compare = trace

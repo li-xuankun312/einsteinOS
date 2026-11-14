@@ -117,7 +117,7 @@ const GateToolchainMissing = "toolchain_missing"
 // conversations spent two hours on build_toolchain_dependence_unmeasured, rewriting build.sh
 // and adding an "oracle" kernel. The conversation is let end and the run stops (dev_run).
 func gateIsMachine(kind string) bool {
-	return kind == GateToolchainMissing || kind == GateToolchainDependenceUnmeasured
+	return kind == GateToolchainMissing || kind == GateToolchainDependenceUnmeasured || kind == GateReferenceImplMissing
 }
 
 // GateNothingCompared: the integration's run was compared with nothing outside the pipeline
