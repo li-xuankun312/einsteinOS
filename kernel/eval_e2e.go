@@ -62,6 +62,7 @@ func evalRunE2E(ws, unitID string) EvalBenchRun {
 	}
 	br.Programs = workspacePrograms(ws, tr.Exes)
 	br.PromptIDs, br.GeneratedIDs = e2eTokens(out)
+	br.Weights = tr.Weights
 	if logPath != "" {
 		names, loaded := e2eLaunchesFn(logPath)
 		br.Kernels = names
@@ -271,4 +272,36 @@ func e2eUnchangedGate(cur, prev EvalBenchRun, prevSHA string, changed []string, 
 	}
 	sort.Strings(hit)
 	return "integration_e2e_unchanged", fmt.Sprintf(gateE2EUnchangedFmt, cur.Bench.File, shortSHA(prevSHA), strings.Join(progs, " "), len(hit), strings.Join(hit, " "))
+}
+
+const gateE2EOtherModelFmt = "integration_e2e_other_model: %[1]s was given MODEL_DIR=%[2]s and its processes %[3]s"
+
+// e2eModelGate: the run loaded its weights from the model the kernel gave it, and only from
+// there. 11/10 /tmp/model did not exist and e2e.sh chose a model itself ("e2e: /tmp/model has
+// no weights; using /root/public-storage/models/Qwen/Qwen3.6-35B-A3B/"): which model the
+// rates and the tokens belonged to was decided by the unit's script, not measured.
+func e2eModelGate(br EvalBenchRun, modelDir string) (kind, text string) {
+	root, err := filepath.EvalSymlinks(modelDir)
+	if err != nil {
+		root = modelDir
+	}
+	var inside, outside []string
+	for _, w := range br.Weights {
+		real, err := filepath.EvalSymlinks(w)
+		if err != nil {
+			real = w
+		}
+		if rel, err := filepath.Rel(root, real); err == nil && !strings.HasPrefix(rel, "..") {
+			inside = append(inside, w)
+		} else {
+			outside = append(outside, w)
+		}
+	}
+	switch {
+	case len(outside) > 0:
+		return "integration_e2e_other_model", fmt.Sprintf(gateE2EOtherModelFmt, br.Bench.File, modelDir, "loaded weights from elsewhere: "+strings.Join(outside, " "))
+	case len(inside) == 0:
+		return "integration_e2e_other_model", fmt.Sprintf(gateE2EOtherModelFmt, br.Bench.File, modelDir, "opened none of its weight files")
+	}
+	return "", ""
 }

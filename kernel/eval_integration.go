@@ -135,6 +135,8 @@ func evalIntegration(pid int64, repo, sha, devRepo, unitID string, benches []Eva
 		rec.E2E = evalRunE2E(ws, unitID)
 		if k, t := e2eGate(rec.E2E); k != "" {
 			rec.Gate, rec.GateText = k, t
+		} else if k, t := e2eModelGate(rec.E2E, evalModel()); k != "" {
+			rec.Gate, rec.GateText = k, t
 		} else if k, t := e2ePortGate(rec.E2E, e2ePortKernels(ws, unitID)); k != "" {
 			rec.Gate, rec.GateText = k, t
 		} else if k, t := e2eUnchangedSince(repo, sha, ws, rec.E2E, prev); k != "" {

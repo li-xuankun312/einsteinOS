@@ -41,8 +41,14 @@ func TestNothingComparedIsNotAPass(t *testing.T) {
 
 	ws := t.TempDir()
 	os.MkdirAll(filepath.Join(ws, ".einsteinOS/verify/uint"), 0o755)
-	os.WriteFile(filepath.Join(ws, ".einsteinOS/verify/uint/e2e.sh"), []byte("echo 'prompt: 9707 11 1879'; echo 'generated: 220 248046 198'; echo 'prefill: 57.54 tok/s'; echo 'decode: 11.20 tok/s'\n"), 0o755)
+	os.WriteFile(filepath.Join(ws, ".einsteinOS/verify/uint/e2e.sh"), []byte("exec 3< \"$MODEL_DIR/model-00001-of-00001.safetensors\"; sleep 0.3; echo 'prompt: 9707 11 1879'; echo 'generated: 220 248046 198'; echo 'prefill: 57.54 tok/s'; echo 'decode: 11.20 tok/s'\n"), 0o755)
 	mask := newRefMask(refMaskIdent, "Niko1221/Strata").Replace
+	modelDir := t.TempDir()
+	os.WriteFile(filepath.Join(modelDir, "config.json"), []byte(`{"architectures":["Qwen3_5MoeForCausalLM"]}`), 0o644)
+	os.WriteFile(filepath.Join(modelDir, "model-00001-of-00001.safetensors"), []byte("w"), 0o644)
+	oldModel := evalModelDir
+	defer func() { evalModelDir = oldModel }()
+	evalModelDir = modelDir
 	oldCorrect := evalTeacherForcedFn
 	defer func() { evalTeacherForcedFn = oldCorrect }()
 	evalTeacherForcedFn = func(_, arch string, _, g []int) ([]int, string, string) { return g, arch, "" }

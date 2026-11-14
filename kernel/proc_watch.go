@@ -38,7 +38,9 @@ var (
 
 // ProcTrace is what a watched process tree did.
 type ProcTrace struct {
-	Devices  []string
+	Devices []string
+	// Weights: model weight files (.safetensors, .gguf) the processes had open or mapped
+	Weights  []string
 	Exes     []string
 	Cmdlines []string
 	Procs    int // distinct processes seen
@@ -54,6 +56,7 @@ type procWatcher struct {
 	mu       sync.Mutex
 	devRe    *regexp.Regexp
 	devices  map[string]bool
+	weights  map[string]bool
 	exes     map[string]bool
 	cmdlines map[string]bool
 	seen     map[int]bool
@@ -61,7 +64,7 @@ type procWatcher struct {
 
 // watchProcTree watches the tree rooted at the pid written to pidFile until stop is called.
 func watchProcTree(pidFile string) (stop func() ProcTrace) {
-	w := &procWatcher{devRe: gpuDeviceRe(), devices: map[string]bool{}, exes: map[string]bool{},
+	w := &procWatcher{devRe: gpuDeviceRe(), devices: map[string]bool{}, weights: map[string]bool{}, exes: map[string]bool{},
 		cmdlines: map[string]bool{}, seen: map[int]bool{}}
 	done := make(chan struct{})
 	finished := make(chan struct{})
@@ -127,8 +130,23 @@ func (w *procWatcher) scan(root int) {
 		}
 		fds, _ := os.ReadDir(filepath.Join(dir, "fd"))
 		for _, fd := range fds {
-			if target, err := os.Readlink(filepath.Join(dir, "fd", fd.Name())); err == nil && w.devRe.MatchString(target) {
+			target, err := os.Readlink(filepath.Join(dir, "fd", fd.Name()))
+			if err != nil {
+				continue
+			}
+			if w.devRe.MatchString(target) {
 				w.devices[target] = true
+			}
+			if weightFileRe.MatchString(target) {
+				w.weights[target] = true
+			}
+		}
+		// a loader that maps the weights can close their descriptors at once: the mappings stay
+		if b, err := os.ReadFile(filepath.Join(dir, "maps")); err == nil {
+			for _, line := range strings.Split(string(b), "\n") {
+				if i := strings.IndexByte(line, '/'); i >= 0 && weightFileRe.MatchString(line[i:]) {
+					w.weights[strings.TrimSuffix(line[i:], " (deleted)")] = true
+				}
 			}
 		}
 	}
@@ -164,7 +182,7 @@ func (w *procWatcher) trace() ProcTrace {
 		sort.Strings(out)
 		return out
 	}
-	return ProcTrace{Devices: keys(w.devices), Exes: keys(w.exes), Cmdlines: keys(w.cmdlines), Procs: len(w.seen)}
+	return ProcTrace{Devices: keys(w.devices), Weights: keys(w.weights), Exes: keys(w.exes), Cmdlines: keys(w.cmdlines), Procs: len(w.seen)}
 }
 
 // watchedCommand wraps a shell command so its process tree is the watched one: the shell
@@ -172,3 +190,6 @@ func (w *procWatcher) trace() ProcTrace {
 func watchedCommand(pidFile, command string) string {
 	return fmt.Sprintf("echo $$ > %s; exec bash -c %s", shq(pidFile), shq(command))
 }
+
+// weightFileRe: a model weight file — the formats a model directory holds (hasModel)
+var weightFileRe = regexp.MustCompile(`\.(safetensors|gguf)$`)
