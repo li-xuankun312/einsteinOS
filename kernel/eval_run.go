@@ -57,6 +57,9 @@ func (r EvalRun) Metrics() []Metric {
 
 var evalBuildTimeout, evalBenchTimeout = 60 * time.Minute, 20 * time.Minute
 
+// evalPrefetchFn fetches the blobs of a commit a blobless clone lacks (a variable for tests)
+var evalPrefetchFn = prefetchCommitBlobs
+
 // evalRunRepo checks out bare at sha into a fresh directory, builds it and runs benches.
 func evalRunRepo(repo, bare, sha string, benches []EvalBench) EvalRun {
 	run := EvalRun{Repo: repo, SHA: sha, BuildExit: -1}
@@ -68,6 +71,12 @@ func evalRunRepo(repo, bare, sha string, benches []EvalBench) EvalRun {
 	defer os.RemoveAll(dir)
 	src := filepath.Join(dir, "src")
 	os.MkdirAll(src, 0o755)
+	// the clones are blobless: the commit's files are fetched first in batches, by the routes
+	// and retries the reference's clone has, not one by one by git archive's lazy fetch over
+	// HTTPS with no retry — 11/10 triton-lang/triton was taken and then not run: "checkout:
+	// fatal: unable to access …: GnuTLS recv error (-110) … tar: This does not look like a tar
+	// archive"
+	evalPrefetchFn(bare, sha)
 	co := fmt.Sprintf("git --git-dir=%q archive %s | tar -x -C %q", bare, sha, src)
 	if out, err := exec.Command("sh", "-c", co).CombinedOutput(); err != nil {
 		run.Err = "checkout: " + tailText(string(out), 300)
