@@ -23,6 +23,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -742,6 +743,9 @@ func (r *devRun) reviewUnit(unit DevPlanNode, idx, total int, convID string, st 
 	if convID != "" {
 		st["dev_conv"] = convID
 	}
+	// what the review changes in the mirror is measured (review_edits.go)
+	mirror := devMirrorDir(r.devRepo)
+	before, beforeErr := snapshotTree(mirror)
 	verdict := dev_review_unit(r.pid, r.repo, r.branch, idx+1, total, du, st)
 	// a review that ended without a verdict judged nothing: the code is not at fault, so the
 	// review is asked again, in a new conversation, not counted against the unit
@@ -751,6 +755,16 @@ func (r *devRun) reviewUnit(unit DevPlanNode, idx, total int, convID string, st 
 	}
 	if strings.HasPrefix(verdict, reviewNoVerdict) {
 		verdict = fmt.Sprintf(reviewNoVerdictFailFmt, reviewVerdictTries)
+	}
+	if beforeErr == nil {
+		verdict = reviewEditVerdict(verdict, mirror, before, func(f string) string {
+			dir, err := devRepoLocalDir(r.devRepo)
+			if err != nil {
+				return ""
+			}
+			out, _ := refGitFn(filepath.Join(dir, ".git"), "show", r.branch+":"+f)
+			return out
+		})
 	}
 	log.Printf("dev_from_theorems: %s unit %d/%d id=%s review → %s", r.repo, idx+1, total, unit.ID, verdict)
 	if strings.HasPrefix(verdict, "PASS") {
