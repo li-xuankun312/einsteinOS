@@ -87,6 +87,9 @@ func evalBaseFor(repo, sha string, benches []EvalBench) evalBase {
 		evalBaseMu.Unlock()
 	}()
 	b.reference = evalRunRepo(repo, refBareDir(repo), sha, benches)
+	if len(benches) == 0 && b.reference.Err == "" {
+		b.reference.Err = evalNoBenchReason(refBareDir(repo), sha)
+	}
 	b.clues = evalClues(repo, refBareDir(repo), sha)
 	evalTaskMu.Lock()
 	task := evalTask

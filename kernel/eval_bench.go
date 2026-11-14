@@ -154,3 +154,58 @@ func cmakeSources(cmakeFile, list string) []string {
 	}
 	return out
 }
+
+// evalNoBenchReasonFmt: why a repository has no benchmark the kernel can run, measured from
+// its tree: %[1]s the commit, %[2]d/%[3]s declared targets whose sources are not in the
+// tree, %[4]d/%[5]s result files under its benchmark directories
+const evalNoBenchReasonFmt = "no benchmark the repository ships at %[1]s can run here: %[2]d target(s) its CMakeLists declare whose sources are not in the tree (%[3]s); %[4]d result file(s) in its benchmark directories without code that produced them (%[5]s)"
+
+// evalNoBenchReason says, from the repository's own tree at sha, why it has no benchmark to
+// run: the targets its CMakeLists declare as benchmarks whose sources it does not ship, and
+// the result files it publishes instead. 11/09 and 11/10 the reference's record said only
+// "benches": null — Strata at 6801c77f and e5509707 declares its parity and timing programs
+// under bench/micro/ (native_mmvq_multi with --bench among them),
+// ships no bench/micro, and publishes bench/results/2026-09-24-final/matrix.md.
+func evalNoBenchReason(bare, sha string) string {
+	ls, err := refGitFn(bare, "ls-tree", "-r", "--name-only", sha)
+	if err != nil {
+		return err.Error()
+	}
+	tree := map[string]bool{}
+	files := strings.Split(ls, "\n")
+	for _, f := range files {
+		tree[strings.TrimSpace(f)] = true
+	}
+	var absent, results []string
+	for _, f := range files {
+		f = strings.TrimSpace(f)
+		switch {
+		case path.Base(f) == "CMakeLists.txt":
+			text, err := refGitFn(bare, "show", sha+":"+f)
+			if err != nil {
+				continue
+			}
+			for _, m := range cmakeAddExeRe.FindAllStringSubmatch(expandCMakeForeach(text), -1) {
+				for _, src := range cmakeSources(f, m[2]) {
+					if !tree[src] {
+						absent = append(absent, m[1]+" ("+src+")")
+						break
+					}
+				}
+			}
+		case evalBenchDirRe.MatchString(f) && (strings.HasSuffix(f, ".md") || strings.HasSuffix(f, ".json") || strings.HasSuffix(f, ".csv") || strings.HasSuffix(f, ".txt")):
+			results = append(results, f)
+		}
+	}
+	sort.Strings(absent)
+	sort.Strings(results)
+	return fmt.Sprintf(evalNoBenchReasonFmt, shortSHA(sha), len(absent), truncList(absent, 5), len(results), truncList(results, 5))
+}
+
+// truncList: the first n of xs, and how many more.
+func truncList(xs []string, n int) string {
+	if len(xs) <= n {
+		return strings.Join(xs, ", ")
+	}
+	return strings.Join(xs[:n], ", ") + fmt.Sprintf(", … %d more", len(xs)-n)
+}
