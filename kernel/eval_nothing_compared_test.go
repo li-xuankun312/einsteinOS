@@ -41,7 +41,7 @@ func TestNothingComparedIsNotAPass(t *testing.T) {
 
 	ws := t.TempDir()
 	os.MkdirAll(filepath.Join(ws, ".einsteinOS/verify/uint"), 0o755)
-	os.WriteFile(filepath.Join(ws, ".einsteinOS/verify/uint/e2e.sh"), []byte("echo 'prefill: 57.54 tok/s'; echo 'decode: 11.20 tok/s'\n"), 0o755)
+	os.WriteFile(filepath.Join(ws, ".einsteinOS/verify/uint/e2e.sh"), []byte("echo 'prompt: 9707 11 1879'; echo 'generated: 220 248046 198'; echo 'prefill: 57.54 tok/s'; echo 'decode: 11.20 tok/s'\n"), 0o755)
 	mask := newRefMask(refMaskIdent, "Niko1221/Strata").Replace
 	fn := evalIntegration(0, "Niko1221/Strata", sha, "o/nodev", "uint", nil, mask)
 	k, txt := fn(ws, nil)

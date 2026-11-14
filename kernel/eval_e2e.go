@@ -61,6 +61,7 @@ func evalRunE2E(ws, unitID string) EvalBenchRun {
 		br.Tail = err.Error()
 	}
 	br.Programs = workspacePrograms(ws, tr.Exes)
+	br.PromptIDs, br.GeneratedIDs = e2eTokens(out)
 	if logPath != "" {
 		names, loaded := e2eLaunchesFn(logPath)
 		br.Kernels = names

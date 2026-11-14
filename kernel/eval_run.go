@@ -32,6 +32,9 @@ type EvalBenchRun struct {
 	// Programs: the executables of the workspace the run's processes ran, path → sha256 of
 	// the file (the end-to-end run only)
 	Programs map[string]string `json:"programs,omitempty"`
+	// PromptIDs, GeneratedIDs: the token ids it printed (eval_tokens.go)
+	PromptIDs    []int `json:"prompt_ids,omitempty"`
+	GeneratedIDs []int `json:"generated_ids,omitempty"`
 }
 
 // EvalRun is a repository at one commit, built and benchmarked here.
