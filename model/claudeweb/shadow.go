@@ -359,8 +359,15 @@ func isCurlOrWget(command string) bool {
 	if strings.Contains(command, "$(curl") || strings.Contains(command, "$(wget") {
 		return true
 	}
-	return false
+	// curl/wget at the start of any line of a script, or after | || && ; ( ` — 11/14 08:49,
+	// 08:51 and 15:55 "cd …\n# Try GitHub API with GITHUB_TOKEN env var\ncurl -s -H
+	// \"Authorization: token $GITHUB_TOKEN\" https://api.github.com/repos/…" was none of the
+	// forms above and ran here, with this machine's environment
+	return curlLineRe.MatchString(command)
 }
+
+// curlLineRe: curl or wget as a command anywhere in a script
+var curlLineRe = regexp.MustCompile("(?m)(^|[|&;(`])\\s*(curl|wget)(\\s|$)")
 
 // gitShim makes git's network and remote commands no-ops for a command run on this machine,
 // and init: a repository a conversation starts in the unit's directory is taken for the
