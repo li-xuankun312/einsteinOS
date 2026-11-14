@@ -997,7 +997,16 @@ func truncateCmd(s string, n int) string {
 // kernelPlaces: what a command run here must not touch — the credentials this machine
 // holds and the directories the kernel works in (its twins and stores, and einsteinOS).
 var kernelPlaces = []string{".ssh", "bash_history", ".git-credentials", ".netrc", ".gh_token",
-	"einsteinos_deploy", "/environ", "/home/claude/work", "/tmp/ref_store_"}
+	"einsteinos_deploy", "/environ", "/home/claude/work", "/tmp/ref_store_",
+	// the other places a token is kept or read from — 11/14 08:35 "cat /root/.npmrc" (2215
+	// bytes), 09:44 git's credential helper (92 bytes), 16:15 "echo GITHUB_TOKEN=${GITHUB_TOKEN:+SET}"
+	// all ran here
+	".npmrc", "git credential", "credential.helper", "GITHUB_TOKEN", "GH_TOKEN"}
+
+// envDumpRe: a command that lists the environment — 11/14 08:48 "printenv | grep GIT_CONFIG"
+// and 09:34 "env | grep -i \"gh_\\|github_\\|git_token\\|access_tok…\"" ran here (268 and 793
+// bytes of this machine's environment). env running a command (env X=1 cmd) is not one.
+var envDumpRe = regexp.MustCompile("(?m)(^|[|&;(`])\\s*(printenv\\b|env\\s*($|[|>;&)]))")
 
 // touchesKernel: the kernel's place a command names, or "".
 func touchesKernel(command, workDir string) string {
@@ -1009,6 +1018,9 @@ func touchesKernel(command, workDir string) string {
 		if strings.Contains(command, p) {
 			return p
 		}
+	}
+	if envDumpRe.MatchString(command) {
+		return "the environment"
 	}
 	return ""
 }
