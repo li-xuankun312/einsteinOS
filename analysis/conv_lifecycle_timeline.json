@@ -1,0 +1,291 @@
+{
+  "meta": {
+    "analysis_scope": "3 commits: df4f1cdd → d2aaf709 → ef92bb70",
+    "theme": "conversation lifecycle management — from kill-on-exit to registry-based reuse to content retrieval",
+    "critique": "current system encodes architectural decisions as prompt strings instead of typed interfaces"
+  },
+
+  "interfaces_needed": {
+    "ConvLifecycle": {
+      "purpose": "conversation process lifecycle — the OS analogy should be in code structure, not in prompt text",
+      "methods": {
+        "Fork": {
+          "signature": "Fork(ctx ConvContext, task TaskSpec) -> (ConvHandle, error)",
+          "note": "task is a typed struct, not a fmt.Sprintf'd prompt string"
+        },
+        "Wait": {
+          "signature": "Wait(handle ConvHandle, opts WaitOpts) -> ConvResult",
+          "note": "WaitOpts includes timeout strategy (watchdog vs fixed), retry policy"
+        },
+        "Kill": {
+          "signature": "Kill(handle ConvHandle, signal Signal) -> error",
+          "note": "Signal is typed: SIGTERM (graceful stop), SIGKILL (force), not a string"
+        },
+        "Download": {
+          "signature": "Download(handle ConvHandle) -> (ConvContent, error)",
+          "note": "returns structured content, not raw markdown string"
+        }
+      }
+    },
+
+    "ConvRegistry": {
+      "purpose": "index conversations for lookup and reuse — replaces childConvs map[int64][]string",
+      "methods": {
+        "Register": {
+          "signature": "Register(parent ConvHandle, meta ConvMeta) -> ConvRecord"
+        },
+        "Find": {
+          "signature": "Find(filter ConvFilter) -> []ConvRecord",
+          "note": "ConvFilter has typed fields {Repo, Role, Phase, Status}, not string matching"
+        },
+        "MarkDone": {
+          "signature": "MarkDone(handle ConvHandle, result ConvResult)"
+        },
+        "Status": {
+          "signature": "Status() -> RegistrySnapshot"
+        }
+      }
+    },
+
+    "TaskSpec": {
+      "purpose": "replace prompt string building with typed task description",
+      "fields": {
+        "Kind": "enum: Theorize | DevDraft | DevFix | DevVerify | Review | Plan",
+        "Scope": "FileScope — which files/modules this task owns",
+        "Context": "TaskContext — prior results, branch state, compile status",
+        "Constraints": "TaskConstraints — max_rounds, tool_budget, read_only bool",
+        "OutputFormat": "OutputSpec — what the result should contain, typed"
+      },
+      "anti_pattern": "current code builds this as WriteString(\"[TASK] split %d source files...\\n\") — the task semantics are buried in natural language that the kernel cannot inspect or validate"
+    },
+
+    "ConvResult": {
+      "purpose": "structured result instead of raw string parsing",
+      "fields": {
+        "Status": "enum: Pass | Fail | Interrupted | Timeout | NoVerdict",
+        "Artifacts": "map[string][]byte — files produced",
+        "Theory": "[]TheorySection — if task was theorize",
+        "CompileStatus": "CompileReport — if task involved compilation",
+        "Verdict": "string — one-line human-readable summary",
+        "RawOutput": "string — full text, for debugging only"
+      },
+      "anti_pattern": "current code does strings.HasPrefix(lastStatus['compile'], 'pass') — compile status is a string map parsed from natural language output"
+    },
+
+    "ConvContent": {
+      "purpose": "structured conversation download, not raw markdown concatenation",
+      "fields": {
+        "Messages": "[]Message{Role, Parts[]Part}",
+        "ToolCalls": "[]ToolCall — extracted tool usage",
+        "TheorySections": "[]TheorySection — extracted ## headers",
+        "CompileResults": "[]CompileResult — extracted compile= lines"
+      },
+      "anti_pattern": "current DownloadConversation returns md.String() — loses all structure"
+    }
+  },
+
+  "timeline": [
+    {
+      "commit": "df4f1cdd",
+      "timestamp": "2026-10-15T01:00:57Z",
+      "title": "theorem capture + orphan cleanup",
+      "data_flow": {
+        "new_structures": {
+          "childConvs": {
+            "type": "map[int64][]string",
+            "key": "parent pid",
+            "value": "list of child conversation IDs",
+            "location": "kernel/api.go"
+          },
+          "stopConvFn": {
+            "type": "func(convID string)",
+            "purpose": "injected from main.go, calls client.StopResponse",
+            "pattern": "dependency injection via global function pointer"
+          }
+        },
+        "code_flow": [
+          {
+            "step": 1,
+            "where": "model/claudeweb/model.go:RunConversation",
+            "what": "TrackChildConv(parentPid, convID)",
+            "data": "parent pid → child convID mapping stored"
+          },
+          {
+            "step": 2,
+            "where": "model/claudeweb/model.go:completionLoop",
+            "what": "pipeline ends → StopOrphanConvs(Current.Pid)",
+            "data": "lookup all child convIDs for this parent, call stopConvFn on each"
+          },
+          {
+            "step": 3,
+            "where": "kernel/api.go:StopOrphanConvs",
+            "what": "for each child convID: go stopConvFn(c)",
+            "data": "fire-and-forget goroutines to stop remote conversations"
+          }
+        ],
+        "design_thought": "first attempt: conversations are expendable resources. parent exits → kill all children. like Unix process groups getting SIGHUP.",
+        "problem_exposed": "killing child conversations destroys their output. theorem text that took 15 minutes of API calls is gone."
+      }
+    },
+
+    {
+      "commit": "d2aaf709",
+      "timestamp": "2026-10-15T01:08:42Z",
+      "title": "conversation registry — don't kill, index for reuse",
+      "data_flow": {
+        "new_structures": {
+          "ConvRecord": {
+            "type": "struct",
+            "fields": ["ConvID string", "ParentPid int64", "Repo string", "Role string", "Phase int", "Status string", "Created time.Time"],
+            "purpose": "typed metadata for each conversation — role and phase make conversations addressable"
+          },
+          "convRegistry": {
+            "type": "[]ConvRecord",
+            "replaces": "childConvs map[int64][]string",
+            "key_change": "from flat list of IDs → structured records with semantic addressing"
+          }
+        },
+        "code_flow": [
+          {
+            "step": 1,
+            "where": "kernel/ref_split.go",
+            "what": "RegisterConv(parent_pid, convID, repo, 'theorize_chunk_N', 0)",
+            "data": "each theorize fork now has a named role in the registry"
+          },
+          {
+            "step": 2,
+            "where": "kernel/pr_exec.go",
+            "what": "RegisterConv(pid, convID, repo, 'dev_draft'|'dev_fix'|'dev_verify', phase)",
+            "data": "dev phases 1/2/3 each get their own registry entry"
+          },
+          {
+            "step": 3,
+            "where": "kernel/api.go:StopOrphanConvs (rewritten)",
+            "what": "NOW: just logs 'N conversations still alive (preserved for reuse)'",
+            "data": "no more killing — conversations persist in registry"
+          },
+          {
+            "step": 4,
+            "where": "kernel/api.go:FindConv",
+            "what": "FindConv(repo, role, phase) → *ConvRecord",
+            "data": "semantic lookup: 'find the theorize_chunk_3 conversation for this repo'"
+          },
+          {
+            "step": 5,
+            "where": "model/claudeweb/model.go:completionLoop",
+            "what": "pipeline result now includes ConvRegistryStatus()",
+            "data": "CONVID  REPO  ROLE  PHASE  STATUS  AGE — ps(1) for conversations"
+          }
+        ],
+        "design_thought": "paradigm shift: conversations are NOT expendable processes. they are named resources indexed by (repo, role, phase). like /proc filesystem — you can find them by name. StopOrphanConvs becomes a no-op because orphans are assets.",
+        "architectural_insight": "this is the moment the system goes from 'fork → wait → collect stdout → kill' to 'fork → wait → register → FindConv later'. the conversation becomes a first-class object with an identity."
+      }
+    },
+
+    {
+      "commit": "ef92bb70",
+      "timestamp": "2026-10-15T01:42:03Z",
+      "title": "download conversation for theorem capture",
+      "data_flow": {
+        "new_structures": {
+          "downloadConvFn": {
+            "type": "func(convID string) (string, error)",
+            "purpose": "injected from main.go, calls client.DownloadConversation",
+            "pattern": "same DI pattern as stopConvFn"
+          },
+          "DownloadConversation": {
+            "type": "Client method",
+            "endpoint": "GET /api/organizations/{org}/chat_conversations/{id}",
+            "returns": "concatenated assistant text as markdown string",
+            "location": "model/claudeweb/client.go"
+          }
+        },
+        "code_flow": [
+          {
+            "step": 1,
+            "where": "kernel/ref_split.go:ref_split",
+            "what": "result := GetResult(child_pid)",
+            "data": "collect child's stdout — but SSE streaming may have truncated it"
+          },
+          {
+            "step": 2,
+            "where": "kernel/ref_split.go:ref_split",
+            "what": "if len(result) < 500 → FindConv → DownloadConv",
+            "data": "registry lookup by role, then HTTP GET full conversation",
+            "trigger_condition": "result suspiciously short (< 500 bytes) → SSE probably truncated"
+          },
+          {
+            "step": 3,
+            "where": "model/claudeweb/client.go:DownloadConversation",
+            "what": "parse chat_messages, extract assistant text blocks",
+            "data": "raw JSON → iterate ChatMessages → filter sender=='assistant' → concat text parts"
+          },
+          {
+            "step": 4,
+            "where": "kernel/ref_split.go:ref_split",
+            "what": "if len(downloaded) > len(result) → use downloaded",
+            "data": "downloaded version replaces truncated GetResult"
+          }
+        ],
+        "design_thought": "the registry from d2aaf709 enables this: without FindConv(repo, role), you can't look up which conversation to download. the pipeline is now: GetResult (fast path) → if truncated → FindConv (registry lookup) → DownloadConv (HTTP GET) → use full content.",
+        "problem_it_solves": "SSE streaming loses data. child conversations produce 50KB of theorem text but GetResult only captures what SSE delivered before the connection was preempted. downloading the full conversation from the API recovers the complete output.",
+        "remaining_problem": "DownloadConversation returns raw markdown. all structure (## headers, LAYER 1/2/3 markers, compile status) is lost. downstream code re-parses this string with regex."
+      }
+    }
+  ],
+
+  "evolution_arc": {
+    "df4f1cdd": "conversations are disposable processes → kill on parent exit",
+    "d2aaf709": "conversations are named resources → register, don't kill, find by (repo, role, phase)",
+    "ef92bb70": "conversations have recoverable content → download when streaming truncates",
+    "current_state": "conversations are addressable and downloadable, but all inter-conversation communication is unstructured strings",
+    "fundamental_flaw": "the kernel cannot inspect, validate, or transform what flows between conversations because everything is natural language. the 'OS' analogy stops at process management and never reaches typed IPC."
+  },
+
+  "prompt_engineering_debt": {
+    "symptom_1": {
+      "location": "kernel/ref_split.go:ref_split_fork",
+      "code": "src.WriteString(fmt.Sprintf('[YOUR ASSIGNMENT] %d files (depth %d)\\n', len(files), depth))",
+      "problem": "the integer 'depth' is formatted into a string. later code can't inspect what scope was assigned. if the child ignores the scope, there's no typed enforcement — it's a hope expressed in English."
+    },
+    "symptom_2": {
+      "location": "kernel/pr_exec.go:dev_review_unit",
+      "code": "for i := len(lines) - 1; i >= 0; i-- { if line == 'PASS' { return 'PASS' } }",
+      "problem": "the review verdict is extracted by scanning the last 5 lines for the literal string 'PASS'. if the model says 'PASSED' or 'Pass' or 'The result is PASS.', it fails. the kernel is doing regex on prose."
+    },
+    "symptom_3": {
+      "location": "kernel/pr_exec.go:dev_from_theorems",
+      "code": "strings.HasPrefix(status['compile'], 'pass')",
+      "problem": "compile status is a string in a map[string]string. the entire dev pipeline's branching logic runs on string prefix matching against natural language output."
+    },
+    "symptom_4": {
+      "location": "kernel/pr_exec.go:dev_parse_plan",
+      "code": "4-level fuzzy matching (exact → prefix → normalized → substring)",
+      "problem": "the planner outputs module names that don't match the input because the prompt said 'module_name' but the planner wrote 'module name'. the kernel has to do NLP to compensate for the prompt format not being enforced."
+    },
+    "root_cause": "the system treats conversations as IO devices (stdin prompt, stdout text) instead of typed RPC endpoints. fork a child, sprintf a prompt, parse stdout with regex. this is shell scripting, not systems programming."
+  },
+
+  "optimization_directions": {
+    "direction_1": {
+      "name": "typed task protocol",
+      "idea": "replace WriteString prompt building with TaskSpec structs. the kernel serializes them to JSON, the child reads structured input. output is also JSON with a typed schema — ConvResult, not raw text.",
+      "benefit": "kernel can validate inputs before fork, parse outputs without regex, enforce scope via schema"
+    },
+    "direction_2": {
+      "name": "conversation as typed IPC channel",
+      "idea": "instead of DownloadConv returning raw markdown, define TheoryOutput / DevOutput / ReviewOutput structs. the child writes structured output to a known location (branch file, artifact). the kernel reads typed data.",
+      "benefit": "eliminates 'scan last 5 lines for PASS' pattern. compile status becomes a bool, not a string prefix match."
+    },
+    "direction_3": {
+      "name": "scope enforcement via tool restrictions",
+      "idea": "instead of prompt text 'do NOT explore beyond YOUR modules', restrict the child's tool access. give it a view tool that only sees its assigned files. scope is enforced by capability, not by asking nicely.",
+      "benefit": "scope violation becomes impossible, not just discouraged"
+    },
+    "direction_4": {
+      "name": "role as behavior, not prompt preamble",
+      "idea": "instead of WriteString('[YOU ARE A REVIEWER — NOT A DEVELOPER]'), define ReviewerRole as a struct that configures: read_only=true, tools=[view,grep,head], no write tools, output_schema=ReviewVerdict. the role IS the configuration.",
+      "benefit": "a reviewer literally cannot write code because it has no write tools. current system 'asks' it not to."
+    }
+  }
+}
