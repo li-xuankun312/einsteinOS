@@ -468,6 +468,10 @@ func runUnitVerifyWith(ws, unitID, gpuUsable string, req UnitRequirements, chang
 		res.Smoke = "pass"
 		gi := unitGateInput(ws, unitID, req, changed, res.Build, res.Test, res.NoToolchain)
 		res.Gate, res.GateText = unitGates(gi)
+		// its Lean modules must check in Lean (lean_gate.go)
+		if res.Gate == "" {
+			res.Gate, res.GateText = leanGate(ws, changed)
+		}
 		// the kernels it launched must be checked by its test: rebuilt with each one's body
 		// skipped, the test has to fail (gpu_mutation.go)
 		if res.Gate == "" && req.GPU() && len(req.Tests) == 0 && probeMeasured(res.Test) {

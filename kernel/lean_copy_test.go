@@ -44,6 +44,12 @@ def RT_MAX_THREADS : Nat := 512
 // The gate: a unit whose Lean is the theory's text does not pass, whatever its scripts say.
 func TestAUnitWhoseLeanIsTheTheorysDoesNotPass(t *testing.T) {
 	realRunner(t)
+	// the module's own proof checks in Lean (lean_gate.go); copying is what is judged here
+	oldLean := leanVerifyFn
+	defer func() { leanVerifyFn = oldLean }()
+	leanVerifyFn = func(string) string {
+		return `{"okay":true,"lean_messages":{"errors":[]},"tool_messages":{"errors":[]}}`
+	}
 	ws := t.TempDir()
 	build, test := devVerifyScripts("u7663fc74b8")
 	write(t, ws, build, "true")
