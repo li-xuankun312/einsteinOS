@@ -130,6 +130,8 @@ func evalIntegration(pid int64, repo, sha, devRepo, unitID string, benches []Eva
 		rec.E2E = evalRunE2E(ws, unitID)
 		if k, t := e2eGate(rec.E2E); k != "" {
 			rec.Gate, rec.GateText = k, t
+		} else if k, t := e2ePortGate(rec.E2E, e2ePortKernels(ws, unitID)); k != "" {
+			rec.Gate, rec.GateText = k, t
 		} else {
 			rec.Compared, rec.Compare = evalComparisons(pid, repo, rec.Conditions, rec.E2E, rec.Clues, base.docs)
 			rec.Gate, rec.GateText = evalGate(rec, prev, mask)

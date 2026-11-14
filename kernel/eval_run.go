@@ -25,6 +25,10 @@ type EvalBenchRun struct {
 	Metrics []Metric  `json:"metrics"`
 	Tail    string    `json:"tail"`
 	Devices []string  `json:"devices"` // GPU device nodes its processes had open
+	// Kernels: the kernels the run launched, by the launch probe (the end-to-end run only);
+	// ProbeErr: why that was not measured
+	Kernels  []string `json:"kernels,omitempty"`
+	ProbeErr string   `json:"probe_err,omitempty"`
 }
 
 // EvalRun is a repository at one commit, built and benchmarked here.
