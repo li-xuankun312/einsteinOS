@@ -46,3 +46,32 @@ func TestEveryReferenceDefinitionNeedsAVerifiedCounterpart(t *testing.T) {
 		t.Fatalf("%s", cl)
 	}
 }
+
+// A reference kernel's counterpart is a __global__ kernel with a body, not a declaration.
+// 11/14 10:13 unit uaa158d17c5 wrote src/prefill/kernels_api.cuh, 23 __global__ declarations
+// with no body "so the port checker sees these __global__ kernels in a .cuh file", and mapped
+// the reference's prefill kernels to it.
+func TestAKernelsCounterpartIsNotADeclaration(t *testing.T) {
+	ws := t.TempDir()
+	put := func(p, s string) {
+		os.MkdirAll(filepath.Dir(filepath.Join(ws, p)), 0o755)
+		os.WriteFile(filepath.Join(ws, p), []byte(s), 0o644)
+	}
+	syms := []RefSymbol{{File: "src/prefill/kernels.cu", Kind: "kernel", Name: "gr_norm_kernel"}}
+	put(PortMapPath("uaa158d17c5"), "src/prefill/kernels.cu\tgr_norm_kernel\tsrc/prefill/kernels_api.cuh\tgr_norm_kernel\n")
+	put("src/prefill/kernels_api.cuh", "// so the port checker sees these __global__ kernels in a .cuh file\n"+
+		"__global__ void gr_norm_kernel(const float* __restrict__ x, float* out, int n, float eps);\n")
+	m := portMissing(ws, "uaa158d17c5", syms)
+	if len(m) != 1 || !strings.Contains(m[0], "only declared there") {
+		t.Fatalf("a declaration: %v", m)
+	}
+	put("src/prefill/kernels_api.cuh", "__global__ void __launch_bounds__(256) gr_norm_kernel(const float* __restrict__ x, float* out, int n, float eps) {\n  out[threadIdx.x] = x[threadIdx.x] * eps;\n}\n")
+	if m := portMissing(ws, "uaa158d17c5", syms); len(m) != 0 {
+		t.Fatalf("a kernel with a body: %v", m)
+	}
+	// a body only in a comment is not one
+	put("src/prefill/kernels_api.cuh", "__global__ void gr_norm_kernel(const float* x, float* out, int n, float eps);\n/* gr_norm_kernel(x, out, n, eps) { } */\n")
+	if m := portMissing(ws, "uaa158d17c5", syms); len(m) != 1 {
+		t.Fatalf("a body in a comment: %v", m)
+	}
+}
