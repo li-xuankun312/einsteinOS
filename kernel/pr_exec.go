@@ -536,7 +536,7 @@ func dev_repair_proofs(pid int64, repo, theory string, failed []string, attempt 
 	}
 	p.WriteString(proofFixFact + axleFacts())
 	to := theoryTo()
-	prompt := Bagu(proofFixWhere, fmt.Sprintf(proofFixWhatFmt, attempt, len(failed)), p.String(), fmt.Sprint(len(failed)), to)
+	prompt := BaguFor(WorkProof, proofFixWhere, fmt.Sprintf(proofFixWhatFmt, attempt, len(failed)), p.String(), fmt.Sprint(len(failed)), to)
 	role := fmt.Sprintf("proof_fix_%d", attempt)
 	log.Printf("dev_repair_proofs: %s round %d, %d theorem(s): %v (%d bytes prompt)",
 		repo, attempt, len(failed), failed, len(prompt))

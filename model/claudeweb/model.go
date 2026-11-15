@@ -307,7 +307,7 @@ func writebackText(role string, results []ToolResult) string {
 // work is code (kernel.RoleWritesCode), the plain facts for the others.
 func roundMessage(role, what, content string, n int) string {
 	if kernel.RoleWritesCode(role) {
-		return kernel.Bagu(writebackWhere, what, content, fmt.Sprint(n), writebackTo)
+		return kernel.BaguFor(kernel.WorkFor(role), writebackWhere, what, content, fmt.Sprint(n), writebackTo)
 	}
 	return kernel.Plain(writebackWhere, what, content)
 }

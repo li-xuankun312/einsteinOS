@@ -241,7 +241,7 @@ func ref_split_with(parent_pid int64, owner, repo, sha string, files []string, t
 							// an unpersisted turn is what created chunk 1's junk branch
 							log.Printf("ref_split: chunk %d/%d poll %d: conversation settled, sending ContinueConv to resume",
 								i+1, len(chunks), poll+1)
-							contOut, contErr := ContinueConv(convID, Bagu(fmt.Sprintf(chunkResumeWhereFmt, i+1, len(chunks)), chunkResumeWhat, fmt.Sprintf(chunkResumeContentFmt, strings.Join(chunks[i], "\n")), fmt.Sprint(len(chunks[i])), theoryTo()))
+							contOut, contErr := ContinueConv(convID, BaguFor(WorkProof, fmt.Sprintf(chunkResumeWhereFmt, i+1, len(chunks)), chunkResumeWhat, fmt.Sprintf(chunkResumeContentFmt, strings.Join(chunks[i], "\n")), fmt.Sprint(len(chunks[i])), theoryTo()))
 							if len(contOut) < 4000 && len(contErr) == 0 {
 								continueWaste++
 								log.Printf("ref_split: chunk %d/%d poll %d: ContinueConv waste (stdout=%d stderr=0) %d/2",
@@ -985,7 +985,7 @@ func chunk_fill_missing(convID string, chunk []string, result, tag string) (stri
 		}
 		log.Printf("ref_split: %s has %d/%d files covered, %d missing — ContinueConv round %d",
 			tag, cov.CoveredCount(), cov.Total, len(cov.Missing), round)
-		prompt := Bagu(chunkCoverWhere, fmt.Sprintf(chunkCoverWhatFmt, cov.CoveredCount(), cov.Total, len(cov.Missing)),
+		prompt := BaguFor(WorkProof, chunkCoverWhere, fmt.Sprintf(chunkCoverWhatFmt, cov.CoveredCount(), cov.Total, len(cov.Missing)),
 			fmt.Sprintf(chunkCoverContentFmt, strings.Join(cov.Missing, "\n")), fmt.Sprint(len(cov.Missing)), theoryTo())
 		contResult, _ := ContinueConv(convID, prompt)
 		if full, err := DownloadConv(convID); err == nil && len(full) > len(result) {

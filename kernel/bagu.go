@@ -15,15 +15,47 @@ import (
 //	%[3]s the content itself       (11/05: the review it pasted)
 //	%[4]s how many commits         (11/05: "几十")
 //	%[5]s where they go            (11/05: "einsteinOS")
-const baguFmt = "这些问题的每一句话都要有代码对应的commit解决，\n" +
+//	%[6]s what answers each sentence, %[7]s what it is answered by
+//	                               (11/05: "代码", "commit"; 11/15 the user's own form:
+//	                               "这些问题的每一句话都要有[].format(arg)对应的.format(arg)解决")
+const baguFmt = "这些问题的每一句话都要有%[6]s对应的%[7]s解决，\n" +
 	"既然这样，就没必要扣剩下的小警告。现在主要是：注意，你可以看看%[1]s，%[2]s，但是，内容如下评价：%[3]s" +
 	"每一句话，都要有对应的功能代码，建议一句话一个commit, 这次估计要开%[4]s个commit推到%[5]s, " +
 	"prompt工程是不被允许的，实在需要的话最多做.format(arg) 这种插入式\n" +
 	"。工具调用次数满了就跟我说，我会帮你重置，一直满就一直重置"
 
-// Bagu puts content into the shell; nothing is written around it.
+// BaguWork: what each sentence of the content is answered with — %[6]s and %[7]s of the
+// shell's first sentence.
+type BaguWork struct{ Of, By string }
+
+var (
+	// WorkCode: a conversation whose work is code, judged by the commits the kernel verifies
+	// (the user's words of 11/05)
+	WorkCode = BaguWork{"代码", "commit"}
+	// WorkProof: a conversation whose work is theory, judged by the proofs Axle checks. 11/14
+	// and 11/15 every theory and proof-repair prompt began by asking for code and commits.
+	WorkProof = BaguWork{"定理", "证明"}
+)
+
+// WorkFor: the work of a conversation's role — proofs for a theory conversation or a proof
+// repair, code for the others.
+func WorkFor(role string) BaguWork {
+	for _, p := range []string{"theorize_", "proof_fix_"} {
+		if strings.HasPrefix(role, p) {
+			return WorkProof
+		}
+	}
+	return WorkCode
+}
+
+// Bagu puts content into the shell for code; nothing is written around it.
 func Bagu(where, what, content, commits, to string) string {
-	return fmt.Sprintf(baguFmt, where, what, content, commits, to)
+	return BaguFor(WorkCode, where, what, content, commits, to)
+}
+
+// BaguFor puts content into the shell for the given work.
+func BaguFor(work BaguWork, where, what, content, commits, to string) string {
+	return fmt.Sprintf(baguFmt, where, what, content, commits, to, work.Of, work.By)
 }
 
 // baguContentAt is where the shell's content begins: what is inserted after it is content.

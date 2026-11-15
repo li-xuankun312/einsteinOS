@@ -36,7 +36,7 @@ func TestMoreContentGoesIntoTheShell(t *testing.T) {
 // answered it as a developer ("未收到评价正文，本轮无代码修改、无 commit"), and the planner
 // started next wrote code for 82 tool calls.
 func TestTheShellIsOnlyForTheConversationsThatWriteCode(t *testing.T) {
-	shell := "这些问题的每一句话都要有代码对应的commit解决"
+	shell := "这些问题的每一句话都要有" // the shell, whatever work it names
 	env := newDevEnv(t, theory2("Alpha"))
 	env.model.unitWork = func(prompt, unit string, n int) {
 		mustWrite(env.mirror, "src/impl.cu", "// implementation\n")
@@ -81,7 +81,28 @@ func TestTheShellIsOnlyForTheConversationsThatWriteCode(t *testing.T) {
 			t.Fatalf("%s is the shell:\n%.300s", name, p)
 		}
 	}
+	if p := theorizePrompt("o", "r", "0123456789ab", "w", "t", "src", 1, ""); !strings.HasPrefix(p, "这些问题的每一句话都要有定理对应的证明解决") {
+		t.Fatalf("theorize asks for proofs:\n%.120s", p)
+	}
 	if !RoleWritesCode("dev_unit_3") || !RoleWritesCode("dev_fix_1") || !RoleWritesCode("theorize_chunk_2") || RoleWritesCode("review_conv") || RoleWritesCode("dev_planner") {
 		t.Fatal("RoleWritesCode")
+	}
+}
+
+// The words of the shell's first sentence are the user's own form with two insertions
+// ("这些问题的每一句话都要有[].format(arg)对应的.format(arg)解决"): code and commits for a
+// conversation that writes code, theorems and proofs for one that writes theory.
+func TestTheShellsFirstSentenceNamesTheWork(t *testing.T) {
+	if got := BaguFor(WorkProof, "w", "h", "C", "3", "to"); !strings.HasPrefix(got, "这些问题的每一句话都要有定理对应的证明解决，\n") {
+		t.Fatalf("theory: %s", got)
+	}
+	if got := Bagu("w", "h", "C", "3", "to"); !strings.HasPrefix(got, "这些问题的每一句话都要有代码对应的commit解决，\n") {
+		t.Fatalf("code: %s", got)
+	}
+	for role, want := range map[string]BaguWork{"theorize_Strata": WorkProof, "proof_fix_2": WorkProof,
+		"dev_unit_14": WorkCode, "dev_fix_1": WorkCode, "spawn_work": WorkCode} {
+		if WorkFor(role) != want {
+			t.Errorf("%s: %v", role, WorkFor(role))
+		}
 	}
 }

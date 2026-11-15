@@ -101,7 +101,7 @@ func chunkSorryPrompt(sites []sorrySite) string {
 		b.WriteString(fmt.Sprintf(chunkSorryLineFmt, s.File, strings.Join(s.Decls, ", ")))
 	}
 	b.WriteString(fmt.Sprintf(chunkSorryTailFmt, ProofReferencePath()))
-	return Bagu(chunkSorryWhere, fmt.Sprintf(chunkSorryWhatFmt, sorryCount(sites)), b.String(), fmt.Sprint(sorryCount(sites)), theoryTo())
+	return BaguFor(WorkProof, chunkSorryWhere, fmt.Sprintf(chunkSorryWhatFmt, sorryCount(sites)), b.String(), fmt.Sprint(sorryCount(sites)), theoryTo())
 }
 
 // inserted into the shell when a chunk's files still use sorry: where, %[1]d how many

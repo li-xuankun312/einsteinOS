@@ -85,7 +85,7 @@ func theorizePrompt(owner, repo, sha, what, task, sources string, files int, bud
 	c.WriteString(sources)
 	c.WriteString("\n" + budget)
 	to := theoryTo()
-	return Bagu(fmt.Sprintf(theorizeWhereFmt, owner, repo, short_sha(sha)), what, c.String(), fmt.Sprint(files), to)
+	return BaguFor(WorkProof, fmt.Sprintf(theorizeWhereFmt, owner, repo, short_sha(sha)), what, c.String(), fmt.Sprint(files), to)
 }
 
 // %[1]d files, %[2]d lines of source included
