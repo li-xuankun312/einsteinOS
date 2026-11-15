@@ -28,3 +28,27 @@ func TestTokensAndTheEnvironmentAreNotReadHere(t *testing.T) {
 		}
 	}
 }
+
+// Searching this machine for a token is not run here; searching the unit's code for a word
+// is. The refused commands are those a dev conversation ran here on 11/14.
+func TestSearchesForTokensAreNotRunHere(t *testing.T) {
+	for _, c := range []string{
+		"# Check if there's a token stored in the adk-go or similar tools the kernel uses\nfind / -name \"*.token\" -o -name \"gh_token*\" 2>/dev/null | head",
+		"find /root /home -name \"*.json\" -newer /tmp 2>/dev/null | xargs grep -l \"token\\|access_token\" 2>/dev/null | head -5",
+		"find /home /root /etc -maxdepth 4 -name \"token*\" -o -name \"*github*\" -o -name \"*ghp_*\" 2>/dev/null | head -10",
+		"grep -rn ghp_ /tmp 2>/dev/null",
+	} {
+		if touchesKernel(c, "/home/claude/baloon") == "" {
+			t.Errorf("run here: %q", c)
+		}
+	}
+	for _, c := range []string{
+		"grep -rn \"sample_tokens\\b\" /home/claude/baloon/include/ 2>/dev/null | head -20",
+		"find /home/claude/baloon -name \"*.lean\" | head -20",
+		"cat /home/claude/baloon/tools/strata_tokenizer.py",
+	} {
+		if w := touchesKernel(c, "/home/claude/baloon"); w != "" {
+			t.Errorf("refused (%s): %q", w, c)
+		}
+	}
+}

@@ -1028,8 +1028,19 @@ func touchesKernel(command, workDir string) string {
 	if envDumpRe.MatchString(command) {
 		return "the environment"
 	}
+	if tokenSearchRe.MatchString(command) {
+		return "a search for tokens"
+	}
 	return ""
 }
+
+// tokenSearchRe: a search of this machine for a token — find by a token-like name, or grep for
+// a token's form. 11/14 20:17 "find / -name \"*.token\" -o -name \"gh_tok…\"" (1158 bytes),
+// 21:39 "find /root /home -name \"*.json\" … | xargs grep -l \"token\\|access_token\"" and 22:26
+// "find /home /root /etc -maxdepth 4 -name \"token*\" -o -name \"*github*\" -o -name \"*ghp_*\""
+// (1703 bytes) ran here. grep for a word like "token" in the unit's code is not one.
+var tokenSearchRe = regexp.MustCompile(`(?i)\bfind\b[^\n|;&]*-i?name\s+["']?[^"'\s]*(token|ghp_|github|credential|netrc)` +
+	`|\bgrep\b[^\n;&]*(ghp_|github_pat|access_token|x-access-token|gh_token)`)
 
 // noPush goes in front of every command run here: no git on this machine can push for a
 // conversation, however it is called (a path, a subshell, a script), because every push URL
