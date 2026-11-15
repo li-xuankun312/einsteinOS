@@ -93,7 +93,8 @@ func TestTheShellIsOnlyForTheConversationsThatWriteCode(t *testing.T) {
 // ("这些问题的每一句话都要有[].format(arg)对应的.format(arg)解决"): code and commits for a
 // conversation that writes code, theorems and proofs for one that writes theory.
 func TestTheShellsFirstSentenceNamesTheWork(t *testing.T) {
-	if got := BaguFor(WorkProof, "w", "h", "C", "3", "to"); !strings.HasPrefix(got, "这些问题的每一句话都要有定理对应的证明解决，\n") {
+	if got := BaguFor(WorkProof, "w", "h", "C", "3", "to"); !strings.HasPrefix(got, "这些问题的每一句话都要有定理对应的证明解决，\n") ||
+		!strings.Contains(got, "每一句话，都要有对应的定理，建议一句话一个证明, 这次估计要开3个证明推到to, ") || strings.Contains(got, "commit") || strings.Contains(got, "代码") {
 		t.Fatalf("theory: %s", got)
 	}
 	if got := Bagu("w", "h", "C", "3", "to"); !strings.HasPrefix(got, "这些问题的每一句话都要有代码对应的commit解决，\n") {
