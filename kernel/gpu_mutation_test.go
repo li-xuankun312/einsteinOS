@@ -74,8 +74,9 @@ func TestTheCopiesAreBuiltTogetherAndTestedInTurn(t *testing.T) {
 	unit := "u41a85163f4"
 	build, test := devVerifyScripts(unit)
 	shared := t.TempDir()
-	// each build records how many builds run beside it; each test fails if another test runs
-	write(t, ws, build, "n=$(ls "+shared+" | grep -c build); touch "+shared+"/build.$$; sleep 0.6; echo $n >> "+shared+"/beside; rm "+shared+"/build.$$")
+	// each build waits (up to 5 s) for another build to have started beside it and records
+	// whether one did; each test fails if another test runs
+	write(t, ws, build, "touch "+shared+"/build.$$; for i in $(seq 50); do [ $(ls "+shared+" | grep -c build) -ge 2 ] && { echo together >> "+shared+"/beside; exit 0; }; sleep 0.1; done; echo alone >> "+shared+"/beside")
 	write(t, ws, test, "[ -e "+shared+"/test.lock ] && exit 3; touch "+shared+"/test.lock; sleep 0.2; rm "+shared+"/test.lock; exit 0")
 	var portMap strings.Builder
 	files := map[string][]string{}
@@ -96,10 +97,7 @@ func TestTheCopiesAreBuiltTogetherAndTestedInTurn(t *testing.T) {
 		t.Fatalf("every test ran alone and passed: unchecked %v inconclusive %v", unchecked, inconclusive)
 	}
 	b, _ := os.ReadFile(filepath.Join(shared, "beside"))
-	if !strings.Contains(string(b), "3") && !strings.Contains(string(b), "2") {
-		t.Fatalf("the builds ran one at a time (beside: %q, took %s)", b, took)
-	}
-	if took > 2*time.Second {
-		t.Fatalf("took %s for four 0.6 s builds built together", took)
+	if strings.Contains(string(b), "alone") || strings.Count(string(b), "together") != 4 {
+		t.Fatalf("a build ran with no other beside it (beside: %q, took %s)", b, took)
 	}
 }
