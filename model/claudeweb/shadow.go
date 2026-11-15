@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -1014,6 +1015,11 @@ func touchesKernel(command, workDir string) string {
 	if wd, err := os.Getwd(); err == nil && wd != "/" && !strings.HasPrefix(workDir, wd) {
 		places = append(places, wd) // where einsteinOS itself runs (11/13: /home/adk-go)
 	}
+	for _, root := range einsteinOSRoots() {
+		if !strings.HasPrefix(workDir, root) {
+			places = append(places, root)
+		}
+	}
 	for _, p := range places {
 		if strings.Contains(command, p) {
 			return p
@@ -1034,3 +1040,36 @@ const noPush = "export GIT_CONFIG_COUNT=3 " +
 	"GIT_CONFIG_KEY_1=url.einsteinos-no-push://.pushInsteadOf GIT_CONFIG_VALUE_1=git@ " +
 	"GIT_CONFIG_KEY_2=url.einsteinos-no-push://.pushInsteadOf GIT_CONFIG_VALUE_2=ssh:// " +
 	"GIT_SSH_COMMAND=false GIT_TERMINAL_PROMPT=0\n"
+
+// einsteinOSModule: the first line of einsteinOS's go.mod
+const einsteinOSModule = "module google.golang.org/adk"
+
+// einsteinOSRoots: the source trees einsteinOS runs from — the directory holding its go.mod,
+// found upward from the working directory and from the executable. 11/14 20:38–20:52 a dev
+// conversation ran here "ls /home/adk-go/", "cat /home/adk-go/auth/credential.go" (three
+// times) and "cat /home/adk-go/vikingdb/github.go" looking for how the kernel holds its
+// token: the working directory alone was not the tree's root.
+func einsteinOSRoots() []string {
+	var starts []string
+	if wd, err := os.Getwd(); err == nil {
+		starts = append(starts, wd)
+	}
+	if exe, err := os.Executable(); err == nil {
+		starts = append(starts, filepath.Dir(exe))
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, d := range starts {
+		for ; d != "/" && d != "." && d != ""; d = filepath.Dir(d) {
+			b, err := os.ReadFile(filepath.Join(d, "go.mod"))
+			if err == nil && strings.HasPrefix(string(b), einsteinOSModule) {
+				if !seen[d] {
+					seen[d] = true
+					out = append(out, d)
+				}
+				break
+			}
+		}
+	}
+	return out
+}
