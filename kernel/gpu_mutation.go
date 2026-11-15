@@ -14,8 +14,10 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -110,6 +112,13 @@ func kernelFiles(ws, unitID string, own map[string]bool, perFile map[string][]st
 // resultUnchecked builds and tests a copy of the workspace once per kernel with that kernel's
 // body skipped. unchecked: the kernels whose test still exited 0; inconclusive: those the
 // copy could not be made, changed or built for (said, not failed).
+//
+// The copies are built at the same time, at most mutationBuildParallel at once, and tested
+// one after another: a test is never run beside another (the GPUs are shared, and a test that
+// fails for that would read as checking its kernel). A build that fails among others is built
+// again alone before its kernel is called inconclusive. 11/14 unit u41a85163f4's six copies
+// were built and tested in turn, each build.sh about 6.5 minutes: every verification that
+// reached this gate took 1h0m28s, four of them that day; uaa158d17c5's two took 26m.
 func resultUnchecked(ws, build, test, env string, files map[string][]string, buildTimeout, testTimeout time.Duration) (unchecked, inconclusive []string) {
 	names := make([]string, 0, len(files))
 	for k := range files {
@@ -119,47 +128,103 @@ func resultUnchecked(ws, build, test, env string, files map[string][]string, bui
 	if len(names) > mutationMaxKernels {
 		names = names[:mutationMaxKernels]
 	}
-	for _, k := range names {
-		why := func() string {
-			dir, err := os.MkdirTemp("", "einsteinos_mutant_")
+	type mutant struct {
+		dir, why string // why: set when the copy cannot be tested
+	}
+	muts := make([]mutant, len(names))
+	defer func() {
+		for _, m := range muts {
+			if m.dir != "" {
+				os.RemoveAll(m.dir)
+			}
+		}
+	}()
+	buildOne := func(dir string) error {
+		code, _, err := devVerifyRunner(env+"bash "+build+" 2>&1", dir, buildTimeout)
+		if err == nil && code != 0 {
+			err = fmt.Errorf("build.sh exited %d with the body skipped", code)
+		}
+		return err
+	}
+	// make every copy
+	for i, k := range names {
+		dir, err := os.MkdirTemp("", "einsteinos_mutant_")
+		if err != nil {
+			muts[i].why = err.Error()
+			continue
+		}
+		muts[i].dir = dir
+		if err := copyTree(ws, dir); err != nil {
+			muts[i].why = err.Error()
+			continue
+		}
+		changed := 0
+		for _, f := range files[k] {
+			p := filepath.Join(dir, filepath.FromSlash(f))
+			b, err := os.ReadFile(p)
 			if err != nil {
-				return err.Error()
+				continue
 			}
-			defer os.RemoveAll(dir)
-			if err := copyTree(ws, dir); err != nil {
-				return err.Error()
+			src, n := skipKernelBodies(string(b), k)
+			if n > 0 && os.WriteFile(p, []byte(src), 0o644) == nil {
+				changed += n
 			}
-			changed := 0
-			for _, f := range files[k] {
-				p := filepath.Join(dir, filepath.FromSlash(f))
-				b, err := os.ReadFile(p)
-				if err != nil {
-					continue
-				}
-				src, n := skipKernelBodies(string(b), k)
-				if n > 0 && os.WriteFile(p, []byte(src), 0o644) == nil {
-					changed += n
-				}
+		}
+		if changed == 0 {
+			muts[i].why = "no body found to skip"
+		}
+	}
+	// build them at the same time
+	var wg sync.WaitGroup
+	slots := make(chan struct{}, mutationBuildParallel(len(names)))
+	failed := make([]bool, len(names))
+	for i := range muts {
+		if muts[i].why != "" {
+			continue
+		}
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			slots <- struct{}{}
+			defer func() { <-slots }()
+			failed[i] = buildOne(muts[i].dir) != nil
+		}(i)
+	}
+	wg.Wait()
+	// a build that failed among others is built again alone, then each copy is tested in turn
+	for i, k := range names {
+		if muts[i].why == "" && failed[i] {
+			if err := buildOne(muts[i].dir); err != nil {
+				muts[i].why = err.Error()
 			}
-			if changed == 0 {
-				return "no body found to skip"
-			}
-			if code, _, err := devVerifyRunner(env+"bash "+build+" 2>&1", dir, buildTimeout); err != nil || code != 0 {
-				return fmt.Sprintf("build.sh exited %d with the body skipped", code)
-			}
-			code, _, err := devVerifyRunner(env+"bash "+test+" 2>&1", dir, testTimeout)
-			if err == nil && code == 0 {
-				return "" // unchecked
-			}
-			return "checked"
-		}()
-		switch why {
-		case "":
+		}
+		if muts[i].why != "" {
+			inconclusive = append(inconclusive, k+" ("+muts[i].why+")")
+			continue
+		}
+		code, _, err := devVerifyRunner(env+"bash "+test+" 2>&1", muts[i].dir, testTimeout)
+		if err == nil && code == 0 {
 			unchecked = append(unchecked, k)
-		case "checked":
-		default:
-			inconclusive = append(inconclusive, k+" ("+why+")")
 		}
 	}
 	return unchecked, inconclusive
+}
+
+// mutationCPUs: this machine's CPUs (a variable for tests)
+var mutationCPUs = runtime.NumCPU
+
+// mutationBuildParallel: how many copies are built at once — one per 8 of this machine's
+// CPUs, at least one, at most n.
+func mutationBuildParallel(n int) int {
+	p := mutationCPUs() / 8
+	if p < 1 {
+		p = 1
+	}
+	if p > n {
+		p = n
+	}
+	if p < 1 {
+		p = 1
+	}
+	return p
 }

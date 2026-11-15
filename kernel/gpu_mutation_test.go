@@ -1,6 +1,8 @@
 package kernel
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -60,5 +62,44 @@ func TestATestThatOnlyChecksTheLaunchIsFound(t *testing.T) {
 	write(t, ws, test, "true")
 	if u, inc := resultUnchecked(ws, build, test, "", files, time.Minute, time.Minute); len(u) != 0 || len(inc) != 1 {
 		t.Fatalf("unchecked %v inconclusive %v", u, inc)
+	}
+}
+
+// The copies are built at the same time and tested one after another. 11/14 u41a85163f4's six
+// copies were built and tested in turn and every verification that reached this gate took an
+// hour; a test run beside another could fail for the shared GPU and read as checking.
+func TestTheCopiesAreBuiltTogetherAndTestedInTurn(t *testing.T) {
+	realRunner(t)
+	ws := t.TempDir()
+	unit := "u41a85163f4"
+	build, test := devVerifyScripts(unit)
+	shared := t.TempDir()
+	// each build records how many builds run beside it; each test fails if another test runs
+	write(t, ws, build, "n=$(ls "+shared+" | grep -c build); touch "+shared+"/build.$$; sleep 0.6; echo $n >> "+shared+"/beside; rm "+shared+"/build.$$")
+	write(t, ws, test, "[ -e "+shared+"/test.lock ] && exit 3; touch "+shared+"/test.lock; sleep 0.2; rm "+shared+"/test.lock; exit 0")
+	var portMap strings.Builder
+	files := map[string][]string{}
+	for _, k := range []string{"conv_kernel", "gnorm_kernel", "gate_kernel", "bcast_kernel"} {
+		f := "src/kernels/cuda/" + k + ".cu"
+		write(t, ws, f, "__global__ void "+k+"(float* x) {\n    x[0] = 1;\n}\n")
+		portMap.WriteString(f + "\t" + k + "\t" + f + "\t" + k + "\n")
+		files[k] = []string{f}
+	}
+	write(t, ws, PortMapPath(unit), portMap.String())
+	old := mutationCPUs
+	defer func() { mutationCPUs = old }()
+	mutationCPUs = func() int { return 32 } // four at once
+	start := time.Now()
+	unchecked, inconclusive := resultUnchecked(ws, build, test, "", files, time.Minute, time.Minute)
+	took := time.Since(start)
+	if len(unchecked) != 4 || len(inconclusive) != 0 {
+		t.Fatalf("every test ran alone and passed: unchecked %v inconclusive %v", unchecked, inconclusive)
+	}
+	b, _ := os.ReadFile(filepath.Join(shared, "beside"))
+	if !strings.Contains(string(b), "3") && !strings.Contains(string(b), "2") {
+		t.Fatalf("the builds ran one at a time (beside: %q, took %s)", b, took)
+	}
+	if took > 2*time.Second {
+		t.Fatalf("took %s for four 0.6 s builds built together", took)
 	}
 }
