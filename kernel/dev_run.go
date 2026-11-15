@@ -377,6 +377,8 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 			log.Printf("dev_plan: %s reference has %d code files; theory units cover %d; %d port unit(s) added for the rest", repo, len(all), len(covered), n)
 			devPlanSave(repo, devRepo, branch, plan, fmt.Sprintf("plan: %d port units", n))
 		}
+		// the units that passed, held to what the reference requires as measured now
+		devPortRecheck(run)
 	}
 
 	var lastStdout string
