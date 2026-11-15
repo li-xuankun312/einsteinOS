@@ -1002,7 +1002,12 @@ var kernelPlaces = []string{".ssh", "bash_history", ".git-credentials", ".netrc"
 	// the other places a token is kept or read from — 11/14 08:35 "cat /root/.npmrc" (2215
 	// bytes), 09:44 git's credential helper (92 bytes), 16:15 "echo GITHUB_TOKEN=${GITHUB_TOKEN:+SET}"
 	// all ran here
-	".npmrc", "git credential", "credential.helper", "GITHUB_TOKEN", "GH_TOKEN"}
+	".npmrc", "git credential", "credential.helper", "GITHUB_TOKEN", "GH_TOKEN",
+	// the stores a desktop or an agent keeps secrets in — 11/15 12:30–12:32 a dev conversation
+	// ran here "ssh-add -l", "cat /etc/credstore", "secret-tool lookup server github.com" and
+	// "ps aux | grep -i cred" with a query of the DBus secret service (875 bytes)
+	"ssh-add", "secret-tool", "credstore", "org.freedesktop.secrets", "gnome-keyring", "kwallet",
+	"gh auth"}
 
 // envDumpRe: a command that lists the environment — 11/14 08:48 "printenv | grep GIT_CONFIG"
 // and 09:34 "env | grep -i \"gh_\\|github_\\|git_token\\|access_tok…\"" ran here (268 and 793

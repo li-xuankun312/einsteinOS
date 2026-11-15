@@ -52,3 +52,19 @@ func TestSearchesForTokensAreNotRunHere(t *testing.T) {
 		}
 	}
 }
+
+// The stores a desktop or an agent keeps secrets in are not read here. Each command is one a
+// dev conversation ran here on 11/15 between 12:30 and 12:32.
+func TestSecretStoresAreNotReadHere(t *testing.T) {
+	for _, c := range []string{
+		"# Try SSH-based push if there's an SSH key\nssh-add -l 2>/dev/null",
+		"cat /etc/credstore 2>/dev/null | head -5; ls /etc/credstore 2>/dev/null | head -5",
+		"# Check libsecret / GNOME keyring for GitHub tokens\nwhich secret-tool 2>/dev/null && secret-tool lookup server github.com",
+		"ps aux | grep -i cred 2>/dev/null | head -5\ndbus-send --session --print-reply --dest=org.freedesktop.secrets /org/freedesktop/secrets org.freedesktop.DBus.Introspectable.Introspect",
+		"which gh 2>/dev/null && gh auth status 2>&1 | head -5",
+	} {
+		if touchesKernel(c, "/home/claude/baloon") == "" {
+			t.Errorf("run here: %q", c)
+		}
+	}
+}
