@@ -85,7 +85,11 @@ func symbolsOfText(file, text string) []RefSymbol {
 				add("macro", m[1])
 			}
 		}
-		for _, st := range topLevelStatements(stripCComments(text)) {
+		// "__global__ void __launch_bounds__(256) k(…)": the name before the first "(" of the
+		// head is the kernel's, not the attribute's — 11/14 09:23–10:01 unit uaa158d17c5 was
+		// told to port a definition named __launch_bounds__ of src/prefill/kernels.cu and mapped
+		// it, with the 28 others it was given, to declarations in a header
+		for _, st := range topLevelStatements(launchBoundsRe.ReplaceAllString(stripCComments(text), " ")) {
 			switch {
 			case symTypeRe.MatchString(st.head):
 				add("type", symTypeRe.FindStringSubmatch(st.head)[1])

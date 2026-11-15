@@ -46,3 +46,17 @@ func TestTheDefinitionsOfAReferenceFileAreMeasured(t *testing.T) {
 		t.Errorf("python: top-level only: %v", py)
 	}
 }
+
+// A kernel declared with __launch_bounds__ is measured by its own name. 11/14 unit
+// uaa158d17c5 was given "__launch_bounds__" of src/prefill/kernels.cu as a definition to port.
+func TestALaunchBoundedKernelIsMeasuredByItsName(t *testing.T) {
+	src := "template <int B>\n__global__ void __launch_bounds__(256) gr_norm_kernel(const float* x, float* out, int n) {\n  out[0] = x[0];\n}\n" +
+		"__global__ void __launch_bounds__(128, 2) sigm_kernel(float* y) { y[0] = 0; }\n"
+	got := map[string]string{}
+	for _, s := range SymbolsOf("src/prefill/kernels.cu", src) {
+		got[s.Name] = s.Kind
+	}
+	if got["gr_norm_kernel"] != "kernel" || got["sigm_kernel"] != "kernel" || got["__launch_bounds__"] != "" {
+		t.Fatalf("symbols: %v", got)
+	}
+}
