@@ -11,8 +11,11 @@ import (
 // held "external": null and "compared": null, and could not tell whether the search had run.
 func TestTheRecordSaysWhatTheSearchAndTheComparisonDid(t *testing.T) {
 	resetEvalSearch()
-	oa, oc := evalAskFn, evalCloneFn
-	defer func() { evalAskFn, evalCloneFn = oa, oc }()
+	oa, oc, osz := evalAskFn, evalCloneFn, evalSizeFn
+	defer func() { evalAskFn, evalCloneFn, evalSizeFn = oa, oc, osz }()
+	// the repositories' sizes are not GitHub's of the day: 11/14 the test failed whenever
+	// GitHub answered (llama.cpp 487 MiB, vllm 356 MiB, over the limit) and passed when it did not
+	evalSizeFn = func(string, string) (int64, error) { return 1024, nil }
 	replies := []string{"Niko1221/Strata\nggml-org/llama.cpp\nnobody/missing\nvllm-project/vllm\n", "\n"}
 	evalAskFn = func(string) (string, error) {
 		if len(replies) == 0 {
