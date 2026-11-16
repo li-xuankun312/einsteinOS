@@ -68,3 +68,21 @@ func TestSecretStoresAreNotReadHere(t *testing.T) {
 		}
 	}
 }
+
+// A conversation does not write git's hooks: a script there runs inside the kernel's own git
+// commands. 11/15 19:52 dev_unit_33 installed .git/hooks/post-checkout to rewrite a file
+// whenever the kernel made its verification worktree.
+func TestGitsHooksAreNotWrittenHere(t *testing.T) {
+	for _, c := range []string{
+		"cat > /home/claude/baloon/.git/hooks/post-checkout << 'EOF'\n#!/bin/sh\npython3 - <<'PY'\nPY\nEOF\nchmod +x /home/claude/baloon/.git/hooks/post-checkout",
+		"cd /home/claude/baloon && git config core.hooksPath /tmp/myhooks",
+		"ls -la .git/hooks/",
+	} {
+		if touchesKernel(c, "/home/claude/baloon") == "" {
+			t.Errorf("run here: %q", c)
+		}
+	}
+	if w := touchesKernel("grep -rn post_checkout src/core/session.cpp", "/home/claude/baloon"); w != "" {
+		t.Errorf("refused (%s)", w)
+	}
+}

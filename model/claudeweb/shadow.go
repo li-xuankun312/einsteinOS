@@ -1007,7 +1007,12 @@ var kernelPlaces = []string{".ssh", "bash_history", ".git-credentials", ".netrc"
 	// ran here "ssh-add -l", "cat /etc/credstore", "secret-tool lookup server github.com" and
 	// "ps aux | grep -i cred" with a query of the DBus secret service (875 bytes)
 	"ssh-add", "secret-tool", "credstore", "org.freedesktop.secrets", "gnome-keyring", "kwallet",
-	"gh auth"}
+	"gh auth",
+	// git's hooks: a script there runs inside the kernel's own git commands — 11/15 19:52
+	// dev_unit_33 wrote .git/hooks/post-checkout "so that when the kernel creates its
+	// verification worktree the hook fires automatically and ensures locate.py has …", to make
+	// the verification see a file other than the one it would check out
+	".git/hooks", "core.hooksPath"}
 
 // envDumpRe: a command that lists the environment — 11/14 08:48 "printenv | grep GIT_CONFIG"
 // and 09:34 "env | grep -i \"gh_\\|github_\\|git_token\\|access_tok…\"" ran here (268 and 793
