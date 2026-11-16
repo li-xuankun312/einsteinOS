@@ -658,8 +658,19 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 			}
 			m.mu.Unlock()
 		}
-		log.Printf("claudeweb: do_exit(%s) rounds=%d tools=%d continues=%d conv=%s",
-			exitCodeStr(code), st.rounds, st.totalTools, st.consecutiveContinues, truncate(st.convID, 8))
+		// the record of an error exit — its text and the request it answered — goes to a
+		// branch of its own; the log line names it (exit_diag.go)
+		diag := ""
+		if code == exitError {
+			m.mu.Lock()
+			modelName, effort := m.modelName, m.effort
+			m.mu.Unlock()
+			kind := exitDiagKind(webReq.CreateConversationParams != nil, st.consecutiveContinues)
+			diag = startExitDiag(exitDiagRecord(childRole, st.convID, exitCodeStr(code), st.rounds, st.totalTools,
+				st.consecutiveContinues, text, kernel.NewDiagRequest(modelName, effort, kind, webReq.Prompt)))
+		}
+		log.Printf("claudeweb: do_exit(%s) rounds=%d tools=%d continues=%d conv=%s%s",
+			exitCodeStr(code), st.rounds, st.totalTools, st.consecutiveContinues, truncate(st.convID, 8), diagSuffix(diag))
 		yield(&model.LLMResponse{
 			Content: &genai.Content{
 				Role:  "model",
