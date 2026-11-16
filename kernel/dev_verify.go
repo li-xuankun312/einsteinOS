@@ -511,6 +511,16 @@ func portFiles(pm map[string]portEntry) map[string]bool {
 	return out
 }
 
+// changedFilesText names the files of an attempt that differ from the branch, the first four:
+// 11/16 12:18 the log said '1 file(s) changed' and which one — the Lean file, not the test.sh
+// whose edit had failed here — could only be read off the gate that followed.
+func changedFilesText(changed []string) string {
+	if len(changed) == 0 {
+		return ""
+	}
+	return " (" + shortList(changed, 4) + ")"
+}
+
 func unitGateInput(ws, unitID string, req UnitRequirements, changed []string, build, test ProcTrace, nt NoToolchainBuild) GateInput {
 	pm := readPortMap(ws, unitID)
 	mutScript, mutMissing := testMutatesMissing(ws, unitID, changed)
@@ -659,8 +669,8 @@ func devVerifyOnly(cloneDir, mirror, branch, baseRef, unitID, gpuUsable string, 
 	}
 	defer os.RemoveAll(ws)
 
-	log.Printf("dev_verify: unit %s: %d file(s) changed, %d removed; verifying %s on the real machine",
-		unitID, len(changed), len(removed), ws)
+	log.Printf("dev_verify: unit %s: %d file(s) changed%s, %d removed; verifying %s on the real machine",
+		unitID, len(changed), changedFilesText(changed), len(removed), ws)
 	// the gates judge the unit's code, not this attempt's edit of it (unitFiles)
 	out.Result = runUnitVerifyWith(ws, unitID, gpuUsable, req, unitFiles(changed, removed, devUnitPriorFiles(cloneDir, baseRef, unitID)), 60*time.Minute, 60*time.Minute)
 	out.Status = out.Result.Status()
