@@ -146,3 +146,30 @@ func deltaDigest(mirror string, changed, removed []string) string {
 func (p *preVerifyResult) sameRejected(digest string) bool {
 	return p != nil && !p.ok && p.digest != "" && p.digest == digest
 }
+
+// preVerifyUnchangedMax: how many done lines in a row may carry the files of the last
+// rejected verification before the conversation is let go. The conversation has been told
+// what is wrong and has changed nothing since; another round changes nothing either.
+// 11/15 17:47–19:53 dev_unit_33 wrote its done line 13 times over two hours on the same tree
+// (smoke_fail), each time getting the same report back, until MaxRounds(20) ended it.
+const preVerifyUnchangedMax = 3
+
+// unchangedEnd: whether this is the nth done line in a row on the files of the last rejected
+// verification, with n at the limit — the conversation ends and the kernel judges the tree.
+func (p *preVerifyResult) unchangedEnd(n int) bool { return n >= preVerifyUnchangedMax }
+
+// ordinalSuffix: "st", "nd", "rd" or "th" for n.
+func ordinalSuffix(n int) string {
+	if n%100 >= 11 && n%100 <= 13 {
+		return "th"
+	}
+	switch n % 10 {
+	case 1:
+		return "st"
+	case 2:
+		return "nd"
+	case 3:
+		return "rd"
+	}
+	return "th"
+}

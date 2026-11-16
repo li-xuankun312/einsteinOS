@@ -580,12 +580,20 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 	for try := 1; try <= 5; try++ {
 		var ferr error
 		waitRoleEnded(role, r.repo, unit.ID)
+		unchanged := 0
 		RegisterPreVerify(role, func() (bool, string) {
 			if changed, removed, err := treeDelta(mirror, base); err == nil && pre.sameRejected(deltaDigest(mirror, changed, removed)) {
-				log.Printf("dev_preverify: %s unit %s (%s): the files are those of the last rejected verification (gate=%q) — its result is sent back, not measured again",
-					r.repo, unit.ID, role, pre.out.Result.Gate)
+				unchanged++
+				if pre.unchangedEnd(unchanged) {
+					log.Printf("dev_preverify: %s unit %s (%s): the files are those of the last rejected verification (gate=%q) for the %d%s time — the conversation ends and the tree is judged",
+						r.repo, unit.ID, role, pre.out.Result.Gate, unchanged, ordinalSuffix(unchanged))
+					return true, ""
+				}
+				log.Printf("dev_preverify: %s unit %s (%s): the files are those of the last rejected verification (gate=%q) — its result is sent back, not measured again (%d of %d)",
+					r.repo, unit.ID, role, pre.out.Result.Gate, unchanged, preVerifyUnchangedMax)
 				return false, preVerifyReport(pre.out)
 			}
+			unchanged = 0
 			o := devVerifyOnly(cloneDir, mirror, r.branch, baseRef, unit.ID, r.gpuUsable(), base, r.shown(unit))
 			passed := o.Err == nil && o.Verified && o.Result.Passed()
 			changed, removed, _ := treeDelta(mirror, base)
