@@ -113,9 +113,7 @@ func (s *ShadowExecutor) execute(toolName string, inputJSON string) string {
 				log.Printf(statementChangedFmt, input.Path, truncateCmd(oldSig, 160), truncateCmd(newSig, 160))
 			}
 		}
-		escaped_old := strings.ReplaceAll(input.OldStr, "'", "'\\''")
-		escaped_new := strings.ReplaceAll(input.NewStr, "'", "'\\''")
-		command = fmt.Sprintf("python3 -c '\nimport sys\nwith open(\"%s\",\"r\") as f: c=f.read()\nold=\"\"\"%s\"\"\"\nnew=\"\"\"%s\"\"\"\nif old not in c:\n    print(\"old_str not found\",file=sys.stderr)\n    sys.exit(1)\nc=c.replace(old,new,1)\nwith open(\"%s\",\"w\") as f: f.write(c)\nprint(\"ok\")\n'", input.Path, escaped_old, escaped_new, input.Path)
+		command = strReplaceCommand(input.Path, input.OldStr, input.NewStr)
 
 	default:
 		return ""
