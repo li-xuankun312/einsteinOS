@@ -64,6 +64,10 @@ type GateInput struct {
 	PortForeign []string
 	// PortScripts: the unit's verify files that read a port map (scriptsReadingPortMap)
 	PortScripts []string
+	// MutatesMissingScript / MutatesMissing: the unit's verify script that mutates files the
+	// unit did not write, and those files (test_mutates_missing.go)
+	MutatesMissingScript string
+	MutatesMissing       []string
 	// LeanCopied: the declarations of the unit's changed .lean files whose text is the
 	// theory's (lean_copy.go), one "file: kind name" each
 	LeanCopied []string
@@ -272,6 +276,11 @@ func unitGates(in GateInput) (kind, text string) {
 	}
 	if len(in.LeanCopied) > 0 {
 		fail("lean_copied", fmt.Sprintf(gateLeanCopiedFmt, len(in.LeanCopied), linesList(in.LeanCopied, 40)))
+	}
+	// a test that mutates a file the kernel does not have fails for a reason the conversation
+	// cannot see in its own workspace, where the file is there (test_mutates_missing.go)
+	if in.MutatesMissingScript != "" {
+		fail("test_mutates_missing", testMutatesMissingText(in.MutatesMissingScript, in.MutatesMissing, in.Changed))
 	}
 	if len(in.PortScripts) > 0 {
 		fail("port_count_in_script", fmt.Sprintf(gatePortScriptFmt, strings.Join(in.PortScripts, ", "), PortMapPath(in.UnitID), len(in.Req.Symbols)))

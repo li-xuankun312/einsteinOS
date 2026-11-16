@@ -513,9 +513,10 @@ func portFiles(pm map[string]portEntry) map[string]bool {
 
 func unitGateInput(ws, unitID string, req UnitRequirements, changed []string, build, test ProcTrace, nt NoToolchainBuild) GateInput {
 	pm := readPortMap(ws, unitID)
+	mutScript, mutMissing := testMutatesMissing(ws, unitID, changed)
 	return GateInput{Req: req, Changed: changed, Build: build, Test: test, Compilers: presentGPUCompilers(),
 		PortMissing: portMissing(ws, unitID, req.Symbols), PortExtra: portExtra(ws, unitID, req.Symbols), PortRefFiles: portRefFiles(ws, unitID, req.Symbols),
-		PortForeign: portForeignNames(ws, unitID, req.FileNames), PortScripts: unitPortScripts(ws, unitID, req), Kernels: unitKernels(ws, changed), KernelsMeasured: true,
+		PortForeign: portForeignNames(ws, unitID, req.FileNames), PortScripts: unitPortScripts(ws, unitID, req), MutatesMissingScript: mutScript, MutatesMissing: mutMissing, Kernels: unitKernels(ws, changed), KernelsMeasured: true,
 		Shadowed: shadowedKernels(unitKernels(ws, changed), portKernels(ws, unitID)),
 		ISAFuncs: isaPortFuncs(pm, req.FlagFiles), PortKernels: portKernels(ws, unitID), UnitID: unitID,
 		PortFiles:   portFiles(pm),
