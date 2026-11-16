@@ -5,6 +5,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -108,4 +110,28 @@ func TestPublishDiagWithoutARepositoryKeepsTheRecordLocally(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "no repository") {
 		t.Fatalf("%v", err)
 	}
+}
+
+// a long text is cut once: one marker, and the count in it is the bytes that were left out
+func TestPublishDiagCutsALongTextOnce(t *testing.T) {
+	bare := withLocalRemote(t)
+	long := strings.Repeat("x", 100<<10) + "THE-END"
+	branch := DiagBranchName()
+	if err := PublishDiag("o/r", branch, sampleDiag(long, "p")); err != nil {
+		t.Fatal(err)
+	}
+	files := strings.Fields(diagGitOut(t, bare, "ls-tree", "-r", "--name-only", branch))
+	var got DiagRecord
+	if err := json.Unmarshal([]byte(diagGitOut(t, bare, "show", branch+":"+files[0])), &got); err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(got.Text, "bytes left out"); n != 1 {
+		t.Fatalf("%d markers in the text of the pushed record", n)
+	}
+	m := regexp.MustCompile(`\[(\d+) bytes left out\]`).FindStringSubmatch(got.Text)
+	if m == nil || m[1] != strconv.Itoa(len(long)-diagTextHead-diagTextTail) {
+		t.Fatalf("marker %v, want %d bytes left out", m, len(long)-diagTextHead-diagTextTail)
+	}
+	local := filepath.Join(os.TempDir(), "einsteinos_diag", strings.ReplaceAll(branch, "/", "_")+".json")
+	defer os.Remove(local)
 }
