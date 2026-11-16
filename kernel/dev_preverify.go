@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -99,6 +100,13 @@ func touchRoleWhile(role string, interval time.Duration) (stop func()) {
 const (
 	preVerifyHeadFmt = "[KERNEL VERIFICATION — the check that decides this unit, run now on the real machine on your tree]\ncompile=%[1]s (build.sh exit %[2]d)  smoke=%[3]s (test.sh exit %[4]d)  gate=%[5]s\n"
 	preVerifyTailFmt = "the kernel ends this conversation at a done line only when this verification passes.\n"
+	// preVerifyFilesFmt: the files the verification was run on. 11/15 dev_unit_33 was told its
+	// test failed on a pattern missing from locate.py, could not see that locate.py was not
+	// among the files the kernel had, and spent 13 rounds concluding the kernel's checkout was
+	// stale or cached — committing deliberately wrong code to "align" with it, and finally
+	// installing a .git/hooks/post-checkout to rewrite the file behind the kernel's back.
+	preVerifyFilesFmt   = "the %[1]d file(s) this was run on, the only ones the kernel has from you:\n%[2]s\n"
+	preVerifyNoFilesFmt = "you have changed no file the kernel can see: it ran on the branch's existing code. Anything you wrote is somewhere the kernel does not read.\n"
 	// inserted into the shell: where, and %[1]s/%[2]s/%[3]s what the verification measured
 	preVerifyWhere   = "这个对话在真机上的 tree"
 	preVerifyWhatFmt = "内核刚在真机上验证了它，compile=%[1]s smoke=%[2]s gate=%[3]s"
@@ -119,7 +127,26 @@ func preVerifyReport(o UnitVerifyOutcome) string {
 	if o.Result.GateText != "" {
 		s += ShapeOutput(o.Result.GateText, LocalResultCap()/2) + "\n"
 	}
+	s += verifiedFilesText(o.Changed, o.Removed)
 	return Bagu(preVerifyWhere, fmt.Sprintf(preVerifyWhatFmt, o.Result.Compile, o.Result.Smoke, gateOrNone(o.Result.Gate)), s+preVerifyTailFmt, "1", spawnTo())
+}
+
+// verifiedFilesText: the files the verification ran on, or that there were none of the
+// conversation's own.
+func verifiedFilesText(changed, removed []string) string {
+	files := append([]string(nil), changed...)
+	for _, f := range removed {
+		files = append(files, f+" (removed)")
+	}
+	sort.Strings(files)
+	if len(files) == 0 {
+		return preVerifyNoFilesFmt
+	}
+	shown := files
+	if len(shown) > 40 {
+		shown = append(append([]string{}, shown[:40]...), fmt.Sprintf("… %d more", len(files)-40))
+	}
+	return fmt.Sprintf(preVerifyFilesFmt, len(files), strings.Join(shown, "\n"))
 }
 
 // deltaDigest identifies the mirror's delta (paths and contents of changed files, removed paths).
