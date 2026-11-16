@@ -342,6 +342,10 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 		return "", err
 	}
 
+	// a conversation of this run that ends abnormally leaves its record on a branch of this
+	// repository (diag.go)
+	SetDiagRepo(devRepo)
+
 	run := &devRun{
 		pid: pid, repo: repo, devRepo: devRepo, branch: branch, task: task,
 		hwInfo: hwInfo, gpuAll: gpuAll,
