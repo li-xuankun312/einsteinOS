@@ -181,6 +181,25 @@ func (p *preVerifyResult) sameRejected(digest string) bool {
 // (smoke_fail), each time getting the same report back, until MaxRounds(20) ended it.
 const preVerifyUnchangedMax = 3
 
+// preVerifyUnchangedFmt: what the conversation is told the second time it writes a done line
+// on the files of the last rejected verification, instead of the same report a second time.
+// 11/15 dev_unit_33 got that report back eight times word for word, with no tool result and
+// nothing new in it, and said EINSTEINOS_DONE to it nineteen times.
+const preVerifyUnchangedFmt = "[KERNEL VERIFICATION] nothing has changed since the verification above: the files the " +
+	"kernel has from you are byte for byte the ones it just rejected, so there is nothing new to run. " +
+	"Whatever you wrote since then went somewhere the kernel does not read — not the mirror it verifies. " +
+	"Check that the path you are writing is under %[1]s, and that the file you mean is one of the ones " +
+	"listed above. This is time %[2]d of %[3]d; at %[3]d the kernel ends this conversation and judges the tree as it stands.\n"
+
+// UnchangedReport: what to send back on the nth done line in a row on an unchanged rejected
+// tree, with the mirror the kernel reads.
+func UnchangedReport(mirror string, n int) string {
+	return Bagu(preVerifyWhere, preVerifyUnchangedWhat,
+		fmt.Sprintf(preVerifyUnchangedFmt, mirror, n, preVerifyUnchangedMax)+preVerifyTailFmt, "1", spawnTo())
+}
+
+const preVerifyUnchangedWhat = "内核读到的文件和上次被拒绝的那次一模一样，没有任何新东西可测"
+
 // unchangedEnd: whether this is the nth done line in a row on the files of the last rejected
 // verification, with n at the limit — the conversation ends and the kernel judges the tree.
 func (p *preVerifyResult) unchangedEnd(n int) bool { return n >= preVerifyUnchangedMax }

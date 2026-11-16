@@ -589,8 +589,11 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 						r.repo, unit.ID, role, pre.out.Result.Gate, unchanged, ordinalSuffix(unchanged))
 					return true, ""
 				}
-				log.Printf("dev_preverify: %s unit %s (%s): the files are those of the last rejected verification (gate=%q) — its result is sent back, not measured again (%d of %d)",
+				log.Printf("dev_preverify: %s unit %s (%s): the files are those of the last rejected verification (gate=%q) — the conversation is told nothing changed (%d of %d)",
 					r.repo, unit.ID, role, pre.out.Result.Gate, unchanged, preVerifyUnchangedMax)
+				if unchanged > 1 {
+					return false, UnchangedReport(mirror, unchanged)
+				}
 				return false, preVerifyReport(pre.out)
 			}
 			unchanged = 0
