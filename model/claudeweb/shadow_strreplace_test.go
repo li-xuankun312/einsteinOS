@@ -88,3 +88,22 @@ func TestStrReplaceReplayNotFoundLeavesTheFile(t *testing.T) {
 		t.Fatalf("exit %d, file %q, stderr %q", code, after, stderr)
 	}
 }
+
+// 11/16 12:35–12:45 unit u253a75befe: twelve edits of a Lean file exited 1 with only
+// "old_str not found" — nothing said whether the file lacked all of old_str or only its
+// later lines, so a copy that had drifted from the sandbox's could not be told from a replay
+// that could not read the text. The message now says what was compared.
+func TestStrReplaceReplayNotFoundSaysWhy(t *testing.T) {
+	// no line of old_str is in the file
+	_, code, stderr := replayStrReplace(t, "alpha\nbeta\n", "gamma\ndelta", "x")
+	if code != 1 || !strings.Contains(stderr, "old_str not found") ||
+		!strings.Contains(stderr, "the file has 11 bytes and 3 lines") ||
+		!strings.Contains(stderr, "old_str 11 bytes") || !strings.Contains(stderr, "'gamma') is not in the file") {
+		t.Fatalf("exit %d, stderr %q", code, stderr)
+	}
+	// its first line is there and a later one is not: the copies differ below it
+	_, code, stderr = replayStrReplace(t, "alpha\nbeta\n", "alpha\nbeta changed", "x")
+	if code != 1 || !strings.Contains(stderr, "'alpha') is in the file") {
+		t.Fatalf("exit %d, stderr %q", code, stderr)
+	}
+}

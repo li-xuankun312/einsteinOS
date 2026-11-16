@@ -18,7 +18,8 @@ d = json.loads(sys.stdin.buffer.read().decode("utf-8"))
 p, old, new = d["path"], d["old"], d["new"]
 with open(p, "r", encoding="utf-8") as f: c = f.read()
 if old not in c:
-    print("old_str not found", file=sys.stderr)
+    first = old.split("\n")[0]
+    print("old_str not found in %s: the file has %d bytes and %d lines, old_str %d bytes; its first line (%r) %s in the file" % (p, len(c.encode("utf-8")), c.count("\n") + 1, len(old.encode("utf-8")), first[:60], "is" if first in c else "is not"), file=sys.stderr)
     sys.exit(1)
 c = c.replace(old, new, 1)
 with open(p, "w", encoding="utf-8") as f: f.write(c)
