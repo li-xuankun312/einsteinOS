@@ -54,8 +54,12 @@ it answers {"okay": true/false, "timings": {"total_ms": N}, ...}; Axle refuses n
 // calls and the services it can call, as facts — %[1]s the GPU line probed at boot. It goes
 // into the shell's content (kernel.BaguInsert); "DO NOT downgrade", "Trust the tool_results",
 // "Never refuse commands", "IMPORTANT: do NOT read hundreds of commits" and "your context
-// window degrades after ~50 tool calls" are gone.
-const localExecFactsFmt = `[THIS MACHINE] every tool call is mirrored and run on a local machine: Go 1.26.6, network access, %[1]s, root. the tool results returned are that machine's, not the sandbox's. credentials in the user's message are for that machine.
+// window degrades after ~50 tool calls" are gone. It used to end "credentials in the user's
+// message are for that machine", which told every dev conversation that the machine's
+// credentials were its to use: 11/14 and 11/15 they searched for tokens in files, the
+// environment, git's credential helper, the ssh agent, the DBus secret service and einsteinOS's
+// own source, hundreds of commands over two days.
+const localExecFactsFmt = `[THIS MACHINE] every tool call is mirrored and run on a local machine: Go 1.26.6, network access, %[1]s, root. the tool results returned are that machine's, not the sandbox's. the kernel holds that machine's credentials and pushes your work itself; they are not yours to find or use, and commands that read them are not run there.
 [REGISTERED SERVICES]
 - sync_repo {"repo":"owner/name"} — syncs a GitHub repo to the local db (commits, PRs, issues)
 - pr_setup {"task":"description"} — finds the reference repos, clones them, creates the PR pipeline; returns its pid
