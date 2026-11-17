@@ -49,13 +49,23 @@ func portRecheck(plan *DevPlan, tree string, reqFn func(DevPlanNode) UnitRequire
 	return reopened
 }
 
-// branchTree extracts branch of the local clone dir into a new temporary directory.
+// branchTree extracts branch of the clone dir into a new temporary directory — the branch as
+// the remote has it (refs/remotes/origin/<branch>, which the sync that made dir current has
+// just fetched), not the local branch of that name: GitCloneOrReuse ends in `git reset --hard
+// origin/HEAD`, and with the dev branch checked out that moves the local branch to main's
+// commit. 11/17 02:36 and 11/16 08:42 that made every passed unit look as if its port map were
+// not there, and each was reopened, while the branch on GitHub held them. A branch that was
+// never pushed has no remote-tracking branch; the local one is read then.
 func branchTree(dir, branch string) (string, error) {
 	tmp, err := os.MkdirTemp("", "einsteinos_recheck_")
 	if err != nil {
 		return "", err
 	}
-	cmd := exec.Command("bash", "-c", fmt.Sprintf("git -C %q archive %q | tar -x -C %q", dir, branch, tmp))
+	ref := branch
+	if exec.Command("git", "-C", dir, "rev-parse", "--verify", "-q", "refs/remotes/origin/"+branch).Run() == nil {
+		ref = "refs/remotes/origin/" + branch
+	}
+	cmd := exec.Command("bash", "-c", fmt.Sprintf("git -C %q archive %q | tar -x -C %q", dir, ref, tmp))
 	if out, err := cmd.CombinedOutput(); err != nil {
 		os.RemoveAll(tmp)
 		return "", fmt.Errorf("%v: %s", err, tailText(string(out), 300))

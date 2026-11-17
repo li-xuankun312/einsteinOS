@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -41,5 +42,77 @@ func TestPassedUnitsAreHeldToTheReferenceAgain(t *testing.T) {
 	f := plan.Reopen["ued2beb8a35"]
 	if f.Kind != "port_incomplete" || !strings.Contains(f.Text, "gdn_chunk_kernel") || plan.UnitPass(plan.PortUnits[0]) {
 		t.Fatalf("reopen: %+v", f)
+	}
+}
+
+// 11/17 02:36 (and 11/16 08:42): every passed unit that owns definitions was reopened at the
+// restart — "no line in .einsteinOS/port/<id>.tsv" — while the dev branch on GitHub held those
+// port maps with as many lines as the reference required (25, 18, 5, 9). devRepoLocalDir syncs
+// the kernel's clone with GitCloneOrReuse, which ends in `git reset --hard origin/HEAD`; with
+// the dev branch checked out (dev_store_theory leaves it so) that moves the LOCAL dev branch
+// to main's commit, and branchTree read the local branch: a tree without the port maps.
+func TestBranchTreeReadsTheRemoteBranchNotTheLocalOne(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	g := func(dir string, args ...string) string {
+		return diagGitOut(t, dir, append([]string{"-c", "user.name=t", "-c", "user.email=t@t"}, args...)...)
+	}
+	root := t.TempDir()
+	remote := filepath.Join(root, "remote.git")
+	g(root, "init", "-q", "--bare", remote)
+	work := filepath.Join(root, "work")
+	g(root, "clone", "-q", remote, work)
+	g(work, "checkout", "-q", "-b", "main")
+	os.WriteFile(filepath.Join(work, "README"), []byte("base\n"), 0o644)
+	g(work, "add", ".")
+	g(work, "commit", "-qm", "main")
+	g(work, "push", "-q", "origin", "main")
+	g(work, "checkout", "-q", "-b", "dev")
+	os.MkdirAll(filepath.Join(work, ".einsteinOS", "port"), 0o755)
+	os.WriteFile(filepath.Join(work, ".einsteinOS", "port", "u1.tsv"), []byte("a.hpp\tFOO\tb.hpp\tFOO\n"), 0o644)
+	g(work, "add", ".")
+	g(work, "commit", "-qm", "unit 1 passed")
+	g(work, "push", "-q", "origin", "dev")
+	g(work, "remote", "set-head", "origin", "main")
+	g(work, "fetch", "-q", "origin", "+refs/heads/*:refs/remotes/origin/*")
+	g(work, "checkout", "-q", "-B", "dev", "origin/dev") // what gitUseBranchFromRemote leaves
+	// what GitCloneOrReuse does every time devRepoLocalDir is called
+	g(work, "fetch", "-q", "origin", "+refs/heads/*:refs/remotes/origin/*")
+	g(work, "reset", "-q", "--hard", "origin/HEAD")
+	if strings.Contains(g(work, "ls-tree", "-r", "--name-only", "dev"), "u1.tsv") {
+		t.Fatal("premise: the local dev branch lost the port map in the reset")
+	}
+	tree, err := branchTree(work, "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tree)
+	if _, err := os.Stat(filepath.Join(tree, ".einsteinOS", "port", "u1.tsv")); err != nil {
+		t.Fatalf("the tree of the dev branch has no port map although the branch on the remote has it: %v", err)
+	}
+}
+
+// a branch that was never pushed has no remote-tracking branch: the local one is read
+func TestBranchTreeReadsALocalBranchThatWasNeverPushed(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	g := func(dir string, args ...string) string {
+		return diagGitOut(t, dir, append([]string{"-c", "user.name=t", "-c", "user.email=t@t"}, args...)...)
+	}
+	dir := t.TempDir()
+	g(dir, "init", "-q")
+	g(dir, "checkout", "-q", "-b", "local-only")
+	os.WriteFile(filepath.Join(dir, "f.txt"), []byte("x\n"), 0o644)
+	g(dir, "add", ".")
+	g(dir, "commit", "-qm", "c")
+	tree, err := branchTree(dir, "local-only")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tree)
+	if _, err := os.Stat(filepath.Join(tree, "f.txt")); err != nil {
+		t.Fatal(err)
 	}
 }
