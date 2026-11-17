@@ -86,8 +86,19 @@ func devPortRecheck(r *devRun) {
 		return
 	}
 	defer os.RemoveAll(tree)
-	if ids := portRecheck(r.plan, tree, r.requirements); len(ids) > 0 {
+	if ids := r.recheckOn(tree); len(ids) > 0 {
 		log.Printf("dev_requirements: %s %d passed unit(s) no longer cover what the reference requires — reopened: %s", r.repo, len(ids), strings.Join(ids, " "))
 		devPlanSave(r.repo, r.devRepo, r.branch, r.plan, fmt.Sprintf("plan: %s reopened, measured against the reference again", strings.Join(ids, " ")))
 	}
+}
+
+// recheckOn holds the passed units to what the reference requires as the branch writes it:
+// the requirements the verification checks a unit against (r.shown, the reference masked),
+// so that the same port map reads the same both times. 11/17 10:12:54 uf7cdc0dcca, passed at
+// 05:22 with its 162 lines (include/ref/core/layer.hpp BlockBuffers …), was reopened for 58
+// definitions of include/strata/core/layer.hpp having no line — the raw reference path,
+// which no port map holds — and 12:05 u89be81de0b ran again for its 25 of
+// include/strata/kernels/ngram.hpp, all 25 on the branch as include/ref/kernels/ngram.hpp.
+func (r *devRun) recheckOn(tree string) []string {
+	return portRecheck(r.plan, tree, r.shown)
 }

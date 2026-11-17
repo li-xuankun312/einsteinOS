@@ -116,3 +116,35 @@ func TestBranchTreeReadsALocalBranchThatWasNeverPushed(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// 11/17 10:12:54 uf7cdc0dcca and 12:05 u89be81de0b: the port maps on the branch name the
+// reference's files as the conversations were shown them (include/ref/…); the recheck looked
+// for include/strata/… and reopened both. It holds a unit to what the verification holds it to.
+func TestTheRecheckReadsThePortMapAsTheBranchWritesIt(t *testing.T) {
+	tree := t.TempDir()
+	put := func(f, body string) {
+		os.MkdirAll(filepath.Dir(filepath.Join(tree, f)), 0o755)
+		os.WriteFile(filepath.Join(tree, f), []byte(body), 0o644)
+	}
+	put(PortMapPath("u89be81de0b"), "include/ref/kernels/ngram.hpp\tHEADS_PER_NGRAM\tinclude/baloon/ple_ngram_kernels.hpp\tHEADS_PER_NGRAM\n"+
+		"include/ref/kernels/ngram.hpp\tNGRAM_SIZE\tinclude/baloon/ple_ngram_kernels.hpp\tNGRAM_SIZE\n")
+	put("include/baloon/ple_ngram_kernels.hpp", "constexpr int HEADS_PER_NGRAM = 4;\nconstexpr int NGRAM_SIZE = 3;\n")
+	unit := DevPlanNode{ID: "u89be81de0b", Sources: []string{"include/strata/kernels/ngram.hpp"}}
+	syms := []RefSymbol{{File: "include/strata/kernels/ngram.hpp", Kind: "const", Name: "HEADS_PER_NGRAM"},
+		{File: "include/strata/kernels/ngram.hpp", Kind: "const", Name: "NGRAM_SIZE"}}
+	r := &devRun{repo: "Niko1221/Strata",
+		plan: &DevPlan{PortPass: map[string]bool{unit.ID: true}, PortUnits: []DevPlanNode{unit}},
+		raw:  map[string]UnitRequirements{unit.ID: {Symbols: syms}},
+		reqs: map[string]UnitRequirements{unit.ID: {Symbols: syms}}}
+	r.owners, r.ownersFor = map[string]string{
+		"include/strata/kernels/ngram.hpp\tHEADS_PER_NGRAM": unit.ID,
+		"include/strata/kernels/ngram.hpp\tNGRAM_SIZE":      unit.ID}, unit.ID
+	if got := r.recheckOn(tree); len(got) != 0 {
+		t.Fatalf("reopened %v: %+v", got, r.plan.Reopen[unit.ID])
+	}
+	// a definition truly without a line is still found
+	put(PortMapPath("u89be81de0b"), "include/ref/kernels/ngram.hpp\tHEADS_PER_NGRAM\tinclude/baloon/ple_ngram_kernels.hpp\tHEADS_PER_NGRAM\n")
+	if got := r.recheckOn(tree); len(got) != 1 || !strings.Contains(r.plan.Reopen[unit.ID].Text, "NGRAM_SIZE") {
+		t.Fatalf("a missing line was not found: %v %+v", got, r.plan.Reopen[unit.ID])
+	}
+}
