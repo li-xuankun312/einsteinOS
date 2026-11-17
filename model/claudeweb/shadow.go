@@ -1039,6 +1039,30 @@ func (s *ShadowExecutor) runDir() string {
 	return s.WorkDir
 }
 
+// kernelStateDirs are where the kernel keeps its own state on this machine, as a command may
+// name them: ~/.einsteinos (the request window, the conversation registry — main.go), and
+// ~/.einsteinOS (the reference cursor, the launch probe), and the directories the
+// EINSTEINOS_API_WINDOW and EINSTEINOS_CONV_REGISTRY files are put in instead. 11/17 09:50:59
+// "cat /root/.einsteinos/baloon_u77b_official" and 10:21:46 "find /root/.einsteinos
+// /root/.einsteinOS -type f" ran here.
+func kernelStateDirs() []string {
+	var out []string
+	for _, name := range []string{".einsteinos", ".einsteinOS"} {
+		out = append(out, "~/"+name, "$HOME/"+name, "${HOME}/"+name)
+		if home, err := os.UserHomeDir(); err == nil && home != "" && home != "/" {
+			out = append(out, filepath.Join(home, name))
+		}
+	}
+	for _, env := range []string{"EINSTEINOS_API_WINDOW", "EINSTEINOS_CONV_REGISTRY"} {
+		if p := os.Getenv(env); p != "" {
+			if d := filepath.Dir(p); d != "/" && d != "." {
+				out = append(out, d)
+			}
+		}
+	}
+	return out
+}
+
 // touchesKernel: the kernel's place a command names, or "".
 func touchesKernel(command, workDir string) string {
 	places := kernelPlaces
@@ -1050,6 +1074,7 @@ func touchesKernel(command, workDir string) string {
 			places = append(places, root)
 		}
 	}
+	places = append(places, kernelStateDirs()...)
 	for _, p := range places {
 		if strings.Contains(command, p) {
 			return p

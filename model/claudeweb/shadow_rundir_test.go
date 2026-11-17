@@ -2,6 +2,7 @@ package claudeweb
 
 import (
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 
@@ -66,4 +67,35 @@ func TestEinsteinOSsTreeIsAKernelPlaceWhateverTheWorkingDirectory(t *testing.T) 
 func jsonCommand(cmd string) string {
 	b, _ := json.Marshal(map[string]string{"command": cmd})
 	return string(b)
+}
+
+// 11/17 09:50:59 and 10:21:46: commands that read the kernel's own state ran here. The
+// directories it keeps state in are kernel places; a unit's .einsteinOS in its mirror is not.
+func TestTheKernelsStateDirectoriesAreKernelPlaces(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "/" {
+		t.Skip("no home")
+	}
+	for _, cmd := range []string{
+		"cat " + home + "/.einsteinos/baloon_u77b_official 2>/dev/null | head -40",
+		"find " + home + "/.einsteinos " + home + "/.einsteinOS 2>/dev/null -type f | head -20",
+		"cat ~/.einsteinos/conv_registry.json",
+		"echo '{}' > $HOME/.einsteinOS/cursor.json",
+	} {
+		if what := touchesKernel(cmd, "/home/claude"); what == "" {
+			t.Fatalf("not a kernel place: %q", cmd)
+		}
+	}
+	t.Setenv("EINSTEINOS_CONV_REGISTRY", "/srv/state/conv_registry.json")
+	if touchesKernel("cat /srv/state/conv_registry.json", "/home/claude") == "" {
+		t.Fatal("the registry's directory set by EINSTEINOS_CONV_REGISTRY is not a kernel place")
+	}
+	for _, cmd := range []string{
+		"cat /home/claude/baloon/.einsteinOS/port/u6561d2f27c.tsv",
+		"ls /home/claude/baloon/.einsteinOS/verify/",
+	} {
+		if what := touchesKernel(cmd, "/home/claude"); what != "" {
+			t.Fatalf("a unit's own .einsteinOS taken for the kernel's (%s): %q", what, cmd)
+		}
+	}
 }
