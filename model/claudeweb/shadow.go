@@ -65,7 +65,7 @@ func (s *ShadowExecutor) execute(toolName string, inputJSON string) string {
 
 	for _, driver := range s.drivers {
 		if driver.Match(toolName) {
-			return driver.Execute(toolName, inputJSON, s.WorkDir)
+			return driver.Execute(toolName, inputJSON, s.runDir())
 		}
 	}
 
@@ -148,7 +148,7 @@ func (s *ShadowExecutor) execute(toolName string, inputJSON string) string {
 		// couldn't safely parse the command — run the raw curl, bounded and killable
 		log.Printf("[shadow] axle: using curl fallback (extraction failed): %s",
 			truncateCmd(redactAxle(strings.Join(strings.Fields(command), " ")), 300))
-		result := axleExecWithRetryCurl(command, s.WorkDir)
+		result := axleExecWithRetryCurl(command, s.runDir())
 		// axleExecWithRetryCurl never returns "" on exhaustion — it returns a
 		// synthetic explanatory message (axleCurlExhaustedPrefix) so the child sees
 		// WHY nothing came back, instead of an empty string making the remote
@@ -178,14 +178,14 @@ func (s *ShadowExecutor) execute(toolName string, inputJSON string) string {
 		// the sandbox's output stands, but the local machine keeps up with what the
 		// child cloned (kernel/git_twin.go): a clone is mirrored once, shallow, with
 		// the kernel's own credentials; the child's token is never used.
-		kernel.GitTwinSync(command, s.WorkDir)
+		kernel.GitTwinSync(command, s.runDir())
 		if gitCommandWritesFiles(command) {
 			// 11/03 21:37:38 unit 11 wrote its build.sh and test.sh in a command that also ran
 			// git: the whole command was skipped here, the files never reached this machine,
 			// and the kernel's verification found compile=missing. Such a command now runs
 			// here with git's network and remote commands as no-ops (gitShim), so the files
 			// it writes arrive; the sandbox's output still stands.
-			if pid, err := kernel.ForkExec(noPush+gitShim+command, s.WorkDir); err == nil {
+			if pid, err := kernel.ForkExec(noPush+gitShim+command, s.runDir()); err == nil {
 				_, code, _ := kernel.Wait(pid)
 				log.Printf("[shadow] git command that also writes files: ran here with git clone/fetch/push/pull as no-ops (exit %d); the sandbox's output stands", code)
 			}
@@ -224,7 +224,7 @@ func (s *ShadowExecutor) execute(toolName string, inputJSON string) string {
 		return ""
 	}
 
-	pid, err := kernel.ForkExec(noPush+command, s.WorkDir)
+	pid, err := kernel.ForkExec(noPush+command, s.runDir())
 	if err != nil {
 		return fmt.Sprintf("[pid -1] fork: %v", err)
 	}
@@ -1016,6 +1016,26 @@ var kernelPlaces = []string{".ssh", "bash_history", ".git-credentials", ".netrc"
 // and 09:34 "env | grep -i \"gh_\\|github_\\|git_token\\|access_tok…\"" ran here (268 and 793
 // bytes of this machine's environment). env running a command (env X=1 cmd) is not one.
 var envDumpRe = regexp.MustCompile("(?m)(^|[|&;(`])\\s*(printenv\\b|env\\s*($|[|>;&)]))")
+
+// sandboxHome is where a conversation's commands run when the configured working directory
+// is einsteinOS's own: the sandbox's home, the directory the mirrors are cloned into.
+var sandboxHome = "/home/claude"
+
+// runDir is the directory a conversation's commands run from here: the configured working
+// directory, unless it lies in einsteinOS's source tree — the default, the directory the
+// kernel was started from — where every relative path of a command is einsteinOS itself.
+// 11/17 10:21:37–10:22:01 dev_planner (03223912) ran "cat /home/adk-go/etc/einstein",
+// "ls /home/adk-go/kernel/testdata/u617/" and "ls /home/adk-go/" here (pids 65–78): the
+// working directory was /home/adk-go, and the tree that holds it was not a kernel place.
+func (s *ShadowExecutor) runDir() string {
+	for _, root := range einsteinOSRoots() {
+		if s.WorkDir == root || strings.HasPrefix(s.WorkDir, root+"/") {
+			_ = os.MkdirAll(sandboxHome, 0o755)
+			return sandboxHome
+		}
+	}
+	return s.WorkDir
+}
 
 // touchesKernel: the kernel's place a command names, or "".
 func touchesKernel(command, workDir string) string {
