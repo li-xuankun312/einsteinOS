@@ -853,6 +853,12 @@ func axleExecWithRetryCurl(command string, workDir string) string {
 			case trimmed == "":
 				log.Printf("[shadow] axle-curl %s %d/%d: network-looking failure (exit %d, took %s)",
 					r.name, attempt, r.tries, run.ExitCode, run.Elapsed.Round(time.Second))
+			case (strings.HasPrefix(trimmed, "<!DOCTYPE") || strings.HasPrefix(trimmed, "<html")) && !strings.Contains(command, "/api/"):
+				// a page, asked for as a page: Axle's answer to it is HTML, and the first one is
+				// the answer — 11/17 11:28:09 review_conv's "curl -s https://axle.axiommath.ai/"
+				// was run 30 times as "garbage" and the conversation was told the network failed
+				log.Printf("[shadow] axle-curl %s %d/%d: a page (%d bytes), not an API request — returned as it came", r.name, attempt, r.tries, len(run.Stdout))
+				return fmt.Sprintf("[pid 0 exit=0] %s", run.Stdout)
 			case strings.HasPrefix(trimmed, "Usage: curl") || strings.HasPrefix(trimmed, "<!DOCTYPE") || strings.HasPrefix(trimmed, "<html"):
 				log.Printf("[shadow] axle-curl %s %d/%d: garbage (%d bytes)", r.name, attempt, r.tries, len(run.Stdout))
 			default:
