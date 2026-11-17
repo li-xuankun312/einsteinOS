@@ -1,6 +1,7 @@
 package claudeweb
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -34,4 +35,35 @@ func TestCommandsDoNotRunInsideEinsteinOSsOwnTree(t *testing.T) {
 	if d := (&ShadowExecutor{WorkDir: other}).runDir(); d != other {
 		t.Fatalf("%s moved to %s", other, d)
 	}
+}
+
+// The commands of 11/17 10:21:37–10:22:01 (dev_planner, pids 65, 66, 76, 77) ran here with the
+// working directory at /home/adk-go. einsteinOS's tree is a kernel place for them.
+func TestEinsteinOSsTreeIsAKernelPlaceWhateverTheWorkingDirectory(t *testing.T) {
+	kernelInitOnce.Do(kernel.Init)
+	roots := einsteinOSRoots()
+	if len(roots) == 0 {
+		t.Skip("not run from inside einsteinOS's tree")
+	}
+	root := roots[0]
+	home := t.TempDir()
+	old := sandboxHome
+	sandboxHome = home
+	defer func() { sandboxHome = old }()
+	s := &ShadowExecutor{WorkDir: root, Enabled: true}
+	for _, cmd := range []string{
+		"cat " + root + "/etc/einstein 2>/dev/null; echo \"---EINSTEIN_ETC---\"",
+		"ls " + root + "/kernel/testdata/u617/ 2>/dev/null",
+		"find " + root + " -name \"*.lean\" 2>/dev/null | head -20",
+		"ls " + root + "/ 2>/dev/null; ls " + root + "/kernel/ 2>/dev/null | head -10",
+	} {
+		if out := s.Execute("bash_tool", jsonCommand(cmd)); out != "" {
+			t.Fatalf("ran here: %q\n→ %q", cmd, out)
+		}
+	}
+}
+
+func jsonCommand(cmd string) string {
+	b, _ := json.Marshal(map[string]string{"command": cmd})
+	return string(b)
 }

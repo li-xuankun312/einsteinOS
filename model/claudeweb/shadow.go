@@ -126,7 +126,9 @@ func (s *ShadowExecutor) execute(toolName string, inputJSON string) string {
 	// the kernel's credentials and its own directories are not a conversation's to read
 	// here: 11/13 04:50–05:39 a dev conversation read ~/.ssh/einsteinos_deploy, the bash
 	// history and env, reset the remote of the kernel's twin and walked einsteinOS's source.
-	if what := touchesKernel(command, s.WorkDir); what != "" {
+	// measured against the directory the command runs from: einsteinOS's tree was left out of
+	// the kernel's places whenever the configured working directory lay in it (runDir)
+	if what := touchesKernel(command, s.runDir()); what != "" {
 		log.Printf("[shadow] not run here: it touches %s (the sandbox's result stands)", what)
 		return ""
 	}
