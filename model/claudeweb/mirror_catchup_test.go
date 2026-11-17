@@ -2,6 +2,7 @@ package claudeweb
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -113,5 +114,48 @@ func TestTheToolsTheStreamMissedAreThoseAfterTheLastOneThisMachineSaw(t *testing
 	// a ledger that knows none: all of them
 	if m := toolsTheStreamMissed(all, newToolLedger()); len(m) != len(all) {
 		t.Fatalf("%d of %d with an empty ledger", len(m), len(all))
+	}
+}
+
+func TestMirrorCatchUpRunsWhatTheStreamMissedThroughTheConversationsLedger(t *testing.T) {
+	const conv = "157e4fa7-83b1-43a9-a5d8-e0261be1aa11"
+	l := newToolLedger()
+	for _, id := range round9Tools {
+		l.record(id, "[pid] exit=0")
+		l.markDelivered(id)
+	}
+	var ran []string
+	raw := download157e4fa7(t)
+	keepConvMirror(conv, &convMirror{
+		ledger:   l,
+		exec:     func(name, input string) string { ran = append(ran, input); return "[pid] exit=0" },
+		download: func() ([]byte, error) { return raw, nil },
+	})
+	defer func() { convMirrorsMu.Lock(); delete(convMirrors, conv); convMirrorsMu.Unlock() }()
+
+	got, err := MirrorCatchUp(conv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != len(round10Tools) || len(ran) != len(round10Tools) {
+		t.Fatalf("ran %d (%v), returned %d — want the %d calls of round 10", len(ran), ran, len(got), len(round10Tools))
+	}
+	for i, id := range round10Tools {
+		if !strings.Contains(ran[i], id) {
+			t.Fatalf("run %d was %s, want the call %s (in the remote's order)", i, ran[i], id)
+		}
+		if !l.knows(id) {
+			t.Fatalf("%s ran here but the ledger does not have it", id)
+		}
+	}
+
+	// a second catch-up runs nothing: the ledger has them now
+	ran = nil
+	if got, err := MirrorCatchUp(conv); err != nil || len(got) != 0 || len(ran) != 0 {
+		t.Fatalf("second catch-up: %d returned, %d run, err %v", len(got), len(ran), err)
+	}
+
+	if _, err := MirrorCatchUp("not-a-conversation-of-this-process"); err == nil {
+		t.Fatal("a conversation this process did not run was caught up without an error")
 	}
 }

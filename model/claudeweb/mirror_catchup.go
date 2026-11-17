@@ -12,6 +12,7 @@ package claudeweb
 import (
 	"encoding/json"
 	"fmt"
+	"sync"
 )
 
 // conversationToolUses reads every tool_use block of a downloaded conversation, in the order
@@ -75,4 +76,53 @@ func toolsTheStreamMissed(all []RecoveredTool, l *toolLedger) []RecoveredTool {
 		}
 	}
 	return out
+}
+
+// convMirror is what bringing a conversation's mirror up to its remote needs once the loop that
+// ran the conversation has ended: the loop's ledger, how this machine runs a tool call for this
+// conversation, and how to download it.
+type convMirror struct {
+	ledger   *toolLedger
+	exec     func(name, input string) string
+	download func() ([]byte, error)
+}
+
+var (
+	convMirrorsMu sync.Mutex
+	convMirrors   = map[string]*convMirror{}
+)
+
+// keepConvMirror keeps a conversation's ledger, executor and download past its loop.
+func keepConvMirror(convID string, cm *convMirror) {
+	if convID == "" || cm == nil {
+		return
+	}
+	convMirrorsMu.Lock()
+	convMirrors[convID] = cm
+	convMirrorsMu.Unlock()
+}
+
+// MirrorCatchUp downloads convID and runs on this machine, in order, the tool calls the
+// stream did not carry — through recoveredResults and the conversation's own ledger, as the
+// recovery of a broken round with tools does, so nothing is run twice. It returns the calls
+// it ran. Nothing goes back to the remote: its round is over, and its calls ran normally there;
+// what was missing is this machine's copy of them.
+func MirrorCatchUp(convID string) ([]RecoveredTool, error) {
+	convMirrorsMu.Lock()
+	cm := convMirrors[convID]
+	convMirrorsMu.Unlock()
+	if cm == nil {
+		return nil, fmt.Errorf("conversation %s was not run by this process", truncate(convID, 8))
+	}
+	raw, err := cm.download()
+	if err != nil {
+		return nil, fmt.Errorf("download: %w", err)
+	}
+	all, err := conversationToolUses(raw)
+	if err != nil {
+		return nil, err
+	}
+	missed := toolsTheStreamMissed(all, cm.ledger)
+	recoveredResults(cm.ledger, missed, cm.exec)
+	return missed, nil
 }

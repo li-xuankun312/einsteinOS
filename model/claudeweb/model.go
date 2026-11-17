@@ -602,6 +602,14 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 
 	isChild := len(opts) > 0 && opts[0]
 	st := &loopState{convID: convID, isChild: isChild, ledger: newToolLedger()}
+	// the ledger, this machine's executor and the download outlive the loop: when the stream
+	// stops carrying a round the remote goes on with, the kernel brings the mirror up to it
+	// after the loop has ended (mirror_catchup.go)
+	keepConvMirror(convID, &convMirror{
+		ledger:   st.ledger,
+		exec:     func(name, input string) string { return m.shadowExecute(convID, name, input) },
+		download: func() ([]byte, error) { return m.client.DownloadConversationEventual(convID) },
+	})
 
 	// d2aaf709 → termination conditions: role determines lifecycle via
 	// composable TerminationCondition, not hardcoded round counts.
