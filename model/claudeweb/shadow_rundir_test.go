@@ -99,3 +99,24 @@ func TestTheKernelsStateDirectoriesAreKernelPlaces(t *testing.T) {
 		}
 	}
 }
+
+// 11/17 10:19:37 "cat /tmp/einsteinos_diag/einsteinOS_diag_4330757e.json" ran here; 11/15
+// dev_unit_33 searched the kernel's verification trees. A conversation's own /tmp files are not
+// the kernel's.
+func TestTheKernelsTemporaryDirectoriesAreKernelPlaces(t *testing.T) {
+	tmp := strings.TrimSuffix(os.TempDir(), "/")
+	for _, cmd := range []string{
+		"cat " + tmp + "/einsteinos_diag/einsteinOS_diag_4330757e.json",
+		"find " + tmp + "/einsteinos_verify_284818074 -name locate.py",
+		"ls " + tmp + "/einsteinos-e2e-launch-1.log",
+	} {
+		if touchesKernel(cmd, "/home/claude") == "" {
+			t.Fatalf("not a kernel place: %q", cmd)
+		}
+	}
+	for _, cmd := range []string{"cat " + tmp + "/FULLFIX.py", "ls " + tmp + "/wip_uc81_work/lean"} {
+		if what := touchesKernel(cmd, "/home/claude"); what != "" {
+			t.Fatalf("a conversation's own temp file taken for the kernel's (%s): %q", what, cmd)
+		}
+	}
+}

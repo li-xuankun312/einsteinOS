@@ -1053,6 +1053,12 @@ func kernelStateDirs() []string {
 			out = append(out, filepath.Join(home, name))
 		}
 	}
+	// the kernel's temporary directories (the verification trees, the diag records, the eval
+	// and recheck checkouts) are all named einsteinos_* or einsteinos-* in the temp dir:
+	// 11/17 10:19:37 and 10:21:22 dev_planner read /tmp/einsteinos_diag/einsteinOS_diag_4330757e.json
+	// here, and 11/15 16:05–20:06 dev_unit_33 searched /tmp/einsteinos_verify_*
+	tmp := strings.TrimSuffix(os.TempDir(), "/")
+	out = append(out, tmp+"/einsteinos_", tmp+"/einsteinos-")
 	for _, env := range []string{"EINSTEINOS_API_WINDOW", "EINSTEINOS_CONV_REGISTRY"} {
 		if p := os.Getenv(env); p != "" {
 			if d := filepath.Dir(p); d != "/" && d != "." {
