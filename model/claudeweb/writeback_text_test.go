@@ -8,10 +8,10 @@ import (
 
 func TestAWritebackWithNoResultsIsJustContinue(t *testing.T) {
 	// a round's writeback is the shell with that round's results inserted; none, and it says so
-	if got := writebackText("dev_unit_1", nil); !strings.HasPrefix(got, "这些问题的每一句话") || !strings.Contains(got, writebackNoneWhat) {
+	if got := writebackText("dev_unit_1", nil, "43"); !strings.HasPrefix(got, "这些问题的每一句话") || !strings.Contains(got, writebackNoneWhat) {
 		t.Fatalf("%q", got)
 	}
-	got := writebackText("dev_unit_1", []ToolResult{{ToolUseID: "toolu_1", Content: "exit=0"}})
+	got := writebackText("dev_unit_1", []ToolResult{{ToolUseID: "toolu_1", Content: "exit=0"}}, "43")
 	if !strings.HasPrefix(got, "这些问题的每一句话") || !strings.Contains(got, "内容如下评价：[toolu_1] exit=0") {
 		t.Fatalf("%q", got)
 	}
@@ -131,9 +131,25 @@ func TestALocalExitThatDiffersFromTheSandboxIsSaid(t *testing.T) {
 // "未收到评价正文，本轮无代码修改、无 commit".
 func TestARoundOfAConversationThatWritesNoCodeIsPlainFacts(t *testing.T) {
 	for _, role := range []string{"review_conv", "dev_planner", "theory_planner", "spawn_judge", ""} {
-		got := writebackText(role, []ToolResult{{ToolUseID: "toolu_1", Content: "exit=0"}})
+		got := writebackText(role, []ToolResult{{ToolUseID: "toolu_1", Content: "exit=0"}}, "43")
 		if strings.Contains(got, "这些问题的每一句话") || !strings.Contains(got, "[toolu_1] exit=0") {
 			t.Fatalf("%s: %q", role, got)
 		}
+	}
+}
+
+// 11/17 08aaed5a: "这一轮有 2 个在这台机器上执行完了 … 这次估计要开2个commit推到这台机器" — the
+// round's 2 results were put where the shell gives the estimate of the work, and the
+// conversation answered "the user expects 2 more commits". The round's count is what
+// happened; the estimate stays the conversation's own (43 definitions for u77baf5bde3).
+func TestAWritebackKeepsTheConversationsEstimateNotItsResultCount(t *testing.T) {
+	two := []ToolResult{{ToolUseID: "toolu_01XWKCrEiTWuSLfwsQttxETB", Content: "[pid 437 exit=0] ok"}, {ToolUseID: "toolu_01L5HoravDEmCWgLBxxmT8H4", Content: "[pid 438 exit=0] ok"}}
+	got := writebackText("dev_fix_2", two, "43")
+	if !strings.Contains(got, "这一轮有 2 个在这台机器上执行完了") || !strings.Contains(got, "这次估计要开43个commit") || strings.Contains(got, "这次估计要开2个") {
+		t.Fatalf("%q", got)
+	}
+	// a broken round (11/17 06:41:47 sent "这次估计要开0个commit")
+	if got := roundMessage("dev_unit_8", sseBrokeWhat, "", "43"); !strings.Contains(got, "这次估计要开43个commit") {
+		t.Fatalf("%q", got)
 	}
 }

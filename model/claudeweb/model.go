@@ -295,7 +295,7 @@ func ownVerifyScripts(inputJSON string) (build, test bool) {
 	return build, test
 }
 
-func writebackText(role string, results []ToolResult) string {
+func writebackText(role string, results []ToolResult, commits string) string {
 	what := writebackNoneWhat
 	var b strings.Builder
 	if len(results) > 0 {
@@ -304,14 +304,17 @@ func writebackText(role string, results []ToolResult) string {
 			b.WriteString(fmt.Sprintf("[%s] %s\n\n", tr.ToolUseID, tr.Content))
 		}
 	}
-	return roundMessage(role, what, b.String(), len(results))
+	return roundMessage(role, what, b.String(), commits)
 }
 
 // roundMessage: what the kernel sends into a running conversation — the shell for one whose
-// work is code (kernel.RoleWritesCode), the plain facts for the others.
-func roundMessage(role, what, content string, n int) string {
+// work is code (kernel.RoleWritesCode), the plain facts for the others. commits is the
+// shell's estimate of the work, the one the conversation was started with
+// (kernel.BaguCommitsOf); the round's own counts are what happened (%[2]s), never the
+// estimate: 11/17 08aaed5a read "这次估计要开2个commit" (2 results) as 2 commits wanted.
+func roundMessage(role, what, content, commits string) string {
 	if kernel.RoleWritesCode(role) {
-		return kernel.BaguFor(kernel.WorkFor(role), writebackWhere, what, content, fmt.Sprint(n), writebackTo)
+		return kernel.BaguFor(kernel.WorkFor(role), writebackWhere, what, content, commits, writebackTo)
 	}
 	return kernel.Plain(writebackWhere, what, content)
 }
@@ -575,6 +578,7 @@ func exitCodeStr(code int) string {
 
 type loopState struct {
 	rounds               int
+	commits              string // the shell's estimate the conversation was started with (roundMessage)
 	totalTools           int
 	consecutiveContinues int
 	usedServices         bool
@@ -648,6 +652,13 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 	originalPrompt := webReq.Prompt
 	if strings.HasPrefix(originalPrompt, localExecPrefix) {
 		originalPrompt = originalPrompt[len(localExecPrefix):]
+	}
+	// the shell's estimate of the work, as the conversation was first told it: every message
+	// sent into the conversation keeps it (roundMessage)
+	if c, ok := kernel.BaguCommitsOf(originalPrompt); ok {
+		st.commits = c
+	} else {
+		st.commits = "1"
 	}
 
 	doExit := func(code int, text string) {
@@ -909,7 +920,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 			if st.consecutiveContinues <= 3 {
 				log.Printf("claudeweb: empty stop_reason round %d (no tools), sending Continue (%d/3)",
 					st.rounds, st.consecutiveContinues)
-				webReq.Prompt = roundMessage(childRole, sseBrokeWhat, "", 0)
+				webReq.Prompt = roundMessage(childRole, sseBrokeWhat, "", st.commits)
 				webReq.CreateConversationParams = nil
 				continue
 			}
@@ -928,7 +939,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 			if st.sseRecovery {
 				st.sseRecovery = false
 				log.Printf("claudeweb: SSE recovery round — skipping decideNext, sending Continue")
-				webReq.Prompt = roundMessage(childRole, sseLostWhat, "", 0)
+				webReq.Prompt = roundMessage(childRole, sseLostWhat, "", st.commits)
 				webReq.CreateConversationParams = nil
 				continue
 			}
@@ -1264,7 +1275,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 					return m.shadowExecute(convID, name, input)
 				})
 				var localDiff strings.Builder
-				localDiff.WriteString(writebackText(childRole, shapeToolResults(rr)))
+				localDiff.WriteString(writebackText(childRole, shapeToolResults(rr), st.commits))
 				if len(rr) > 0 {
 					localDiff.WriteString(kernel.WritebackNote(childRole, convID))
 				}
@@ -1297,7 +1308,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 					}
 				}
 				st.sseRecovery = true
-				webReq.Prompt = roundMessage(childRole, sseLostWhat, "", 0)
+				webReq.Prompt = roundMessage(childRole, sseLostWhat, "", st.commits)
 				webReq.CreateConversationParams = nil
 			}
 			continue
@@ -1323,7 +1334,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 		}
 
 		var localDiff strings.Builder
-		localDiff.WriteString(writebackText(childRole, toolResults))
+		localDiff.WriteString(writebackText(childRole, toolResults, st.commits))
 		if preRan && !preOK {
 			localDiff.WriteString(preReport)
 		}
