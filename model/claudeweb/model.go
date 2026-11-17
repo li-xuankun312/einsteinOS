@@ -391,6 +391,7 @@ var (
 // kernel, on behalf of the conversation that issued them, and the answer goes
 // back to the child through the same local-result channel as any other command.
 func (m *Model) shadowExecute(convID, toolName, inputJSON string) string {
+	noteConvTmp(convID, inputJSON)
 	if cmd, ok := kernel.EinsteinCommandFrom(toolName, inputJSON); ok {
 		out := kernel.HandleEinsteinCommand(convID, cmd)
 		log.Printf("[kernel-cmd] %s: %s → %s", truncate(convID, 8), truncateCmd(cmd, 100), truncate(out, 160))
@@ -609,6 +610,9 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 	// the ledger, this machine's executor and the download outlive the loop: when the stream
 	// stops carrying a round the remote goes on with, the kernel brings the mirror up to it
 	// after the loop has ended (mirror_catchup.go)
+	// what the conversation writes in this machine's /tmp ends with it, as its sandbox's does
+	tmpBefore := tmpEntries()
+	defer clearConvTmp(convID, tmpBefore)
 	keepConvMirror(convID, &convMirror{
 		ledger:   st.ledger,
 		exec:     func(name, input string) string { return m.shadowExecute(convID, name, input) },
