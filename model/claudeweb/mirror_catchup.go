@@ -46,3 +46,33 @@ func conversationToolUses(raw []byte) ([]RecoveredTool, error) {
 	}
 	return out, nil
 }
+
+// knows: this machine has seen the tool call — it ran it (cached, even as "" when shadow
+// skipped it) or its result went back to the remote.
+func (l *toolLedger) knows(id string) bool {
+	if _, ok := l.cached(id); ok {
+		return true
+	}
+	return l.wasDelivered(id)
+}
+
+// toolsTheStreamMissed are the conversation's tool calls after the last one this machine has
+// seen, in order: what the remote ran after the stream stopped carrying its round. Calls
+// before that last one are the past this machine already went through — one that the ledger
+// lacks among them was left to the remote on purpose (a broken round's reads), not missed.
+// A ledger that knows none of them missed them all.
+func toolsTheStreamMissed(all []RecoveredTool, l *toolLedger) []RecoveredTool {
+	last := -1
+	for i, t := range all {
+		if l.knows(t.ID) {
+			last = i
+		}
+	}
+	var out []RecoveredTool
+	for _, t := range all[last+1:] {
+		if !l.knows(t.ID) {
+			out = append(out, t)
+		}
+	}
+	return out
+}

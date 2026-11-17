@@ -72,3 +72,46 @@ func TestConversationToolUsesAreReadInMessageOrder(t *testing.T) {
 		t.Fatal("a download that is not JSON was read without an error")
 	}
 }
+
+func TestTheToolsTheStreamMissedAreThoseAfterTheLastOneThisMachineSaw(t *testing.T) {
+	all, err := conversationToolUses(download157e4fa7(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 06:37:53 "writeback 5 results + Continue": round 9 ran here and its results went back
+	l := newToolLedger()
+	for _, id := range round9Tools {
+		l.record(id, "[pid] exit=0")
+		l.markDelivered(id)
+	}
+	missed := toolsTheStreamMissed(all, l)
+	if len(missed) != len(round10Tools) {
+		t.Fatalf("%d missed, want the %d of round 10: %+v", len(missed), len(round10Tools), missed)
+	}
+	for i, id := range round10Tools {
+		if missed[i].ID != id {
+			t.Fatalf("missed[%d] = %s, want %s (in the order the remote ran them)", i, missed[i].ID, id)
+		}
+	}
+
+	// a conversation whose stream carried every call has missed none
+	for _, id := range round10Tools {
+		l.record(id, "x")
+	}
+	if m := toolsTheStreamMissed(all, l); len(m) != 0 {
+		t.Fatalf("every call was seen and %d are still called missed", len(m))
+	}
+
+	// a call before the last seen one that this machine lacks was not missed by the stream
+	l2 := newToolLedger()
+	l2.record(round9Tools[0], "x")
+	l2.record(round10Tools[5], "x")
+	if m := toolsTheStreamMissed(all, l2); len(m) != 0 {
+		t.Fatalf("calls before the last seen one were taken as missed: %+v", m)
+	}
+
+	// a ledger that knows none: all of them
+	if m := toolsTheStreamMissed(all, newToolLedger()); len(m) != len(all) {
+		t.Fatalf("%d of %d with an empty ledger", len(m), len(all))
+	}
+}
