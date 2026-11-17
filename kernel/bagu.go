@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -103,4 +104,29 @@ func RoleWritesCode(role string) bool {
 		}
 	}
 	return false
+}
+
+// baguCommitsRe reads %[4]s back out of a shell the kernel wrote: the text around it is cut
+// from baguFmt itself, so the pattern is the shell's own words.
+var baguCommitsRe = func() *regexp.Regexp {
+	i := strings.Index(baguFmt, "%[4]s")
+	pre := baguFmt[strings.LastIndex(baguFmt[:i], ", ")+len(", ") : i]
+	rest := baguFmt[i+len("%[4]s"):]
+	unit := rest[:strings.Index(rest, "%[7]s")]
+	after := rest[len(unit)+len("%[7]s") : strings.Index(rest, "%[5]s")]
+	by := regexp.QuoteMeta(WorkCode.By) + "|" + regexp.QuoteMeta(WorkProof.By)
+	return regexp.MustCompile(regexp.QuoteMeta(pre) + "(.+?)" + regexp.QuoteMeta(unit) + "(?:" + by + ")" + regexp.QuoteMeta(after))
+}()
+
+// BaguCommitsOf is the estimate %[4]s of the first shell in prompt — how many commits the
+// conversation was told its work comes to (a dev unit: the definitions it ports). The
+// messages sent into a running conversation keep that estimate: 11/17 08aaed5a's writebacks
+// carried the round's result count there ("这次估计要开2个commit"), and the conversation
+// answered "the user expects 2 more commits" and made them.
+func BaguCommitsOf(prompt string) (string, bool) {
+	m := baguCommitsRe.FindStringSubmatch(prompt)
+	if m == nil {
+		return "", false
+	}
+	return m[1], true
 }
