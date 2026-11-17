@@ -1204,7 +1204,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 						if ran, ok, report := kernel.PreVerify(childRole); ran && !ok {
 							// the kernel's verification failed: the done line does not end it
 							log.Printf("claudeweb: done line in round %d not accepted — the kernel's verification failed; sent back", st.rounds)
-							webReq.Prompt = report
+							webReq.Prompt = kernel.BaguKeepCommits(report, st.commits)
 							webReq.CreateConversationParams = nil
 							continue
 						}
@@ -1336,7 +1336,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 		var localDiff strings.Builder
 		localDiff.WriteString(writebackText(childRole, toolResults, st.commits))
 		if preRan && !preOK {
-			localDiff.WriteString(preReport)
+			localDiff.WriteString(kernel.BaguKeepCommits(preReport, st.commits))
 		}
 		// measured facts the kernel adds to this writeback (theory: the sorry state of
 		// the files, so a chunk learns it with the Axle answer, not in an extra round)

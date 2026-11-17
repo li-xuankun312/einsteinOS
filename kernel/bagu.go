@@ -130,3 +130,13 @@ func BaguCommitsOf(prompt string) (string, bool) {
 	}
 	return m[1], true
 }
+
+// BaguKeepCommits puts commits in place of the estimate of every shell in text — for a shell
+// built away from the conversation it is sent into (the kernel's verification report says
+// "1"), so that every message the conversation reads gives the one estimate it was started with.
+func BaguKeepCommits(text, commits string) string {
+	return baguCommitsRe.ReplaceAllStringFunc(text, func(m string) string {
+		sub := baguCommitsRe.FindStringSubmatchIndex(m)
+		return m[:sub[2]] + commits + m[sub[3]:]
+	})
+}
