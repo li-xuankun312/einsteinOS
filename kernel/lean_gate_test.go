@@ -60,3 +60,58 @@ func TestALeanModuleThatDoesNotCheckFailsTheUnit(t *testing.T) {
 		t.Fatalf("no Lean changed: %q", k)
 	}
 }
+
+// 11/17 09:08:45 dev_unit_8 (08aaed5a): four Lean files changed, the check stopped at the
+// first that failed (PrefillOrchestration.lean) and ServeEngine.lean was never sent to Axle.
+// Every changed file is checked and every failing one is named.
+func TestEveryChangedLeanFileIsCheckedAndEveryFailingOneNamed(t *testing.T) {
+	ws := t.TempDir()
+	for f, body := range map[string]string{
+		"lean/Baloon/ExpertCache.lean":          "theorem a : 1 = 1 := rfl\n",
+		"lean/Baloon/ExpertSource.lean":         "theorem b : 2 = 2 := rfl\n",
+		"lean/Baloon/PrefillOrchestration.lean": "theorem chunks_pos : 0 < min T n := by\n  split_ifs\n",
+		"lean/Baloon/ServeEngine.lean":          "theorem admit_sound : x := by\n  omega\n",
+	} {
+		os.MkdirAll(filepath.Dir(filepath.Join(ws, f)), 0o755)
+		os.WriteFile(filepath.Join(ws, f), []byte(body), 0o644)
+	}
+	var sent int
+	old := leanVerifyFn
+	defer func() { leanVerifyFn = old }()
+	leanVerifyFn = func(payload string) string {
+		sent++
+		switch {
+		case strings.Contains(payload, "split_ifs"):
+			return `{"okay":false,"lean_messages":{"errors":["-:29:24-29:40: error: Tactic split_ifs failed: no if-then-else conditions to split"]}}`
+		case strings.Contains(payload, "admit_sound"):
+			return `{"okay":false,"lean_messages":{"errors":["-:14:2-14:7: error: omega could not prove the goal"]}}`
+		}
+		return `{"okay":true,"lean_messages":{"errors":[]}}`
+	}
+	changed := []string{"lean/Baloon/ExpertCache.lean", "lean/Baloon/ExpertSource.lean", "lean/Baloon/PrefillOrchestration.lean", "lean/Baloon/ServeEngine.lean"}
+	k, txt := leanGate(ws, changed)
+	if k != "lean_unproved" || sent != 4 {
+		t.Fatalf("%q, %d of 4 files sent to Axle", k, sent)
+	}
+	for _, want := range []string{"PrefillOrchestration.lean does not check", "split_ifs", "ServeEngine.lean does not check", "omega could not prove"} {
+		if !strings.Contains(txt, want) {
+			t.Fatalf("%q missing from the gate text:\n%s", want, txt)
+		}
+	}
+	if strings.Contains(txt, "ExpertCache") || strings.Contains(txt, "ExpertSource") {
+		t.Fatalf("a file that checks is named:\n%s", txt)
+	}
+	// a file Axle could not answer on beside one that fails: the unit's failure is reported
+	leanVerifyFn = func(payload string) string {
+		if strings.Contains(payload, "admit_sound") {
+			return ""
+		}
+		if strings.Contains(payload, "split_ifs") {
+			return `{"okay":false,"lean_messages":{"errors":["e"]}}`
+		}
+		return `{"okay":true}`
+	}
+	if k, txt := leanGate(ws, changed); k != "lean_unproved" || !strings.Contains(txt, "PrefillOrchestration") {
+		t.Fatalf("%q %s", k, txt)
+	}
+}

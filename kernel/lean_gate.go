@@ -53,6 +53,10 @@ func leanGate(ws string, changed []string) (kind, text string) {
 		}
 	}
 	sort.Strings(files)
+	// every file is checked and every failure kept: 11/17 09:08:45 the check stopped at
+	// PrefillOrchestration.lean (the third of four) and ServeEngine.lean was not looked at, so
+	// dev_unit_8 learned of its files' errors one verification (2m40s) at a time
+	var failed, unchecked []string
 	for _, f := range files {
 		b, err := os.ReadFile(filepath.Join(ws, filepath.FromSlash(f)))
 		if err != nil {
@@ -60,7 +64,8 @@ func leanGate(ws string, changed []string) (kind, text string) {
 		}
 		text := string(b)
 		if ContainsSorry(text) {
-			return "lean_unproved", fmt.Sprintf(gateLeanSorryFmt, f)
+			failed = append(failed, fmt.Sprintf(gateLeanSorryFmt, f))
+			continue
 		}
 		statement := "theorem " + leanCheckName + " : True := sorry"
 		content := text + "\n\ntheorem " + leanCheckName + " : True := trivial\n"
@@ -76,10 +81,17 @@ func leanGate(ws string, changed []string) (kind, text string) {
 			if strings.TrimSpace(resp) != "" {
 				why = "Axle's answer was not a verification result: " + tailText(resp, 300)
 			}
-			return GateLeanUnchecked, fmt.Sprintf(gateLeanUncheckedFmt, f, why)
+			unchecked = append(unchecked, fmt.Sprintf(gateLeanUncheckedFmt, f, why))
 		case !ok:
-			return "lean_unproved", fmt.Sprintf(gateLeanUnprovedFmt, f, leanCheckEnvironment, msg)
+			failed = append(failed, fmt.Sprintf(gateLeanUnprovedFmt, f, leanCheckEnvironment, msg))
 		}
+	}
+	// what the unit wrote decides first; a file Axle could not answer on is the machine's
+	if len(failed) > 0 {
+		return "lean_unproved", strings.Join(failed, "\n")
+	}
+	if len(unchecked) > 0 {
+		return GateLeanUnchecked, strings.Join(unchecked, "\n")
 	}
 	return "", ""
 }
