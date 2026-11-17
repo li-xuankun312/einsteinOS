@@ -964,6 +964,7 @@ func devCollectLite(childPid int64, repo string) (string, map[string]string) {
 	}
 
 	// an SSE drop ends our wait while the remote may still be working
+	caughtUp := 0 // tool calls of the remote the mirror got only now; they are work done
 	if m := getMeta(childPid); m != nil && m.ConvID != "" {
 		for i := 0; i < 40; i++ {
 			busy, err := remoteBusy(m.ConvID)
@@ -974,6 +975,17 @@ func devCollectLite(childPid int64, repo string) (string, map[string]string) {
 			time.Sleep(devSettleSleep)
 		}
 		stdout = GetResult(childPid)
+		// the mirror is brought up to what the remote ran before anything judges it: calls the
+		// stream did not carry ran normally there and are run here now (mirror_catchup.go)
+		ran, err := mirrorCatchUp(m.ConvID)
+		switch {
+		case err != nil:
+			log.Printf("dev_collect: %s conversation %s: the mirror could not be brought up to the remote (%v)", repo, shortID(m.ConvID), err)
+		case len(ran) > 0:
+			log.Printf("dev_collect: %s conversation %s: the remote ran %d tool call(s) the stream did not carry; run here so the mirror holds them: %s",
+				repo, shortID(m.ConvID), len(ran), strings.Join(ran, " "))
+			caughtUp = len(ran)
+		}
 	}
 
 	apiErr := strings.Contains(stdout, "[API Error]") ||
@@ -984,7 +996,7 @@ func devCollectLite(childPid int64, repo string) (string, map[string]string) {
 	// 11/14 13:50 dev_unit_16 (f0e4c486) ended on 502s after 11 rounds, 151 tool calls and 7
 	// verifications; it was read as no response, primeMirror reset the mirror, and the next
 	// conversation (14:37) found no port map and no verify scripts and started from theory.md.
-	worked := status["files_written"] != ""
+	worked := status["files_written"] != "" || caughtUp > 0
 	if m := getMeta(childPid); m != nil && VerifySeen(m.ConvID) {
 		worked = true
 	}

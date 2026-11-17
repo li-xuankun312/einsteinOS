@@ -13,6 +13,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+
+	"google.golang.org/adk/v2/kernel"
 )
 
 // conversationToolUses reads every tool_use block of a downloaded conversation, in the order
@@ -125,4 +127,17 @@ func MirrorCatchUp(convID string) ([]RecoveredTool, error) {
 	missed := toolsTheStreamMissed(all, cm.ledger)
 	recoveredResults(cm.ledger, missed, cm.exec)
 	return missed, nil
+}
+
+// the kernel brings a conversation's mirror up to its remote after the conversation's loop has
+// ended (kernel/mirror_catchup.go); the calls are named by tool and id
+func init() {
+	kernel.SetMirrorCatchUpFn(func(convID string) ([]string, error) {
+		missed, err := MirrorCatchUp(convID)
+		var ran []string
+		for _, t := range missed {
+			ran = append(ran, t.Name+":"+t.ID)
+		}
+		return ran, err
+	})
 }
