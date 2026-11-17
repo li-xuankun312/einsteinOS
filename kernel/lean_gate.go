@@ -83,6 +83,11 @@ func leanGate(ws string, changed []string) (kind, text string) {
 			}
 			unchecked = append(unchecked, fmt.Sprintf(gateLeanUncheckedFmt, f, why))
 		case !ok:
+			// every error Axle answered, each on its own line: 11/17 dev_unit_8 was told only the
+			// first of a file's errors and found the next one at the next verification
+			if errs := AxleErrors(resp); len(errs) > 1 {
+				msg = strings.Join(errs, "\n")
+			}
 			failed = append(failed, fmt.Sprintf(gateLeanUnprovedFmt, f, leanCheckEnvironment, msg))
 		}
 	}

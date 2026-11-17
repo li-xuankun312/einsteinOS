@@ -115,3 +115,30 @@ func TestEveryChangedLeanFileIsCheckedAndEveryFailingOneNamed(t *testing.T) {
 		t.Fatalf("%q %s", k, txt)
 	}
 }
+
+// 11/17 dev_unit_8 (08aaed5a): ExpertSource.lean failed at 80:64 (unsolved goals), then at 83:2
+// (No goals to be solved), each found one verification after the other. Every error Axle
+// answers for a file is in the gate text.
+func TestEveryErrorAxleAnswersForAFileIsInTheGateText(t *testing.T) {
+	ws := t.TempDir()
+	f := "lean/Baloon/ExpertSource.lean"
+	os.MkdirAll(filepath.Dir(filepath.Join(ws, f)), 0o755)
+	os.WriteFile(filepath.Join(ws, f), []byte("theorem pcieShare_le : x := by\n  omega\n"), 0o644)
+	old := leanVerifyFn
+	defer func() { leanVerifyFn = old }()
+	leanVerifyFn = func(string) string {
+		return `{"okay":false,"lean_messages":{"errors":[` +
+			`"-:80:64-81:24: error: unsolved goals",` +
+			`"-:83:2-83:8: error: No goals to be solved",` +
+			`"-:72:29-72:58: error: Application type mismatch"]}}`
+	}
+	k, txt := leanGate(ws, []string{f})
+	if k != "lean_unproved" {
+		t.Fatalf("%q", k)
+	}
+	for _, want := range []string{"80:64-81:24: error: unsolved goals", "83:2-83:8: error: No goals to be solved", "72:29-72:58: error: Application type mismatch"} {
+		if !strings.Contains(txt, want) {
+			t.Fatalf("%q missing:\n%s", want, txt)
+		}
+	}
+}
