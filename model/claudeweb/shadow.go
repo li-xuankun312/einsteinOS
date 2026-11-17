@@ -593,6 +593,11 @@ var (
 	curlWordRe    = regexp.MustCompile(`\bcurl\b`)
 	sessionRedact = regexp.MustCompile(`provertools_session=[^;'"\s]+`)
 	csrfRedact    = regexp.MustCompile(`(?i)(x-browser-api-csrf:\s*)[^'"\s]+`)
+	// a cookie given whole, without its name: curl -b '<value>' / --cookie '<value>' or a
+	// "cookie:" header. 11/17 13:01:18 review_conv sent -b 'eyJicm93c2VyX2FwaV9jc3Jm…' and the
+	// log line printed it as it was
+	cookieArgRedact    = regexp.MustCompile(`(\s(?:-b|--cookie)\s+)('[^']*'|"[^"]*"|[^\s'"]+)`)
+	cookieHeaderRedact = regexp.MustCompile(`(?i)(cookie:\s*)[^'"\n]+`)
 )
 
 // axleScriptGuard: a command with no curl in it is a script (for example a loop
@@ -604,6 +609,8 @@ const axleScriptGuard = 10 * time.Minute
 // redactAxle removes the session cookie and csrf token before a command is logged.
 func redactAxle(cmd string) string {
 	cmd = sessionRedact.ReplaceAllString(cmd, "provertools_session=<redacted>")
+	cmd = cookieArgRedact.ReplaceAllString(cmd, "${1}<redacted>")
+	cmd = cookieHeaderRedact.ReplaceAllString(cmd, "${1}<redacted>")
 	return csrfRedact.ReplaceAllString(cmd, "${1}<redacted>")
 }
 
