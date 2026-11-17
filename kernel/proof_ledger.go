@@ -260,6 +260,65 @@ func firstMessage(v any) string {
 	return ""
 }
 
+// AxleErrors are every error of a verify_proof answer, in Axle's order: lean_messages.errors,
+// or tool_messages.errors when Lean gave none — each cut at 400 characters, none left out.
+// AxleVerdict keeps only the first: 11/17 dev_unit_8's verifications (08aaed5a) each told the
+// conversation one error, while Axle had answered every error of the file.
+func AxleErrors(response string) []string {
+	resp := strings.TrimSpace(response)
+	if strings.HasPrefix(resp, "[pid") {
+		if i := strings.Index(resp, "] "); i >= 0 {
+			resp = strings.TrimSpace(resp[i+2:])
+		}
+	}
+	var m map[string]any
+	if json.Unmarshal([]byte(resp), &m) != nil {
+		return nil
+	}
+	if ue, ok := m["user_error"].(string); ok && ue != "" {
+		return []string{proofTrunc(ue, 400)}
+	}
+	var out []string
+	for _, key := range []string{"lean_messages", "tool_messages"} {
+		if mm, ok := m[key].(map[string]any); ok {
+			out = allMessages(mm["errors"])
+		}
+		if len(out) > 0 {
+			break
+		}
+	}
+	for i := range out {
+		out[i] = proofTrunc(out[i], 400)
+	}
+	return out
+}
+
+// allMessages: every non-empty message of an Axle errors list (strings, or objects with a
+// message — the others as their JSON), in order.
+func allMessages(v any) []string {
+	arr, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	var out []string
+	for _, e := range arr {
+		switch t := e.(type) {
+		case string:
+			if strings.TrimSpace(t) != "" {
+				out = append(out, t)
+			}
+		case map[string]any:
+			if msg, ok := t["message"].(string); ok && msg != "" {
+				out = append(out, msg)
+				continue
+			}
+			b, _ := json.Marshal(t)
+			out = append(out, string(b))
+		}
+	}
+	return out
+}
+
 // AxleVerdict interprets a raw verify_proof response.
 //
 // ok=true only for an unambiguous success. usable=false means the response was
