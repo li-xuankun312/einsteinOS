@@ -64,3 +64,17 @@ func TouchesReferenceClone(input string) string {
 	}
 	return ""
 }
+
+// MaskReferenceText: s with every bound reference masked as a dev prompt masks it.
+func MaskReferenceText(s string) string {
+	refs := referenceRepos()
+	if len(refs) == 0 || s == "" {
+		return s
+	}
+	// the kernel's clone names the owner too ("ref_<owner>_<name>.git"): masked whole
+	for _, r := range refs {
+		owner, name, _ := strings.Cut(r, "/")
+		s = strings.ReplaceAll(s, fmt.Sprintf("ref_%s_%s.git", owner, name), "ref_reference.git")
+	}
+	return newRefMask(refMaskIdent, refs...).Replace(s)
+}

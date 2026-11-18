@@ -401,6 +401,16 @@ var (
 // kernel, on behalf of the conversation that issued them, and the answer goes
 // back to the child through the same local-result channel as any other command.
 func (m *Model) shadowExecute(convID, toolName, inputJSON string) string {
+	out := m.shadowExecuteRaw(convID, toolName, inputJSON)
+	// what this machine prints is shown to a conversation whose prompt is masked the way its
+	// prompt is: 11/18 a "ls /tmp" here names the reference's clone (/tmp/ref_<owner>_<name>.git)
+	if kernel.RoleSeesMasked(convRole(convID)) {
+		out = kernel.MaskReferenceText(out)
+	}
+	return out
+}
+
+func (m *Model) shadowExecuteRaw(convID, toolName, inputJSON string) string {
 	noteConvTmp(convID, inputJSON)
 	// a conversation not told the reference does not read the kernel's clone of it here
 	// (kernel/ref_mask_local.go)
