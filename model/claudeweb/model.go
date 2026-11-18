@@ -402,6 +402,12 @@ var (
 // back to the child through the same local-result channel as any other command.
 func (m *Model) shadowExecute(convID, toolName, inputJSON string) string {
 	noteConvTmp(convID, inputJSON)
+	// a conversation not told the reference does not read the kernel's clone of it here
+	// (kernel/ref_mask_local.go)
+	if kernel.RoleSeesMasked(convRole(convID)) && kernel.TouchesReferenceClone(inputJSON) != "" {
+		log.Printf("[shadow] not run here: it touches the reference's clone (the sandbox's result stands)")
+		return ""
+	}
 	if cmd, ok := kernel.EinsteinCommandFrom(toolName, inputJSON); ok {
 		out := kernel.HandleEinsteinCommand(convID, cmd)
 		log.Printf("[kernel-cmd] %s: %s → %s", truncate(convID, 8), truncateCmd(cmd, 100), truncate(out, 160))
@@ -433,6 +439,16 @@ func (m *Model) shadowExecute(convID, toolName, inputJSON string) string {
 		return out
 	}
 	return m.Shadow.Execute(toolName, inputJSON)
+}
+
+// convRoles: the role of each running conversation, by conversation id.
+var convRoles sync.Map
+
+func convRole(convID string) string {
+	if r, ok := convRoles.Load(convID); ok {
+		return r.(string)
+	}
+	return ""
 }
 
 var leanStmtStartRe = regexp.MustCompile(`(?m)^(?:theorem|lemma)\s`)
@@ -634,6 +650,9 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 	// Both role and termination are consumed from pending slots set by
 	// parent before Fork — atomic, no pid race.
 	childRole := kernel.ConsumeForkRole()
+	// what this conversation is, for what its commands are shown here (shadowExecute)
+	convRoles.Store(convID, childRole)
+	defer convRoles.Delete(convID)
 	termCond := kernel.ConsumeTermination()
 	childCollector := kernel.ConsumePendingCollector()
 	if termCond == nil && childRole != "" {
