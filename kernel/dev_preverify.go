@@ -219,3 +219,15 @@ func ordinalSuffix(n int) string {
 	}
 	return "th"
 }
+
+// preVerifyLogFields: the verification's outcome as the log line gives it — the error, when
+// the verification could not run, as the conversation is told it (preVerifyReport). 11/18
+// 01:51:43–02:47:35 seven lines read 'compile= smoke= gate=""' while dev_fix_1 of uf7cdc0dcca
+// was told "gate=delta: lstat /home/claude/baloon: no such file or directory": the log alone
+// could not say why its unit was sent back.
+func preVerifyLogFields(o UnitVerifyOutcome) string {
+	if o.Err != nil {
+		return fmt.Sprintf("compile=error smoke=error gate=%q", o.Err.Error())
+	}
+	return fmt.Sprintf("compile=%s smoke=%s gate=%q", o.Result.Compile, o.Result.Smoke, o.Result.Gate)
+}

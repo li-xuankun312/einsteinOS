@@ -611,8 +611,8 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 			changed, removed, _ := treeDelta(mirror, base)
 			pre = &preVerifyResult{ok: passed, digest: deltaDigest(mirror, changed, removed), out: o}
 			end := preverifyMayEnd(passed, o.Result.Gate)
-			log.Printf("dev_preverify: %s unit %s (%s): compile=%s smoke=%s gate=%q — %s", r.repo, unit.ID, role,
-				o.Result.Compile, o.Result.Smoke, o.Result.Gate, map[bool]string{true: "the conversation may end", false: "sent back to the conversation"}[end])
+			log.Printf("dev_preverify: %s unit %s (%s): %s — %s", r.repo, unit.ID, role,
+				preVerifyLogFields(o), map[bool]string{true: "the conversation may end", false: "sent back to the conversation"}[end])
 			if end {
 				return true, ""
 			}
