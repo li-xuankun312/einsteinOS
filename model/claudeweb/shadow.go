@@ -187,7 +187,7 @@ func (s *ShadowExecutor) execute(toolName string, inputJSON string) string {
 			// and the kernel's verification found compile=missing. Such a command now runs
 			// here with git's network and remote commands as no-ops (gitShim), so the files
 			// it writes arrive; the sandbox's output still stands.
-			if pid, err := kernel.ForkExec(noPush+gitShim+command, s.runDir()); err == nil {
+			if pid, err := kernel.ForkExec(noPush+gitShim+withGitPathShim(command), s.runDir()); err == nil {
 				_, code, _ := kernel.Wait(pid)
 				log.Printf("[shadow] git command that also writes files: ran here with git clone/fetch/push/pull as no-ops (exit %d); the sandbox's output stands", code)
 			}
@@ -226,7 +226,7 @@ func (s *ShadowExecutor) execute(toolName string, inputJSON string) string {
 		return ""
 	}
 
-	pid, err := kernel.ForkExec(noPush+command, s.runDir())
+	pid, err := kernel.ForkExec(noPush+withGitPathShim(command), s.runDir())
 	if err != nil {
 		return fmt.Sprintf("[pid -1] fork: %v", err)
 	}
