@@ -188,11 +188,23 @@ func (s *ShadowExecutor) execute(toolName string, inputJSON string) string {
 			// here with git's network and remote commands as no-ops (gitShim), so the files
 			// it writes arrive; the sandbox's output still stands.
 			if pid, err := kernel.ForkExec(noPush+kernel.MirrorCloneShellFunc()+gitShimClone+gitShim+withGitPathShim(command), s.runDir()); err == nil {
-				_, code, _ := kernel.Wait(pid)
+				childPid, code, _ := kernel.Wait(pid)
+				if n := kernel.ReprimeClonedMirror(command, s.runDir()); n != "" {
+					log.Print(n)
+				}
+				// a failure here is this machine's result and the one that counts: the
+				// conversation is told it. 11/18 01:47–02:47 dev_fix_1 of uf7cdc0dcca (7ad91890)
+				// and spawn_work ea75c5d2 never saw what their clone-and-commit commands did
+				// here, took them for "not mirrored", and spent two hours placing calls to be
+				// mirrored. An exit 0 here proves nothing about git's network commands (no-ops
+				// here), so then the sandbox's output, which has git's, stands.
+				if code != 0 {
+					log.Printf("[shadow] git command that also writes files: ran here with git clone/fetch/push/pull as no-ops (exit %d); this machine's result goes back", code)
+					errStr := kernel.GetStderr(childPid)
+					return fmt.Sprintf("[pid %d exit=%d] %s\nstderr: %s", childPid, code,
+						kernel.ShapeOutput(kernel.GetResult(childPid), kernel.LocalResultCap()), kernel.ShapeOutput(errStr, kernel.LocalResultCap()/4))
+				}
 				log.Printf("[shadow] git command that also writes files: ran here with git clone/fetch/push/pull as no-ops (exit %d); the sandbox's output stands", code)
-			}
-			if n := kernel.ReprimeClonedMirror(command, s.runDir()); n != "" {
-				log.Print(n)
 			}
 			return ""
 		}
