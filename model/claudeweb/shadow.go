@@ -1056,7 +1056,12 @@ var kernelPlaces = []string{".ssh", "bash_history", ".git-credentials", ".netrc"
 	// where a container keeps the secrets mounted into it — 11/18 16:06:09 "find /run/secrets
 	// /var/run/secrets" (1148 bytes), 16:07:22 "cat /run/secrets/kubernetes.io/serviceaccount/token
 	// | cut -c1-50" (445 bytes) and 16:09:00 its length and first 10 characters ran here
-	"/run/secrets"}
+	"/run/secrets",
+	// git's and gh's own configuration, where a credential or a token is kept — 11/18 16:08:39
+	// "find /root/.config …; cat /home/claude/.config/gh/hosts.yml" (1489 bytes), 16:06:09
+	// "cat ~/.gitconfig" (186 bytes) and 17:20:27 "find /root /home -name \".gitconfig\" | xargs
+	// grep -l \"credential\|token\|url\"" ran here
+	".config/gh", ".gitconfig"}
 
 // envDumpRe: a command that lists the environment — 11/14 08:48 "printenv | grep GIT_CONFIG"
 // and 09:34 "env | grep -i \"gh_\\|github_\\|git_token\\|access_tok…\"" ran here (268 and 793
