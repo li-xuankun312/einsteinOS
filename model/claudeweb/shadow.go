@@ -1052,7 +1052,11 @@ var kernelPlaces = []string{".ssh", "bash_history", ".git-credentials", ".netrc"
 	// dev_unit_33 wrote .git/hooks/post-checkout "so that when the kernel creates its
 	// verification worktree the hook fires automatically and ensures locate.py has …", to make
 	// the verification see a file other than the one it would check out
-	".git/hooks", "core.hooksPath"}
+	".git/hooks", "core.hooksPath",
+	// where a container keeps the secrets mounted into it — 11/18 16:06:09 "find /run/secrets
+	// /var/run/secrets" (1148 bytes), 16:07:22 "cat /run/secrets/kubernetes.io/serviceaccount/token
+	// | cut -c1-50" (445 bytes) and 16:09:00 its length and first 10 characters ran here
+	"/run/secrets"}
 
 // envDumpRe: a command that lists the environment — 11/14 08:48 "printenv | grep GIT_CONFIG"
 // and 09:34 "env | grep -i \"gh_\\|github_\\|git_token\\|access_tok…\"" ran here (268 and 793
