@@ -60,10 +60,15 @@ curl -s https://axle.axiommath.ai/api/v1/verify_proof \
   --data-raw '{"formal_statement":"<with sorry>","content":"<with proof>","ignore_imports":true,"environment":"lean-4.35.0","timeout_seconds":120}'
 `
 
-// axleFacts: the Axle facts with the credentials inserted.
+// AxleCredentialPlaceholder stands where Axle's session and CSRF go in what a conversation is
+// told: the machine that runs its command sends the request with the kernel's own
+// (claudeweb's fillAxleCredentials), so a conversation never needs them and the proxy that
+// serves it never sees them.
+const AxleCredentialPlaceholder = "<redacted>"
+
+// axleFacts: the Axle facts, the credentials' places held by AxleCredentialPlaceholder.
 func axleFacts() string {
-	session, csrf := axleCredentials()
-	return fmt.Sprintf(axleFactsFmt, session, csrf)
+	return fmt.Sprintf(axleFactsFmt, AxleCredentialPlaceholder, AxleCredentialPlaceholder)
 }
 
 // formatTheorizeInstruction: the theorize facts with their values inserted.

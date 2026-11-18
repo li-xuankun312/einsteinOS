@@ -34,7 +34,21 @@ func BuildSystemPrompt(axleCookie, axleCSRF string) {
 		kernel.SetAxleVerifier(func(payload string) string {
 			return axleExecWithRetry(payload, sess, axleCSRF)
 		})
-		axleBlock = fmt.Sprintf(`[AXLE] Lean 4 proofs are verified through Axle, which the local machine reaches and the sandbox does not:
+		axleBlock = axleBlockFor()
+	}
+
+	gpuLine := probeLocalGPU() // real probe of THIS machine, not a hardcoded guess — see hw_probe_local.go
+	localExecPrefix = fmt.Sprintf(localExecFactsFmt, gpuLine) + axleBlock + "\n"
+}
+
+// axleBlockFor: how a conversation reaches Axle, with the kernel's placeholder where the
+// session and CSRF go — the machine that runs the command sends it with the kernel's own
+// (shadow's fillAxleCredentials). 11/18 every conversation's first message carried the
+// session cookie and CSRF in full (7ad91890 L14-15) to the proxy that serves it, while every
+// request a conversation made was sent with the kernel's own anyway ("the request carried no
+// cookie/CSRF — sent with the kernel's own"); 92e0f4c1 had masked them in the log only.
+func axleBlockFor() string {
+	return fmt.Sprintf(`[AXLE] Lean 4 proofs are verified through Axle, which the local machine reaches and the sandbox does not:
   curl -s https://axle.axiommath.ai/api/v1/verify_proof \
     -H 'content-type: application/json' \
     -b '%s' \
@@ -43,11 +57,7 @@ func BuildSystemPrompt(axleCookie, axleCSRF string) {
     -H 'origin: https://axle.axiommath.ai' \
     --data-raw '{"formal_statement":"<theorem with sorry>","content":"<theorem with proof>","ignore_imports":true,"environment":"lean-4.35.0","timeout_seconds":120}'
 it answers {"okay": true/false, "timings": {"total_ms": N}, ...}; Axle refuses native_decide. other endpoints: /api/v1/check (syntax only), /api/v1/comparator (stricter).
-`, axleCookie, axleCSRF)
-	}
-
-	gpuLine := probeLocalGPU() // real probe of THIS machine, not a hardcoded guess — see hw_probe_local.go
-	localExecPrefix = fmt.Sprintf(localExecFactsFmt, gpuLine) + axleBlock + "\n"
+`, kernel.AxleCredentialPlaceholder, kernel.AxleCredentialPlaceholder)
 }
 
 // localExecFactsFmt: what every conversation is told about the machine that runs its tool

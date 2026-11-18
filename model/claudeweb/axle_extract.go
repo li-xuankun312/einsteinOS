@@ -217,6 +217,13 @@ var axleKernelCreds = kernel.AxleCredentials
 // 11/04 02:36:39 and 02:59:36 a child's probe went out with session=0 csrf=0 and came back as
 // a 702-byte authentication error the child then had to interpret. Returns whether it filled.
 func fillAxleCredentials(set *axleRequestSet) bool {
+	// the placeholder a conversation was given (kernel.AxleCredentialPlaceholder) is no credential
+	if strings.Contains(set.Session, kernel.AxleCredentialPlaceholder) {
+		set.Session = ""
+	}
+	if strings.Contains(set.CSRF, kernel.AxleCredentialPlaceholder) {
+		set.CSRF = ""
+	}
 	if set.Session != "" && set.CSRF != "" {
 		return false
 	}
