@@ -900,10 +900,7 @@ func (r *devRun) unitPrompt(unit DevPlanNode, idx, total, attempt int, fail DevF
 	if attempt > 1 {
 		what += fmt.Sprintf(devWhatFailFmt, fail.Kind)
 	}
-	commits := len(r.requirements(unit).Symbols)
-	if commits == 0 {
-		commits = len(unit.Modules)
-	}
+	commits := devCommitsEstimate(devMirrorDir(r.devRepo), unit.ID, r.shown(unit).Symbols, len(unit.Modules))
 	return maskShownPrompt(r.repo, Bagu(fmt.Sprintf(devWhereFmt, baseRef), what, c.String(), fmt.Sprint(commits), r.devRepo))
 }
 
@@ -1271,3 +1268,23 @@ const (
 	devStopMachineFmt         = "unit %[1]s (%[2]s): %[3]s. this is a fact about the machine, not the unit; the code is kept on %[4]s; fix the machine to continue"
 	devStopNothingComparedFmt = "unit %[1]s (%[2]s): %[3]s. what the integration is compared with is not the unit's code; the code is kept on %[4]s; give the evaluation something outside the pipeline to compare with to continue"
 )
+
+// devCommitsEstimate is the shell's estimate of the unit's work: the definitions the reference
+// requires of it that have no counterpart yet in the tree the conversation starts from (the
+// mirror, primed from the attempt's base) — measured as the port gate measures them. A first
+// attempt has no port map, and that is every definition; when every definition has its
+// counterpart, the unit's modules. 11/18 dev_fix_1 of uf7cdc0dcca (7ad91890, 91780a4f) was told
+// "这次估计要开196个commit" — its 196 definitions — with 162 of them on the branch: it added the
+// 34 lines in 6 commits, then made one comment-only commit per definition ("Clock：steady_clock
+// 别名", "GGML_Q8_0 = 8") to come near 196.
+func devCommitsEstimate(tree, unitID string, shown []RefSymbol, modules int) int {
+	if len(shown) > 0 {
+		if n := len(portMissing(tree, unitID, shown)); n > 0 {
+			return n
+		}
+	}
+	if modules > 0 {
+		return modules
+	}
+	return 1
+}
