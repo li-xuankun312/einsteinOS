@@ -562,6 +562,11 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 		log.Printf("dev_run: %s %v", r.repo, err)
 		return "", false, true
 	}
+	// a clone the conversation makes into the mirror gives it this commit's tree here too
+	if sha := gitHeadOf(cloneDir); sha != "" {
+		RegisterMirrorTip(mirror, cloneDir, sha)
+		defer UnregisterMirrorTip(mirror)
+	}
 
 	prompt := r.unitPrompt(unit, idx, total, attempt, fail, baseRef)
 	role := fmt.Sprintf("dev_unit_%d", idx+1)

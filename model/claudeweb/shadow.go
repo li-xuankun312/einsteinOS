@@ -187,13 +187,19 @@ func (s *ShadowExecutor) execute(toolName string, inputJSON string) string {
 			// and the kernel's verification found compile=missing. Such a command now runs
 			// here with git's network and remote commands as no-ops (gitShim), so the files
 			// it writes arrive; the sandbox's output still stands.
-			if pid, err := kernel.ForkExec(noPush+gitShim+withGitPathShim(command), s.runDir()); err == nil {
+			if pid, err := kernel.ForkExec(noPush+kernel.MirrorCloneShellFunc()+gitShimClone+gitShim+withGitPathShim(command), s.runDir()); err == nil {
 				_, code, _ := kernel.Wait(pid)
 				log.Printf("[shadow] git command that also writes files: ran here with git clone/fetch/push/pull as no-ops (exit %d); the sandbox's output stands", code)
+			}
+			if n := kernel.ReprimeClonedMirror(command, s.runDir()); n != "" {
+				log.Print(n)
 			}
 			return ""
 		}
 		log.Printf("[shadow] skip git (remote has full output)")
+		if n := kernel.ReprimeClonedMirror(command, s.runDir()); n != "" {
+			log.Print(n)
+		}
 		return ""
 	}
 
@@ -370,13 +376,22 @@ func isCurlOrWget(command string) bool {
 // curlLineRe: curl or wget as a command anywhere in a script
 var curlLineRe = regexp.MustCompile("(?m)(^|[|&;(`])\\s*(curl|wget)(\\s|$)")
 
+// gitShimClone finds where "git clone [options] <url> [<dir>]" puts the clone and hands it to
+// the kernel's __eos_mirror_clone: a clone into the mirror gives it the branch tip here at that
+// point of the command (kernel/dev_mirror_clone.go).
+const gitShimClone = `gitShimCloneTarget() { local u="" t="" a=("$@") j=0; while [ $j -lt ${#a[@]} ]; do case "${a[$j]}" in ` +
+	`-b|--branch|--depth|-o|--origin|-c|--config|--reference|--reference-if-able|-j|--jobs|--filter|--template|--separate-git-dir|-u|--upload-pack|--shallow-since|--shallow-exclude|--server-option) j=$((j+2));; ` +
+	`--) j=$((j+1));; -*) j=$((j+1));; *) if [ -z "$u" ]; then u="${a[$j]}"; elif [ -z "$t" ]; then t="${a[$j]}"; fi; j=$((j+1));; esac; done; ` +
+	`[ -z "$u" ] && return 0; if [ -z "$t" ]; then t="${u%/}"; t="${t##*/}"; t="${t##*:}"; t="${t%.git}"; fi; __eos_mirror_clone "$t"; }
+`
+
 // gitShim makes git's network and remote commands no-ops for a command run on this machine,
 // and init: a repository a conversation starts in the unit's directory is taken for the
 // kernel's clone of it (devRepoLocalDir), 11/13 04:21:46 → every push after "not a git
 // repository". The sandbox already ran them; lets every other git command touch the local tree, and
 // never stops a && chain.
 const gitShim = `git() { local a=("$@") i=0; while [ $i -lt ${#a[@]} ]; do case "${a[$i]}" in -C|-c) i=$((i+2));; -*) i=$((i+1));; *) break;; esac; done; ` +
-	`case "${a[$i]}" in clone|fetch|push|pull|remote|ls-remote|submodule|init) return 0;; esac; ` +
+	`case "${a[$i]}" in clone) gitShimCloneTarget "${a[@]:$((i+1))}"; return 0;; fetch|push|pull|remote|ls-remote|submodule|init) return 0;; esac; ` +
 	`GIT_AUTHOR_NAME=shadow GIT_AUTHOR_EMAIL=shadow@local GIT_COMMITTER_NAME=shadow GIT_COMMITTER_EMAIL=shadow@local command git "$@" >/dev/null 2>&1; return 0; }
 `
 
