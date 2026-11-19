@@ -90,6 +90,11 @@ func devPortRecheck(r *devRun) {
 		log.Printf("dev_requirements: %s %d passed unit(s) no longer cover what the reference requires — reopened: %s", r.repo, len(ids), strings.Join(ids, " "))
 		devPlanSave(r.repo, r.devRepo, r.branch, r.plan, fmt.Sprintf("plan: %s reopened, measured against the reference again", strings.Join(ids, " ")))
 	}
+	if ids, told := portScriptRecheck(r.plan, tree, r.branch, r.shown); len(ids)+len(told) > 0 {
+		log.Printf("dev_requirements: %s %d passed unit(s) whose scripts on the branch read their port map — reopened: %s; %d unit(s) to do told before they start: %s",
+			r.repo, len(ids), strings.Join(ids, " "), len(told), strings.Join(told, " "))
+		devPlanSave(r.repo, r.devRepo, r.branch, r.plan, fmt.Sprintf("plan: scripts reading a port map — reopened %s, told %s", strings.Join(ids, " "), strings.Join(told, " ")))
+	}
 	prior := func(id string) []string { return devUnitPriorFiles(dir, r.branch, id) }
 	if ids := refPathRecheck(r.plan, prior, r.shown); len(ids) > 0 {
 		log.Printf("dev_requirements: %s %d passed unit(s) left a file at a reference file's path on the branch — reopened: %s", r.repo, len(ids), strings.Join(ids, " "))
@@ -144,4 +149,48 @@ func refPathRecheck(plan *DevPlan, priorFiles func(string) []string, shownFn fun
 		reopened = append(reopened, l.ID)
 	}
 	return reopened
+}
+
+// portScriptRecheck finds, on the branch's tree, the units whose verify scripts still read
+// their port map (scriptsReadingPortMap) — scripts written before 1ccc5551 made that
+// port_count_in_script. A passed unit is reopened with that failure; a unit still to do whose
+// next attempt starts from this branch (its last failure's base, or none) has the measurement
+// added to its last failure, so its conversation knows before it starts. 11/19 16:44:02,
+// 16:47:04 and 16:51:11 p42de699ebc, p71c0367d2e and p17652417b0 were each sent back for it
+// after a 3–4 minute verification, their scripts carrying the port check they had before, and
+// 16:48:05 p71c0367d2e's conversation read p42de699ebc's test.sh to write its own.
+func portScriptRecheck(plan *DevPlan, tree, branch string, shownFn func(DevPlanNode) UnitRequirements) (reopened, told []string) {
+	for _, l := range plan.Leaves() {
+		if l.Integration || plan.Reopened(l.ID) {
+			continue // a reopened unit runs on the failure it was reopened for
+		}
+		req := shownFn(l)
+		scripts := unitPortScripts(tree, l.ID, req)
+		if len(scripts) == 0 {
+			continue
+		}
+		text := fmt.Sprintf(gatePortScriptFmt, strings.Join(scripts, ", "), PortMapPath(l.ID), len(req.Symbols))
+		if plan.UnitPass(l) {
+			plan.MarkReopen(l.ID, DevFailure{Kind: "port_count_in_script", Text: text})
+			reopened = append(reopened, l.ID)
+			continue
+		}
+		f := plan.LastFailure[l.ID]
+		if f.BaseRef != "" && f.BaseRef != branch {
+			continue // it continues from its own branch, which this tree is not
+		}
+		if strings.Contains(f.Text, "port_count_in_script:") {
+			continue
+		}
+		if f.Kind == "" {
+			f.Kind = "port_count_in_script"
+		}
+		f.Text = strings.TrimSpace(f.Text + "\n" + text)
+		if plan.LastFailure == nil {
+			plan.LastFailure = map[string]DevFailure{}
+		}
+		plan.LastFailure[l.ID] = f
+		told = append(told, l.ID)
+	}
+	return reopened, told
 }
