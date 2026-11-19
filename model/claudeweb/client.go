@@ -49,6 +49,7 @@ func NewClient(cfg ClientConfig) *Client {
 			},
 		}
 	}
+	apiWin.setAccount(windowAccount(cfg.Cookie)) // the window counts this account's requests
 	return &Client{
 		baseURL:    cfg.BaseURL,
 		orgID:      cfg.OrgID,

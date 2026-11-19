@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -156,5 +157,55 @@ func TestARefusalFromTheProxyNarrowsTheWindowToWhatItTookAndQuietWidensItAgain(t
 	w.acquire()
 	if w.cap != 9 {
 		t.Fatalf("the window lets %d out after a long quiet, want 9", w.cap)
+	}
+}
+
+// The slots in the file are one account's: the proxy counts per account. 11/19 the run was
+// restarted with another account's cookie (share-session changed, the org id did not) and every
+// fork of the new account first slept 4 to 5 minutes on the old account's nine requests
+// ("9 requests in the last 10m0s, sleeping 4m40s" at 08:07:52).
+func TestTheWindowCountsOnlyItsOwnAccountsRequests(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "api_window.json")
+	oldCookie := "_ga=GA1.1.1; share-device=a65c26fb; share-session=1moa7ng1ejw81ddmo5vufnpvfa1tle59; lastActiveOrg=58cd53e2"
+	newCookie := "_ga=GA1.1.2; share-device=a2fc5bdb; share-session=jxxwzk01cveq6gdmz0tpl1v27f14fvc5; lastActiveOrg=58cd53e2"
+	if windowAccount(oldCookie) == windowAccount(newCookie) || windowAccount(oldCookie) == "" {
+		t.Fatalf("two accounts not told apart: %q %q", windowAccount(oldCookie), windowAccount(newCookie))
+	}
+	if strings.Contains(windowAccount(newCookie), "jxxwzk01") {
+		t.Fatal("the session itself is kept in the window file")
+	}
+
+	a, clock, _ := testWindow(9)
+	a.path = path
+	a.setAccount(windowAccount(oldCookie))
+	for i := 0; i < 9; i++ {
+		a.acquire()
+	}
+	b, _, slept := testWindow(9)
+	b.now = func() time.Time { return *clock }
+	b.sleep = func(d time.Duration) { *slept = append(*slept, d); *clock = clock.Add(d) }
+	b.path = path
+	b.setAccount(windowAccount(newCookie))
+	b.acquire()
+	if len(*slept) != 0 {
+		t.Fatalf("the new account waited on the old account's requests: slept %v", *slept)
+	}
+	// the same account after a restart still sees what it sent
+	c, _, slept2 := testWindow(9)
+	c.now = func() time.Time { return *clock }
+	c.sleep = func(d time.Duration) { *slept2 = append(*slept2, d); *clock = clock.Add(d) }
+	c.path = path
+	c.setAccount(windowAccount(newCookie))
+	if n := c.used(); n != 1 {
+		t.Fatalf("the same account after a restart sees %d of its requests, want 1", n)
+	}
+	// a file written before the account was recorded (11/19: a bare list) is no account's
+	os.WriteFile(path, []byte(fmt.Sprintf("[%d,%d,%d]", clock.UnixNano(), clock.UnixNano()+1, clock.UnixNano()+2)), 0o600)
+	d, _, _ := testWindow(9)
+	d.now = func() time.Time { return *clock }
+	d.path = path
+	d.setAccount(windowAccount(newCookie))
+	if n := d.used(); n != 0 {
+		t.Fatalf("an account counted %d requests of a file that names no account", n)
 	}
 }

@@ -21,6 +21,8 @@ package claudeweb
 // what was really sent.
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"log"
 	"os"
@@ -45,6 +47,10 @@ type apiWindow struct {
 	// take (throttled); every full window without a 429 gives one back, up to limit.
 	cap      int
 	capSince time.Time // when cap last changed
+	// account: whose requests the slots are (windowAccount): the proxy counts per account, and
+	// slots in the file of another account — or of none — are not counted
+	account   string
+	otherSaid bool
 }
 
 func newAPIWindow(limit int, dur time.Duration) *apiWindow {
@@ -86,6 +92,40 @@ func SetAPIWindowPath(path string) {
 	apiWin.mergeFromDiskLocked()
 }
 
+// windowAccount: the account a cookie is, as the proxy tells accounts apart — its share-session
+// (claude.ai's sessionKey where there is none), hashed: the window file never holds the
+// session. 11/19 the account changed with share-session while lastActiveOrg stayed the same.
+func windowAccount(cookie string) string {
+	for _, name := range []string{"share-session", "sessionKey"} {
+		for _, part := range strings.Split(cookie, ";") {
+			k, v, ok := strings.Cut(strings.TrimSpace(part), "=")
+			if ok && k == name && v != "" {
+				sum := sha256.Sum256([]byte(name + "=" + v))
+				return hex.EncodeToString(sum[:6])
+			}
+		}
+	}
+	return ""
+}
+
+// setAccount: the slots are this account's; what the window held of another is let go.
+func (w *apiWindow) setAccount(account string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if account == w.account {
+		return
+	}
+	w.account = account
+	w.times = nil
+	w.mergeFromDiskLocked()
+}
+
+// windowFile: the window as kept on disk — whose slots, and when each was taken.
+type windowFile struct {
+	Account string  `json:"account"`
+	Times   []int64 `json:"times"`
+}
+
 func (w *apiWindow) pruneLocked(now time.Time) {
 	cut := 0
 	for cut < len(w.times) && now.Sub(w.times[cut]) >= w.dur {
@@ -104,10 +144,21 @@ func (w *apiWindow) mergeFromDiskLocked() {
 	if err != nil {
 		return
 	}
-	var nanos []int64
-	if json.Unmarshal(b, &nanos) != nil {
+	var file windowFile
+	if json.Unmarshal(b, &file) != nil {
+		// before the account was kept the file was a bare list: no account's
+		if json.Unmarshal(b, &file.Times) != nil {
+			return
+		}
+	}
+	if file.Account != w.account {
+		if !w.otherSaid {
+			w.otherSaid = true
+			log.Printf("api_throttle: the %d request(s) in %s are another account's — not counted for this one", len(file.Times), w.path)
+		}
 		return
 	}
+	nanos := file.Times
 	have := make(map[int64]bool, len(w.times))
 	for _, t := range w.times {
 		have[t.UnixNano()] = true
@@ -130,7 +181,7 @@ func (w *apiWindow) saveLocked() {
 	for i, t := range w.times {
 		nanos[i] = t.UnixNano()
 	}
-	b, _ := json.Marshal(nanos)
+	b, _ := json.Marshal(windowFile{Account: w.account, Times: nanos})
 	if err := os.MkdirAll(filepath.Dir(w.path), 0o755); err != nil {
 		return
 	}
