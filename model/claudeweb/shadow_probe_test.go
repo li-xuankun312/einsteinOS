@@ -32,3 +32,29 @@ func TestACommandThatWalksThisMachineForTheKernelDoesNotRunHere(t *testing.T) {
 		}
 	}
 }
+
+// A search of this machine for private keys, or for the kernel's files by a path pattern, does
+// not run here. 11/19 16:39:23 "find / -name "*.pem" -o -name "id_rsa" -o -name "id_ed25519""
+// ran here (239 bytes of paths), 16:22:13 "find / -name "theory.md" -path "*einsteinOS*"" and
+// 16:22:20 "find / -name "*.tsv" -path "*einsteinOS*"" too: f6453d93 knew -name einsteinos only.
+func TestASearchForKeysOrTheKernelsFilesDoesNotRunHere(t *testing.T) {
+	for _, c := range []string{
+		`find / -name "*.pem" -o -name "id_rsa" -o -name "id_ed25519" 2>/dev/null | head -5; ls /home/ 2>/dev/null`,
+		`find / -name "theory.md" -path "*einsteinOS*" 2>/dev/null | head -5`,
+		`find / -name "*.tsv" -path "*einsteinOS*" 2>/dev/null | head -5`,
+		`find / -iname '*id_ecdsa*' 2>/dev/null`,
+	} {
+		if touchesKernel(c, "/home/claude") == "" {
+			t.Errorf("ran here: %q", c)
+		}
+	}
+	for _, c := range []string{
+		`find /home/claude/baloon-p42de699ebc -name "*.cu" | sort`,
+		`find /home/claude/baloon-p42de699ebc/.einsteinOS/ -type f | sort`,
+		`grep -rn "pem" /home/claude/baloon-p42de699ebc/src | head`,
+	} {
+		if p := touchesKernel(c, "/home/claude"); p != "" {
+			t.Errorf("the unit's own work refused (%s): %q", p, c)
+		}
+	}
+}

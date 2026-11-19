@@ -1211,7 +1211,9 @@ var tokenSearchRe = regexp.MustCompile(`(?i)\bfind\b[^\n|;&]*-i?name\s+["']?[^"'
 // kernelSearchRe: a search of this machine for the kernel itself — find by its name, or
 // which. 11/19 12:56:51 "find / -name 'einsteinos*' -o -name '.einsteinOS'" and 12:57:25
 // "find /usr/local/go /usr/local/bin /opt -name 'adk-go' …; which adk-go" ran here.
-var kernelSearchRe = regexp.MustCompile(`(?i)\bfind\b[^\n|;&]*-i?name\s+["']?[^"'\s]*(einsteinos|adk-go|adk\b)` +
+// 16:22:13 "find / -name theory.md -path *einsteinOS*" and 16:39:23 "find / -name *.pem -o -name
+// id_rsa -o -name id_ed25519" ran here too: a search by -path, or for private keys, is one.
+var kernelSearchRe = regexp.MustCompile(`(?i)\bfind\b[^\n|;&]*-i?(name|path|wholename)\s+["']?[^"'\s]*(einsteinos|adk-go|adk\b|\.pem\b|id_rsa|id_ed25519|id_ecdsa|id_dsa)` +
 	`|\b(which|whereis|type)\s+(einsteinos|adk-go|adk)\b`)
 
 // noPush goes in front of every command run here: no git on this machine can push for a
