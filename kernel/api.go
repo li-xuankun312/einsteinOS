@@ -165,6 +165,7 @@ func GetConvExec() func(string) (string, string) {
 func ForkWithRole(prompt string, pwd string, role string) (int64, error) {
 	// set role + termination BEFORE fork — child consumes both atomically
 	cond := TerminationForRole(role)
+	claimForkSlot(role)
 	SetForkRole(role)
 	SetPendingTermination(cond)
 
@@ -172,6 +173,7 @@ func ForkWithRole(prompt string, pwd string, role string) (int64, error) {
 	if err != nil {
 		SetForkRole("")
 		SetPendingTermination(nil)
+		ForkSlotTaken()
 		return 0, err
 	}
 	metaMu.Lock()
@@ -221,6 +223,7 @@ func ForkWithTermination(prompt string, pwd string, role string, cond Terminatio
 		return 0, fmt.Errorf(forkRoleBusyFmt, role, pid)
 	}
 	// set both role and termination BEFORE fork — child consumes atomically
+	claimForkSlot(role)
 	SetForkRole(role)
 	SetPendingTermination(cond)
 	log.Printf("fork_term: role=%s termination=%s", role, cond.String())
@@ -229,6 +232,7 @@ func ForkWithTermination(prompt string, pwd string, role string, cond Terminatio
 	if err != nil {
 		SetForkRole("")
 		SetPendingTermination(nil)
+		ForkSlotTaken()
 		return 0, err
 	}
 	metaMu.Lock()

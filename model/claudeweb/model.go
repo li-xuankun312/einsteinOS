@@ -665,6 +665,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 	defer convRoles.Delete(convID)
 	termCond := kernel.ConsumeTermination()
 	childCollector := kernel.ConsumePendingCollector()
+	kernel.ForkSlotTaken() // the next fork may fill the slots (kernel/fork_slot.go)
 	if termCond == nil && childRole != "" {
 		// fallback: role-based default if no explicit condition was set
 		termCond = kernel.TerminationForRole(childRole)
