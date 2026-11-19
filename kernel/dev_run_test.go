@@ -25,20 +25,33 @@ func bootKernel() { kernelBoot.Do(Init) }
 var unitIDRe = regexp.MustCompile(`id=(u[0-9a-f]{10})`)
 
 type fakeModel struct {
-	mu       sync.Mutex
-	prompts  []string
-	mirror   string
-	unitWork func(prompt, unitID string, attempt int) // writes into the mirror like shadow replays do
-	attempts map[string]int
-	planner  func(prompt string) string
-	reply    func(unit string, attempt int) string // what a unit conversation says at the end; nil: a normal summary
-	review   func(n int) string                    // what the n-th review says; nil: PASS
-	reviews  int
+	mu      sync.Mutex
+	prompts []string
+	mirror  string
+	// base: /home/claude/<repo>; envMirror: the env's mirror field — a unit's conversation and
+	// its review work in the unit's own mirror (devUnitMirrorDir), named in their prompt
+	base      string
+	envMirror *string
+	unitWork  func(prompt, unitID string, attempt int) // writes into the mirror like shadow replays do
+	attempts  map[string]int
+	planner   func(prompt string) string
+	reply     func(unit string, attempt int) string // what a unit conversation says at the end; nil: a normal summary
+	review    func(n int) string                    // what the n-th review says; nil: PASS
+	reviews   int
 }
 
 func (f *fakeModel) exec(prompt string) (string, string) {
+	ForkSlotTaken() // the child has taken what its fork handed it, as the model's does
 	f.mu.Lock()
 	f.prompts = append(f.prompts, prompt)
+	if f.base != "" {
+		if m := regexp.MustCompile(regexp.QuoteMeta(f.base) + `-[A-Za-z0-9]+`).FindString(prompt); m != "" {
+			f.mirror = m
+			if f.envMirror != nil {
+				*f.envMirror = m
+			}
+		}
+	}
 	f.mu.Unlock()
 	id := fmt.Sprintf("%08x-0000-4000-8000-%012x", len(f.prompts)*7919, len(f.prompts))
 	SetForkConvID(id)
@@ -147,7 +160,15 @@ func newDevEnv(t *testing.T, theory string) *devEnv {
 	devPlanMem = map[string]*DevPlan{}
 	devPlanMu.Unlock()
 	resetRegistry(t)
-	return &devEnv{bare: bare, clone: clone, mirror: mirror, model: fm, prDone: &pr, dev: "o/" + repoName}
+	env := &devEnv{bare: bare, clone: clone, mirror: mirror, model: fm, prDone: &pr, dev: "o/" + repoName}
+	fm.base, fm.envMirror = mirror, &env.mirror
+	t.Cleanup(func() {
+		units, _ := filepath.Glob(mirror + "-*")
+		for _, u := range units {
+			os.RemoveAll(u)
+		}
+	})
+	return env
 }
 
 func bareShow(bare, ref string) string {
