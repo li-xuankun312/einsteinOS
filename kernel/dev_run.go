@@ -584,6 +584,16 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 			base, _ = primeMirror(cloneDir, mirror)
 			continue
 		}
+		// a conversation the proxy's refusals ended before it wrote anything is not an
+		// attempt at the unit: judging the mirror would judge the branch's existing code and
+		// spend one of the unit's fix attempts on the proxy. 11/19 units p45808a8a9c,
+		// pb0569948de and p984d0d954f each lost one that way between 06:53 and 07:08.
+		if status[apiEndedKey] == "true" {
+			if changed, removed, err := treeDelta(mirror, base); err == nil && len(changed) == 0 && len(removed) == 0 {
+				log.Printf("dev_from_theorems: %s unit %s: its conversation ended on an API error with nothing written (try %d/5) — not an attempt, starting another", r.repo, unit.ID, try)
+				continue
+			}
+		}
 		break
 	}
 
@@ -953,6 +963,9 @@ func devCollectLite(childPid int64, repo string) (string, map[string]string) {
 	// 11/14 13:50 dev_unit_16 (f0e4c486) ended on 502s after 11 rounds, 151 tool calls and 7
 	// verifications; it was read as no response, primeMirror reset the mirror, and the next
 	// conversation (14:37) found no port map and no verify scripts and started from theory.md.
+	if apiErr {
+		status[apiEndedKey] = "true"
+	}
 	worked := status["files_written"] != "" || caughtUp > 0
 	if m := getMeta(childPid); m != nil && VerifySeen(m.ConvID) {
 		worked = true
@@ -1255,3 +1268,7 @@ func devUnitRole(unitID string, idx, attempt int) string {
 	}
 	return fmt.Sprintf("dev_unit_%d", idx+1)
 }
+
+// apiEndedKey marks a conversation the model layer could not finish: an API error, which the
+// proxy's refusals are (dev_collect sets it, runUnit reads it).
+const apiEndedKey = "ended_on_api_error"
