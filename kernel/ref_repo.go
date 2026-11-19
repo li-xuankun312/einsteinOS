@@ -273,6 +273,14 @@ func prefetchCommitBlobs(cloneDir, sha string) {
 			log.Printf("ref_prefetch: %s: %d object(s) not fetched in one request %s (%v: %s)", short_sha(sha), end-i, refRouteName(proxy), ferr, tailText(strings.TrimSpace(string(fout)), 200))
 		}
 		if ferr != nil {
+			// object ids as arguments get nothing back from GitHub (11/19: both routes, on two
+			// machines): the commit's archive gives the blobs in one request (ref_archive.go)
+			aerr := prefetchViaArchive(cloneDir, sha, oids[i:])
+			if aerr == nil {
+				log.Printf("ref_prefetch: %s: %d blob(s) taken from the commit's archive in %s", short_sha(sha), len(oids)-i, time.Since(start).Round(time.Millisecond))
+				return
+			}
+			log.Printf("ref_prefetch: %s: the commit's archive did not give them (%v)", short_sha(sha), aerr)
 			log.Printf("ref_prefetch: %s: files will be fetched one by one", short_sha(sha))
 			return
 		}
