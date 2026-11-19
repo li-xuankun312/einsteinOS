@@ -569,10 +569,7 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 	}
 
 	prompt := r.unitPrompt(unit, idx, total, attempt, fail, baseRef)
-	role := fmt.Sprintf("dev_unit_%d", idx+1)
-	if attempt > 1 {
-		role = fmt.Sprintf("dev_fix_%d", attempt-1)
-	}
+	role := devUnitRole(unit.ID, idx, attempt)
 	log.Printf("dev_from_theorems: %s unit %d/%d id=%s attempt %d forking %s (prompt %d bytes, base %s, modules: %s)",
 		r.repo, idx+1, total, unit.ID, attempt, role, len(prompt), baseRef, nodeDesc(unit))
 
@@ -1287,4 +1284,16 @@ func devCommitsEstimate(tree, unitID string, shown []RefSymbol, modules int) int
 		return modules
 	}
 	return 1
+}
+
+// devUnitRole: the role of a unit's conversation. A first attempt is dev_unit_<n>; a fix
+// attempt is dev_fix_<k>_<unit>: the role keys the kernel's check at its done line
+// (RegisterPreVerify) and the one-conversation-per-role rule (ForkWithTermination), and two
+// units on their first fix at once were both dev_fix_1 — each would have run the other's
+// verification.
+func devUnitRole(unitID string, idx, attempt int) string {
+	if attempt > 1 {
+		return fmt.Sprintf("dev_fix_%d_%s", attempt-1, unitID)
+	}
+	return fmt.Sprintf("dev_unit_%d", idx+1)
 }
