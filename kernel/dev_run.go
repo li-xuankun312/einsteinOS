@@ -19,6 +19,7 @@ package kernel
 // failing is SPLIT (dev_split_node), not retried forever.
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -112,6 +113,15 @@ type devRun struct {
 	raw                         map[string]UnitRequirements // before definition ownership
 	owners                      map[string]string           // "file\tname" -> the unit that ports it
 	ownersFor                   string                      // the leaves the owners were computed for
+	alone                       map[string]bool             // units that run with no other beside them (dev_schedule.go)
+}
+
+// markAlone: unit's next attempt runs with no other unit beside it.
+func (r *devRun) markAlone(unitID string) {
+	if r.alone == nil {
+		r.alone = map[string]bool{}
+	}
+	r.alone[unitID] = true
 }
 
 // devNothingToBuildFmt: a unit closed without a conversation (args: repo, n, total, id,
@@ -604,6 +614,9 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 			}
 			unchanged = 0
 			o := devVerifyOnly(cloneDir, mirror, r.branch, baseRef, unit.ID, r.gpuUsable(), base, r.shown(unit))
+			if errors.Is(o.Err, errBranchMoved) {
+				return true, "" // nothing it writes now can be verified: the unit runs again, alone
+			}
 			passed := o.Err == nil && o.Verified && o.Result.Passed()
 			changed, removed, _ := treeDelta(mirror, base)
 			pre = &preVerifyResult{ok: passed, digest: deltaDigest(mirror, changed, removed), out: o}
@@ -683,6 +696,11 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 		}
 		if out.Err == nil {
 			break
+		}
+		if errors.Is(out.Err, errBranchMoved) {
+			r.markAlone(unit.ID)
+			log.Printf("dev_from_theorems: %s unit %s: %v — it runs again, alone (not counted as an attempt)", r.repo, unit.ID, out.Err)
+			return stdout, false, false
 		}
 		what := "verify/push error"
 		if out.Verified {

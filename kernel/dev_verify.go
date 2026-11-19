@@ -34,6 +34,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -705,6 +706,13 @@ func devVerifyOnly(cloneDir, mirror, branch, baseRef, unitID, gpuUsable string, 
 		out.Err = fmt.Errorf("checkout base %s: %w", baseRef, err)
 		return out
 	}
+	// a file of the delta another unit changed on the branch since this unit's mirror was primed
+	// is not written over (units side by side, dev_schedule.go): the unit runs again, alone
+	if moved := branchMovedUnder(cloneDir, base, changed, removed); len(moved) > 0 {
+		out.Err = fmt.Errorf("%w: %s", errBranchMoved, strings.Join(moved, " "))
+		log.Printf("dev_verify: unit %s: %d file(s) of its delta changed on %s since its mirror was primed (%s) — not verified over them", unitID, len(moved), baseRef, strings.Join(moved, " "))
+		return out
+	}
 	ws, err := assembleWorkspace(cloneDir, mirror, changed, removed)
 	if err != nil {
 		out.Err = fmt.Errorf("assemble workspace: %w", err)
@@ -856,4 +864,24 @@ func integrationRepoKernels(ws string, req UnitRequirements) map[string]bool {
 		return nil
 	}
 	return repoKernels(ws)
+}
+
+// errBranchMoved: the delta touches files the branch changed since the unit's mirror was primed.
+var errBranchMoved = errors.New("the branch changed files of this delta since the unit started")
+
+// branchMovedUnder: the files of a delta (changed or removed) that the tip in tipDir no longer
+// holds as the mirror's base had them — another unit's commit changed them meanwhile. A delta
+// copied over them would undo that commit.
+func branchMovedUnder(tipDir string, base fileDigest, changed, removed []string) []string {
+	var out []string
+	for _, f := range append(append([]string{}, changed...), removed...) {
+		was, had := base[f]
+		now, err := digestFile(filepath.Join(tipDir, f))
+		has := err == nil
+		if had != has || (had && was != now) {
+			out = append(out, f)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
