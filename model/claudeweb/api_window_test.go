@@ -241,8 +241,37 @@ func TestARefusalWithFewerThanTheProxyTookDoesNotNarrowTheWindow(t *testing.T) {
 		w.acquire()
 		w.answered()
 	}
-	w.throttled() // refused with eight of ours again: that is what it takes now
-	if w.cap != 7 {
-		t.Fatalf("a refusal at what the proxy took narrows to %d, want 7", w.cap)
+	capNow := w.cap
+	w.throttled() // refused with eight of ours: the proxy has answered eight before
+	if w.cap != capNow {
+		t.Fatalf("a refusal with as many as the proxy has answered narrowed the window from %d to %d", capNow, w.cap)
+	}
+}
+
+// A refusal does not lower what the proxy has been measured to answer: 11/19 the window went
+// 9 → 8 → 7 → 6 → 5 → 4 between 16:22:16 and 16:38:52, each refusal setting what the proxy
+// "took" to one less than the refused count, so the next refusal at the narrowed window was
+// always "at what it took" and narrowed it again.
+func TestRefusalsAtTheWindowDoNotRatchetItDown(t *testing.T) {
+	w, clock, _ := testWindow(9)
+	for i := 0; i < 8; i++ {
+		w.acquire()
+		w.answered()
+	}
+	w.acquire()
+	w.throttled() // 16:22:16: refused with nine, eight answered before → the window lets 8
+	if w.cap != 8 {
+		t.Fatalf("cap %d, want 8", w.cap)
+	}
+	for _, n := range []int{8, 7, 6, 5} { // 16:27:36, 16:31:52, 16:32:09, 16:38:52
+		*clock = clock.Add(11 * time.Minute)
+		for i := 0; i < n; i++ {
+			w.acquire()
+		}
+		before := w.cap
+		w.throttled()
+		if w.cap != before || w.took != 8 {
+			t.Fatalf("refused with %d of ours, the proxy having answered 8: window %d → %d, answered mark %d", n, before, w.cap, w.took)
+		}
 	}
 }

@@ -73,10 +73,13 @@ func (w *apiWindow) throttled() {
 	now := w.now()
 	w.pruneLocked(now)
 	n := len(w.times)
-	if n < w.took {
+	// as many as the proxy has answered, or fewer: the car's count, not ours. 11/19 16:22–16:38
+	// "fewer than" alone let a refusal at exactly what it had answered narrow the window, and
+	// every narrowing lowered that mark too: 9 → 8 → 7 → 6 → 5 → 4 in sixteen minutes.
+	if n <= w.took {
 		// 11/19 the proxy took nine of ours before 12:00, then refused at 12:21:39 with five and
 		// at 12:25:48 with four: "当前车队模型…提问频率过快", the car's count, spent by others
-		log.Printf("api_throttle: the proxy refused a request with %d of ours in the last %v, fewer than the %d it has taken — the car's shared count was spent by others; the window stays at %d",
+		log.Printf("api_throttle: the proxy refused a request with %d of ours in the last %v, no more than the %d it has answered — the car's shared count was spent by others; the window stays at %d",
 			n, w.dur, w.took, w.cap)
 		return
 	}
@@ -84,7 +87,6 @@ func (w *apiWindow) throttled() {
 	if took < 1 {
 		took = 1
 	}
-	w.took = took
 	if took < w.cap {
 		log.Printf("api_throttle: the proxy refused a request with %d of ours in the last %v — the window lets %d out until %v pass without a refusal",
 			len(w.times), w.dur, took, w.dur)
