@@ -447,6 +447,7 @@ func ref_bind_cursor(pid int64, owner, repo string) int {
 type devUnit struct {
 	Files  []string // file paths assigned to this unit
 	Theory string   // the theory text for just these files
+	Mirror string   // where its conversations work on this machine (devUnitMirrorDir)
 }
 
 // dev_proof_preflight makes proof status KERNEL FACT before any dev child runs.
@@ -1276,7 +1277,11 @@ func dev_review_unit_inner(pid int64, repo, branch string, unitNum, totalUnits i
 	repoName := parts[len(parts)-1]
 
 	var c strings.Builder
-	c.WriteString(fmt.Sprintf("[DEV REPO] %s → /home/claude/%s/\n", devRepos[0], repoName))
+	mirror := unit.Mirror
+	if mirror == "" {
+		mirror = "/home/claude/" + repoName
+	}
+	c.WriteString(fmt.Sprintf("[DEV REPO] %s → %s/\n", devRepos[0], mirror))
 	c.WriteString(fmt.Sprintf(reviewModulesFmt, unitNum, strings.Join(unit.Files, ", ")))
 	c.WriteString("[DEV UNIT STATUS from kernel]\n")
 	for k, v := range status {

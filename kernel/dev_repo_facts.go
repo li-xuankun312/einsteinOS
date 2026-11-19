@@ -78,8 +78,8 @@ func anonymousURL(ownerRepo string) string { return "https://github.com/" + owne
 // anonymous ls-remote tried — on 11/03 that single 30 s HTTPS probe failed once, silently, and
 // unit 3's prompt had no clone line: 20 rounds and 23 requests spent looking for the repo.
 // Either way the decision and its source are logged.
-func newDevRepoFacts(devRepo, branch string) DevRepoFacts {
-	f := DevRepoFacts{Repo: devRepo, Dir: devMirrorDir(devRepo), Branch: branch}
+func newDevRepoFacts(devRepo, branch, dir string) DevRepoFacts {
+	f := DevRepoFacts{Repo: devRepo, Dir: dir, Branch: branch}
 	u := anonymousURL(devRepo)
 	switch at, ok := fetchedAt(devRepo, branch); {
 	case ok:

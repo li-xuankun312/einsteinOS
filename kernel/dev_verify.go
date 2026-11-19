@@ -204,6 +204,13 @@ func wipeDirContents(dir string) error {
 
 // devMirrorDir is where shadow replays the child's file writes: the path the
 // child is told its repo lives at (/home/claude/<repo>) — on THIS machine.
+// devUnitMirrorDir: where a unit's conversations work on this machine — a mirror of the unit's
+// own, so units that run side by side (dev_schedule.go) never write into each other's tree.
+// Until 11/19 every unit of a dev repo shared /home/claude/<repo>.
+func devUnitMirrorDir(devRepo, unitID string) string {
+	return devMirrorDir(devRepo) + "-" + unitID
+}
+
 func devMirrorDir(devRepo string) string {
 	name := devRepo
 	if i := strings.LastIndex(devRepo, "/"); i >= 0 {

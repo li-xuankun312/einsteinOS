@@ -14,7 +14,7 @@ func withProbe(t *testing.T, fn func(url, branch string) bool) {
 func TestRepoBlockStatesOnlyWhatWasMeasured(t *testing.T) {
 	var gotURL, gotBranch string
 	withProbe(t, func(url, branch string) bool { gotURL, gotBranch = url, branch; return true })
-	f := newDevRepoFacts("zeng-bin3123/baloon", "einsteinOS/dev-abc123")
+	f := newDevRepoFacts("zeng-bin3123/baloon", "einsteinOS/dev-abc123", devMirrorDir("zeng-bin3123/baloon"))
 	if gotURL != "https://github.com/zeng-bin3123/baloon.git" || gotBranch != "einsteinOS/dev-abc123" {
 		t.Fatalf("the probe must ask about the anonymous URL and the branch the conversation builds on: %q %q", gotURL, gotBranch)
 	}
@@ -34,7 +34,7 @@ func TestRepoBlockStatesOnlyWhatWasMeasured(t *testing.T) {
 
 	// not readable anonymously (private, or the branch is missing): no clone line, and no claim about why
 	withProbe(t, func(string, string) bool { return false })
-	b = newDevRepoFacts("zeng-bin3123/baloon", "einsteinOS/dev-abc123").Block()
+	b = newDevRepoFacts("zeng-bin3123/baloon", "einsteinOS/dev-abc123", devMirrorDir("zeng-bin3123/baloon")).Block()
 	if strings.Contains(b, "git clone") || strings.Contains(strings.ToLower(b), "private") {
 		t.Fatalf("an unmeasured fact must leave no line and no assertion:\n%s", b)
 	}
@@ -106,11 +106,11 @@ func TestTheCloneLineRestsOnTheKernelsOwnFetch(t *testing.T) {
 	devRepoProbe = func(string, string) bool { probes++; return false } // the HTTPS link is down
 
 	repo, branch := "zeng-bin3123/baloon", "einsteinOS/dev-c880662efd"
-	if f := newDevRepoFacts(repo, branch); f.URL != "" || probes != 1 {
+	if f := newDevRepoFacts(repo, branch, devMirrorDir(repo)); f.URL != "" || probes != 1 {
 		t.Fatalf("no fetch, probe failed: url %q probes %d", f.URL, probes)
 	}
 	recordFetched(repo, []string{branch})
-	f := newDevRepoFacts(repo, branch)
+	f := newDevRepoFacts(repo, branch, devMirrorDir(repo))
 	if f.URL != "https://github.com/zeng-bin3123/baloon.git" || probes != 1 {
 		t.Fatalf("fetched: url %q probes %d (the probe must not decide)", f.URL, probes)
 	}
@@ -118,7 +118,7 @@ func TestTheCloneLineRestsOnTheKernelsOwnFetch(t *testing.T) {
 		t.Fatalf("%s", f.Block())
 	}
 	// another branch was not fetched: back to the probe
-	if f := newDevRepoFacts(repo, "einsteinOS/other"); f.URL != "" || probes != 2 {
+	if f := newDevRepoFacts(repo, "einsteinOS/other", devMirrorDir(repo)); f.URL != "" || probes != 2 {
 		t.Fatalf("other branch: %q %d", f.URL, probes)
 	}
 }

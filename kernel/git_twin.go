@@ -326,7 +326,7 @@ func twinDirAllowed(dir string) bool {
 	}
 	for _, dr := range GetDevRepos() {
 		m := devMirrorDir(dr)
-		if dir == m || strings.HasPrefix(dir, m+"/") {
+		if dir == m || strings.HasPrefix(dir, m+"/") || strings.HasPrefix(dir, m+"-") {
 			return false
 		}
 	}

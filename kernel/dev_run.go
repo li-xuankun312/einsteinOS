@@ -556,7 +556,7 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 		log.Printf("dev_run: %s checkout %s: %v", r.repo, baseRef, err)
 		return "", false, true
 	}
-	mirror := devMirrorDir(r.devRepo)
+	mirror := devUnitMirrorDir(r.devRepo, unit.ID)
 	base, err := primeMirror(cloneDir, mirror)
 	if err != nil {
 		log.Printf("dev_run: %s %v", r.repo, err)
@@ -762,8 +762,15 @@ func (r *devRun) reviewUnit(unit DevPlanNode, idx, total int, convID string, st 
 	if convID != "" {
 		st["dev_conv"] = convID
 	}
-	// what the review changes in the mirror is measured (review_edits.go)
-	mirror := devMirrorDir(r.devRepo)
+	// what the review changes in the mirror is measured (review_edits.go); the review works in
+	// the unit's own mirror, primed from the branch when the run resumes with the review
+	mirror := devUnitMirrorDir(r.devRepo, unit.ID)
+	du.Mirror = mirror
+	if _, err := os.Stat(mirror); err != nil {
+		if dir, derr := devRepoLocalDir(r.devRepo); derr == nil && gitUseBranchFromRemote(dir, r.branch, r.branch) == nil {
+			primeMirror(dir, mirror)
+		}
+	}
 	before, beforeErr := snapshotTree(mirror)
 	verdict := dev_review_unit(r.pid, r.repo, r.branch, idx+1, total, du, st)
 	// a review that ended without a verdict judged nothing: the code is not at fault, so the
@@ -879,7 +886,7 @@ func (r *devRun) unitPrompt(unit DevPlanNode, idx, total, attempt int, fail DevF
 		c.WriteString("[PROOF STATUS]\n" + tbl)
 	}
 	c.WriteString(fmt.Sprintf("[TASK]\n%s\n\n", r.task))
-	c.WriteString(newDevRepoFacts(r.devRepo, baseRef).Block())
+	c.WriteString(newDevRepoFacts(r.devRepo, baseRef, devUnitMirrorDir(r.devRepo, unit.ID)).Block())
 	build, test := devVerifyScripts(unit.ID)
 	c.WriteString(fmt.Sprintf(dev_unit_instruction, idx+1, total, unit.ID, r.gpuAll, r.gpuUsable(), r.gpuUsable(), build, test, einsteinHelp, DoneInstruction()+DevDoneInToolRound, toolchainPATH()))
 	if fb := pr_feedback(r.pid); fb != "" {
@@ -897,7 +904,7 @@ func (r *devRun) unitPrompt(unit DevPlanNode, idx, total, attempt int, fail DevF
 	if attempt > 1 {
 		what += fmt.Sprintf(devWhatFailFmt, fail.Kind)
 	}
-	commits := devCommitsEstimate(devMirrorDir(r.devRepo), unit.ID, r.shown(unit).Symbols, len(unit.Modules))
+	commits := devCommitsEstimate(devUnitMirrorDir(r.devRepo, unit.ID), unit.ID, r.shown(unit).Symbols, len(unit.Modules))
 	return maskShownPrompt(r.repo, Bagu(fmt.Sprintf(devWhereFmt, baseRef), what, c.String(), fmt.Sprint(commits), r.devRepo))
 }
 
