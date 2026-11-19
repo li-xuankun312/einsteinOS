@@ -1193,7 +1193,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 				}
 				if sig := termCond.Check(event); sig != nil {
 					log.Printf("claudeweb: termination fired: %s (round=%d)", sig.Reason, st.rounds)
-					kernel.StoreSignal(kernel.GetLastForkedPid(), sig)
+					kernel.StoreSignalForConv(convID, sig)
 					doExit(exitNormal, fmt.Sprintf("[terminated: %s]", sig.Reason))
 					return
 				}
@@ -1219,7 +1219,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 				} else {
 					log.Printf("claudeweb: done marker in tool round %d; build.sh and test.sh ran here and every local result exited 0 — ending without an extra round", st.rounds)
 				}
-				kernel.StoreSignal(kernel.GetLastForkedPid(), &kernel.StopSignal{Reason: "done_marker"})
+				kernel.StoreSignalForConv(convID, &kernel.StopSignal{Reason: "done_marker"})
 				if t := terminalText(textBuf.String()); t != "" {
 					kernel.NoteRoundText(convID, t, len(collectedTools), st.localDelivered)
 					yield(&model.LLMResponse{
@@ -1255,7 +1255,7 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 				}
 				if sig := termCond.Check(event); sig != nil {
 					log.Printf("claudeweb: termination fired (text round): %s", sig.Reason)
-					kernel.StoreSignal(kernel.GetLastForkedPid(), sig)
+					kernel.StoreSignalForConv(convID, sig)
 					// This round's text is yielded AFTER these checks, so exiting here used to
 					// drop it. With the done marker the round that ends the conversation IS the
 					// answer (a plan, a verdict, a hardware report): dev_planner came back as the

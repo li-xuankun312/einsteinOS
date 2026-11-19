@@ -87,3 +87,35 @@ func TestAReturningChildKeepsItsOwnConversation(t *testing.T) {
 		t.Fatalf("the returning child's own conversation is not marked done: %+v", r)
 	}
 }
+
+// Why a conversation ended is recorded on its own task. The model layer stored its done and
+// termination signals on "the most recently forked pid", another unit's child when units run
+// side by side.
+func TestAConversationsStopSignalIsItsOwnTasks(t *testing.T) {
+	bootKernel()
+	old := convExecFn
+	t.Cleanup(func() { convExecFn = old })
+	hold := make(chan struct{})
+	bound := make(chan struct{}, 2)
+	SetConvExec(func(pid int64, prompt string) (string, string) {
+		SetConvID(pid, "sig-"+prompt)
+		bound <- struct{}{}
+		<-hold
+		return "", ""
+	})
+	a, _ := Fork("unit32-dev", ".")
+	b, _ := Fork("unit36-dev", ".") // forked last
+	<-bound
+	<-bound
+	StoreSignalForConv("sig-unit32-dev", &StopSignal{Reason: "done_marker"})
+	close(hold)
+	Wait(a)
+	Wait(b)
+	if s := GetSignal(a); s == nil || s.Reason != "done_marker" {
+		t.Fatalf("unit 32's done line was not recorded on its task: %v", s)
+	}
+	if s := GetSignal(b); s != nil {
+		t.Fatalf("unit 32's done line was recorded on unit 36's task: %v", s)
+	}
+	StoreSignalForConv("not-a-child", &StopSignal{Reason: "done_marker"}) // records nothing, panics not
+}

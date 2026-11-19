@@ -89,15 +89,6 @@ var convExecFn func(pid int64, prompt string) (string, string)
 // the conversation set last anywhere (11/19 08:17:01 unit 36's dev child became 07bce9de).
 var forkRole string
 var forkConvMu sync.Mutex
-var lastForkedPid int64 // the most recently forked child pid
-
-// GetLastForkedPid returns the pid of the most recently forked child.
-// Called by model layer so it can SetConvID on the right TaskMeta.
-func GetLastForkedPid() int64 {
-	forkConvMu.Lock()
-	defer forkConvMu.Unlock()
-	return lastForkedPid
-}
 
 func SetForkRole(role string) {
 	forkConvMu.Lock()
@@ -293,11 +284,6 @@ func Fork(prompt string, pwd string) (int64, error) {
 	metaMu.Lock()
 	taskMeta[int64(pid)] = meta
 	metaMu.Unlock()
-
-	// track for model layer — GetLastForkedPid() returns this
-	forkConvMu.Lock()
-	lastForkedPid = int64(pid)
-	forkConvMu.Unlock()
 
 	if convExecFn != nil {
 		go func() {

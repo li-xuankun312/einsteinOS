@@ -343,6 +343,15 @@ func StoreSignal(pid int64, sig *StopSignal) {
 	pidSignalsMu.Unlock()
 }
 
+// StoreSignalForConv records why the conversation convID ended on the task it is bound to
+// (FindPidByConvID): the conversation's own pid, not the most recently forked one. A
+// conversation bound to no task (the main conversation) records nothing.
+func StoreSignalForConv(convID string, sig *StopSignal) {
+	if pid := FindPidByConvID(convID); pid > 0 {
+		StoreSignal(pid, sig)
+	}
+}
+
 func GetSignal(pid int64) *StopSignal {
 	pidSignalsMu.Lock()
 	defer pidSignalsMu.Unlock()
