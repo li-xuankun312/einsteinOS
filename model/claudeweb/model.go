@@ -659,13 +659,12 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 	// composable TerminationCondition, not hardcoded round counts.
 	// Both role and termination are consumed from pending slots set by
 	// parent before Fork — atomic, no pid race.
-	childRole := kernel.ConsumeForkRole()
+	termCond := kernel.ConsumeTermination()
+	childCollector := kernel.ConsumePendingCollector()
+	childRole := kernel.ConsumeForkRole() // the last taken: the next fork may fill the slots (kernel/fork_slot.go)
 	// what this conversation is, for what its commands are shown here (shadowExecute)
 	convRoles.Store(convID, childRole)
 	defer convRoles.Delete(convID)
-	termCond := kernel.ConsumeTermination()
-	childCollector := kernel.ConsumePendingCollector()
-	kernel.ForkSlotTaken() // the next fork may fill the slots (kernel/fork_slot.go)
 	if termCond == nil && childRole != "" {
 		// fallback: role-based default if no explicit condition was set
 		termCond = kernel.TerminationForRole(childRole)

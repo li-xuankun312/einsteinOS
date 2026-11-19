@@ -142,11 +142,14 @@ func ConsumeForkFiles() []ForkFile {
 	return f
 }
 
+// ConsumeForkRole takes the role, the last of what a fork hands its child: the slots are
+// free for the next fork (fork_slot.go).
 func ConsumeForkRole() string {
 	forkConvMu.Lock()
 	r := forkRole
 	forkRole = ""
 	forkConvMu.Unlock()
+	ForkSlotTaken()
 	return r
 }
 
@@ -165,7 +168,7 @@ func GetConvExec() func(string) (string, string) {
 func ForkWithRole(prompt string, pwd string, role string) (int64, error) {
 	// set role + termination BEFORE fork — child consumes both atomically
 	cond := TerminationForRole(role)
-	claimForkSlot(role)
+	slot := claimForkSlot(role)
 	SetForkRole(role)
 	SetPendingTermination(cond)
 
@@ -173,9 +176,10 @@ func ForkWithRole(prompt string, pwd string, role string) (int64, error) {
 	if err != nil {
 		SetForkRole("")
 		SetPendingTermination(nil)
-		ForkSlotTaken()
+		releaseForkSlot(slot)
 		return 0, err
 	}
+	releaseForkSlotWhenDone(pid, slot)
 	metaMu.Lock()
 	if m, ok := taskMeta[pid]; ok {
 		m.Role = role
@@ -223,7 +227,7 @@ func ForkWithTermination(prompt string, pwd string, role string, cond Terminatio
 		return 0, fmt.Errorf(forkRoleBusyFmt, role, pid)
 	}
 	// set both role and termination BEFORE fork — child consumes atomically
-	claimForkSlot(role)
+	slot := claimForkSlot(role)
 	SetForkRole(role)
 	SetPendingTermination(cond)
 	log.Printf("fork_term: role=%s termination=%s", role, cond.String())
@@ -232,9 +236,10 @@ func ForkWithTermination(prompt string, pwd string, role string, cond Terminatio
 	if err != nil {
 		SetForkRole("")
 		SetPendingTermination(nil)
-		ForkSlotTaken()
+		releaseForkSlot(slot)
 		return 0, err
 	}
+	releaseForkSlotWhenDone(pid, slot)
 	metaMu.Lock()
 	if m, ok := taskMeta[pid]; ok {
 		m.Role = role

@@ -35,3 +35,26 @@ func TestASecondForkWaitsForTheFirstChildToTakeItsRole(t *testing.T) {
 		t.Fatalf("the second child took %q", got)
 	}
 }
+
+// A child that ends without taking what its fork handed it frees that fork's claim, and only
+// that one: a later fork's claim stays until its own child takes its role.
+func TestAChildThatNeverTookItsRoleFreesOnlyItsOwnForksClaim(t *testing.T) {
+	defer ForkSlotTaken()
+	first := claimForkSlot("detect_dev")
+	releaseForkSlot(first) // its child ended without taking the role
+	second := claimForkSlot("dev_unit_5")
+	releaseForkSlot(first) // the first child's end, again: not the second fork's claim
+	third := make(chan struct{})
+	go func() { claimForkSlot("dev_unit_6"); close(third) }()
+	select {
+	case <-third:
+		t.Fatalf("the first child's end freed the second fork's claim")
+	case <-time.After(100 * time.Millisecond):
+	}
+	releaseForkSlot(second)
+	select {
+	case <-third:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("the third fork never got the slots")
+	}
+}
