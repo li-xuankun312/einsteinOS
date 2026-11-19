@@ -407,104 +407,16 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 		devPortRecheck(run)
 	}
 
-	var lastStdout string
 	staleRerun := map[string]bool{} // units after which the integration was run again (integrationStale)
-	// every loop turn is one attempt at one unit (or one split). The ceiling is
-	// a backstop against a bug, not a limit anyone should reach.
-	for turn := 0; turn < 400; turn++ {
-		leaves := plan.Leaves()
-		idx := nextUnitIndex(plan, leaves)
-		if idx < 0 {
-			if dir, err := devRepoLocalDir(devRepo); err == nil {
-				// once per unit: an integration run that passes without a commit of its own leaves
-				// the branch as it was, and would be judged stale again without end
-				if after := integrationStale(dir, branch, plan, leaves); after != "" && !staleRerun[after] {
-					staleRerun[after] = true
-					plan.withdrawPass(plan.IntegrationUnit.ID)
-					log.Printf("dev_from_theorems: %s unit %s committed after the integration unit %s's last verified commit — the integration runs again", repo, after, plan.IntegrationUnit.ID)
-					devPlanSave(repo, devRepo, branch, plan, fmt.Sprintf("plan: %s runs again after unit %s", plan.IntegrationUnit.ID, after))
-					continue
-				}
-			}
-			break
-		}
-		unit := leaves[idx]
-
-		// a stored review failure whose files belong to other units is theirs, not this
-		// unit's: those units are reopened and this unit's attempts start again. 11/08 unit
-		// pf7b804cf95 came back from the plan with three such failures already counted, so
-		// the run asked to split it before it could run once and stopped on a port unit
-		// that has no modules to split.
-		if blames := resumeStoredReviewFailure(plan, unit, branch, run.reviewBlame); len(blames) > 0 {
-			log.Printf("dev_from_theorems: %s unit %s: its stored review failure is about files of %s — those are reopened and unit %s starts again",
-				repo, unit.ID, strings.Join(blames, " "), unit.ID)
-			devPlanSave(repo, devRepo, branch, plan, fmt.Sprintf("plan: %s reopened, unit %s starts again", strings.Join(blames, " "), unit.ID))
-			continue
-		}
-
-		// whether to split is the kernel's call, from numbers
-		need, why := dev_node_needs_split(plan, unit)
-		if need && !plan.VerifySeen[unit.ID] && plan.FixAttempts[unit.ID] < 2*DevMaxFixAttempts {
-			log.Printf(devSplitUnseenFmt, repo, unit.ID, why)
-			need = false
-		}
-		if need {
-			if kids := dev_split_node(pid, plan, unit.ID, repo, devRepo, branch, theory, why); kids != nil {
-				continue // the leaves changed; look again
-			}
-			if plan.FixAttempts[unit.ID] >= DevMaxFixAttempts {
-				lf := deferredFailure(plan.LastFailure[unit.ID])
-				plan.MarkDeferred(unit.ID, lf)
-				log.Printf("dev_from_theorems: %s unit %s used its %d fix attempts and has nothing to split — the run goes on and its files are left to the integration unit; last review: %s; %s",
-					repo, unit.ID, plan.FixAttempts[unit.ID], truncStr(lf.Text, 300), lf.Attribution)
-				devPlanSave(repo, devRepo, branch, plan, fmt.Sprintf("plan: unit %s deferred to the integration unit", unit.ID))
-				continue
-			}
-			log.Printf("dev_from_theorems: %s unit %s is over budget (%s) but cannot be split; running it as is", repo, unit.ID, why)
-		}
-
-		stdout, passed, requeue := run.runUnit(unit, idx, len(leaves))
-		if stdout != "" {
-			lastStdout = stdout
-		}
-		// A conversation that writes nothing is not a unit that is too big: retrying it, or
-		// splitting the unit, starts the same kind of conversation again. Two in a row means
-		// the cause is outside the unit — stop, say so, keep everything (the plan and the
-		// passed units are on the branch), and leave the decision to a person.
-		// no GPU toolchain on this machine: no retry or split can build a GPU unit here
-		if lf := plan.LastFailure[unit.ID]; !passed && !requeue && gateOutsideUnit(lf.Kind) {
-			stopFmt := devStopMachineFmt
-			if !gateIsMachine(lf.Kind) {
-				stopFmt = devStopNothingComparedFmt
-			}
-			msg := fmt.Sprintf(stopFmt, unit.ID, nodeDesc(unit), lf.Text, lf.BaseRef)
-			log.Printf("dev_from_theorems: %s %s", repo, msg)
-			PRFeedbackAdd(pid, "- dev_from_theorems: "+msg)
-			return lastStdout, fmt.Errorf("dev_from_theorems: %s", msg)
-		}
-		if !passed && !requeue && plan.Silent(unit.ID) >= devMaxSilentAttempts {
-			msg := fmt.Sprintf("unit %s (%s): the last %d conversations wrote no file. a conversation that does not start is not "+
-				"cured by retrying or by splitting the unit, so the run stops here. the plan and the %d unit(s) already passed are "+
-				"kept on branch %s; fix the cause and start again to continue. what the last one said:\n%s",
-				unit.ID, nodeDesc(unit), plan.Silent(unit.ID), passedLeaves(plan), branch,
-				truncStr(plan.LastFailure[unit.ID].Text, 1500))
-			log.Printf("dev_from_theorems: %s %s", repo, truncStr(strings.ReplaceAll(msg, "\n", " | "), 700))
-			PRFeedbackAdd(pid, "- dev_from_theorems: "+msg)
-			return lastStdout, fmt.Errorf("dev_from_theorems: %s", msg)
-		}
-		if requeue {
-			plan.InfraFails++
-			devPlanSave(repo, devRepo, branch, plan, "plan: infrastructure retry")
-			if plan.InfraFails > 5 {
-				return lastStdout, fmt.Errorf("dev_from_theorems: %s unit %s: git/push failed %d times in a row", repo, unit.ID, plan.InfraFails)
-			}
-			pr_push_step(pid, &Step{Kind: STEP_DEV_FROM_THEOREMS, Owner: step.Owner, Repo: step.Repo})
-			return lastStdout, nil
-		}
-		plan.InfraFails = 0
-		_ = passed
+	// units that nothing links run side by side (dev_schedule.go)
+	lastStdout, stopErr, requeued := run.schedule(theory, staleRerun, run.runUnit)
+	if stopErr != nil {
+		return lastStdout, stopErr
 	}
-
+	if requeued {
+		pr_push_step(pid, &Step{Kind: STEP_DEV_FROM_THEOREMS, Owner: step.Owner, Repo: step.Repo})
+		return lastStdout, nil
+	}
 	// every unit passed verification on the real machine and review on the real branch,
 	// except the deferred ones, whose files the integration unit's end-to-end run answers for
 	if ids := plan.DeferredUnits(); len(ids) > 0 {
