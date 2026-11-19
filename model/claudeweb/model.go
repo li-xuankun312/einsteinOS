@@ -1501,8 +1501,6 @@ func (m *Model) ContinueConversation(existingConvID, prompt string) (string, str
 
 	log.Printf("claudeweb: continue %s prompt=%q", existingConvID[:8], truncate(prompt, 80))
 
-	kernel.SetForkConvID(existingConvID)
-
 	// look up this process's termination condition from the process table.
 	// the condition was stored at fork time (ForkWithRole / ForkWithTermination).
 	// set it as pending so completionLoop's ConsumeTermination() picks it up —
@@ -1563,7 +1561,6 @@ func (m *Model) RunConversation(pid int64, prompt string) (string, string) {
 	if pid > 0 {
 		kernel.SetConvID(pid, convID)
 	}
-	kernel.SetForkConvID(convID) // legacy fallback
 
 	webReq.Prompt = fullPrompt
 	if files := kernel.ConsumeForkFiles(); len(files) > 0 {

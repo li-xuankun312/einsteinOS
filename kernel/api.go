@@ -81,23 +81,15 @@ func Init() {
 // for its child, and conversations were bound to other units' children.
 var convExecFn func(pid int64, prompt string) (string, string)
 
-// forkConvID: goroutine writes convID here before convExecFn returns.
-// Fork goroutine reads it after convExecFn returns to set TaskMeta.ConvID.
 // forkRole: set by ForkWithRole before convExecFn, read by RunConversation
 // to determine child lifecycle (max rounds). follows d2aaf709 architecture.
-// Protected by forkConvMu. Keyed by goroutine — only one writer at a time
-// per convExecFn call since RunConversation is synchronous within the goroutine.
-var forkConvID string                // legacy: used by non-pid-aware callers
-var forkConvIDs = map[int64]string{} // per-pid convID: race-free
+// Protected by forkConvMu. A child's conversation is on its TaskMeta (SetConvID, by the pid
+// its fork handed it) and nowhere else: the global forkConvID and the per-pid map 38affe4a
+// added beside it, never written, are gone — every returning child read the global and took
+// the conversation set last anywhere (11/19 08:17:01 unit 36's dev child became 07bce9de).
 var forkRole string
 var forkConvMu sync.Mutex
 var lastForkedPid int64 // the most recently forked child pid
-
-func SetForkConvID(convID string) {
-	forkConvMu.Lock()
-	forkConvID = convID
-	forkConvMu.Unlock()
-}
 
 // GetLastForkedPid returns the pid of the most recently forked child.
 // Called by model layer so it can SetConvID on the right TaskMeta.
@@ -105,14 +97,6 @@ func GetLastForkedPid() int64 {
 	forkConvMu.Lock()
 	defer forkConvMu.Unlock()
 	return lastForkedPid
-}
-
-// SetForkConvIDForPid sets the convID for a specific child pid.
-// Called by the model layer after creating the conversation.
-func SetForkConvIDForPid(pid int64, convID string) {
-	forkConvMu.Lock()
-	forkConvIDs[pid] = convID
-	forkConvMu.Unlock()
 }
 
 func SetForkRole(role string) {
@@ -319,23 +303,11 @@ func Fork(prompt string, pwd string) (int64, error) {
 		go func() {
 			stdout, stderr := convExecFn(int64(pid), prompt)
 
-			// Grab the convID: per-pid map first (race-free), global fallback (legacy)
-			forkConvMu.Lock()
-			childConvID := forkConvIDs[int64(pid)]
-			if childConvID != "" {
-				delete(forkConvIDs, int64(pid))
-			} else {
-				childConvID = forkConvID
-				forkConvID = "" // consume global
-			}
-			forkConvMu.Unlock()
-
+			// the child's conversation is the one bound to its pid while it ran (SetConvID)
 			metaMu.Lock()
 			meta.Result = StripDoneMarker(stdout)
 			meta.StdErr = stderr
-			if childConvID != "" {
-				meta.ConvID = childConvID
-			}
+			childConvID := meta.ConvID
 			metaMu.Unlock()
 			// every forked conversation is done when its fork returns — reviews, the planner and
 			// the probe used to stay "running" in the registry because only some callers said so

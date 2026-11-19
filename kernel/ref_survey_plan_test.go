@@ -165,7 +165,6 @@ func (m *seqModel) exec(pid int64, prompt string) (string, string) {
 	n := len(m.prompts)
 	m.mu.Unlock()
 	id := fmt.Sprintf("%08x-1111-4111-8111-%012x", n*104729, n)
-	SetForkConvID(id)
 	SetConvID(pid, id)
 	return m.reply(prompt), ""
 }

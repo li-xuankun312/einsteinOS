@@ -54,7 +54,6 @@ func (f *fakeModel) exec(pid int64, prompt string) (string, string) {
 	}
 	f.mu.Unlock()
 	id := fmt.Sprintf("%08x-0000-4000-8000-%012x", len(f.prompts)*7919, len(f.prompts))
-	SetForkConvID(id)
 	SetConvID(pid, id)
 
 	switch {

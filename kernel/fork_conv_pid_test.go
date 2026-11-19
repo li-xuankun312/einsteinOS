@@ -56,3 +56,34 @@ func TestEachForkedChildRunsItsOwnConversation(t *testing.T) {
 		}
 	}
 }
+
+// A child that returns keeps the conversation it was bound to: when its fork returns, nothing
+// another conversation set since replaces it. 38affe4a made the binding per pid (SetConvID) but
+// left the fork reading the global forkConvID when its per-pid map was empty — and the map was
+// never written — so each returning child took whatever conversation was set last anywhere.
+func TestAReturningChildKeepsItsOwnConversation(t *testing.T) {
+	bootKernel()
+	old := convExecFn
+	t.Cleanup(func() { convExecFn = old })
+
+	second := make(chan struct{})
+	SetConvExec(func(pid int64, prompt string) (string, string) {
+		SetConvID(pid, "conv-"+prompt)
+		RegisterConv(0, "conv-"+prompt, "o/r", prompt, 0)
+		if prompt == "unit36-dev" {
+			<-second // unit 28's review starts while unit 36's conversation is still running
+		}
+		return "", ""
+	})
+	a, _ := Fork("unit36-dev", ".")
+	b, _ := Fork("unit28-review", ".") // starts while unit 36's conversation is still running
+	Wait(b)
+	close(second)
+	Wait(a)
+	if c := getMeta(a).ConvID; c != "conv-unit36-dev" {
+		t.Fatalf("the child of unit36-dev returned bound to %q", c)
+	}
+	if r := FindConv("o/r", "unit36-dev", 0); r == nil || r.Status != "done" {
+		t.Fatalf("the returning child's own conversation is not marked done: %+v", r)
+	}
+}
