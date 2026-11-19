@@ -18,10 +18,10 @@ func TestFetchCommandUsesTheDeployKeyOverSSHAndNeverTouchesOrigin(t *testing.T) 
 			t.Fatalf("ssh fetch lacks %q: %s", want, ssh)
 		}
 	}
-	if strings.Contains(ssh, "remote set-url") || strings.Contains(ssh, " fetch origin") {
+	if strings.Contains(ssh, "remote set-url") || strings.Contains(ssh, " fetch --progress origin") {
 		t.Fatalf("origin must stay as it is (other fetches in this clone run without GIT_SSH_COMMAND): %s", ssh)
 	}
-	if https := gitFetchCmd("/tmp/x", "o/r", false); https != `git -C "/tmp/x" fetch origin` {
+	if https := gitFetchCmd("/tmp/x", "o/r", false); https != `git -C "/tmp/x" fetch --progress origin` {
 		t.Fatalf("the HTTPS form is the old one: %s", https)
 	}
 }
@@ -54,7 +54,7 @@ func TestFetchFallsBackToHTTPSAfterTwoSSHFailuresAndSaysWhichItUsed(t *testing.T
 	if len(cmds) != 3 {
 		t.Fatalf("2 SSH attempts then HTTPS: %d commands: %v", len(cmds), cmds)
 	}
-	if !strings.Contains(cmds[0], "git@github.com") || !strings.Contains(cmds[1], "git@github.com") || !strings.Contains(cmds[2], "fetch origin") {
+	if !strings.Contains(cmds[0], "git@github.com") || !strings.Contains(cmds[1], "git@github.com") || !strings.Contains(cmds[2], "fetch --progress origin") {
 		t.Fatalf("order: %v", cmds)
 	}
 }
@@ -74,7 +74,7 @@ func TestFetchStaysOnSSHWhenItWorksAndOnHTTPSWithoutAKey(t *testing.T) {
 
 	t.Setenv("EINSTEIN_GIT_SSH_KEY", filepath.Join(t.TempDir(), "no-such-key"))
 	GitCloneOrReuse("o/r", dir)
-	if len(cmds) != 1 || !strings.Contains(cmds[0], "fetch origin") {
+	if len(cmds) != 1 || !strings.Contains(cmds[0], "fetch --progress origin") {
 		t.Fatalf("without a deploy key the behaviour is exactly what it was: %v", cmds)
 	}
 

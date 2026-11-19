@@ -89,12 +89,19 @@ var gitGuardFn = gitGuard
 // times each. The URL is given explicitly instead of changing `origin`: other fetches in
 // this clone (gitUseBranchFromRemote) run without GIT_SSH_COMMAND and would use the
 // account's default ssh identity against an SSH origin, and fail.
+//
+// --progress, as the clone, the push and gitFetchRefs ask for: git prints nothing at all
+// while it works when its output is not a terminal, and the guard that kills a step with no
+// output for gitStartWindow kills a fetch that is working. 11/19 between 14:54 and 15:12
+// this machine's fetches of the dev repo were killed at exactly 10 s, fifteen times in a row,
+// on both transports, while the same fetch by hand went through — the machine reaches GitHub
+// at about 158 KB/s, so a fetch of this repo needs longer than the window.
 func gitFetchCmd(dir, ownerRepo string, ssh bool) string {
 	if ssh {
-		return fmt.Sprintf("GIT_SSH_COMMAND=%q git -C %q fetch %q '+refs/heads/*:refs/remotes/origin/*'",
+		return fmt.Sprintf("GIT_SSH_COMMAND=%q git -C %q fetch --progress %q '+refs/heads/*:refs/remotes/origin/*'",
 			gitSSHCommand(), dir, sshRemoteURL(ownerRepo))
 	}
-	return fmt.Sprintf("git -C %q fetch origin", dir)
+	return fmt.Sprintf("git -C %q fetch --progress origin", dir)
 }
 
 // gitSSHFetchFailuresBeforeHTTPS: consecutive SSH fetch failures before this call goes
