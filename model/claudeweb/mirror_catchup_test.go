@@ -159,3 +159,26 @@ func TestMirrorCatchUpRunsWhatTheStreamMissedThroughTheConversationsLedger(t *te
 		t.Fatal("a conversation this process did not run was caught up without an error")
 	}
 }
+
+// A later loop for the same conversation takes over the earlier loop's ledger: the catch-up
+// runs only what this machine has not run, not the whole conversation again.
+func TestALaterLoopKeepsWhatTheMachineAlreadyRanForTheConversation(t *testing.T) {
+	const conv = "06ca028c-0000-4000-8000-000000000000"
+	first := newToolLedger()
+	first.record("toolu_a", "[pid 1 exit=0] ok")
+	first.markDelivered("toolu_b")
+	keepConvMirror(conv, &convMirror{ledger: first})
+	second := newToolLedger() // the loop after the proxy refused a round: its ledger is empty
+	second.record("toolu_c", "[pid 2 exit=0] ok")
+	keepConvMirror(conv, &convMirror{ledger: second})
+
+	all := []RecoveredTool{{ID: "toolu_a"}, {ID: "toolu_b"}, {ID: "toolu_c"}, {ID: "toolu_d"}}
+	missed := toolsTheStreamMissed(all, second)
+	if len(missed) != 1 || missed[0].ID != "toolu_d" {
+		var ids []string
+		for _, m := range missed {
+			ids = append(ids, m.ID)
+		}
+		t.Fatalf("the catch-up would run %v again", ids)
+	}
+}

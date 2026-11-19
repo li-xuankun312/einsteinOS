@@ -94,14 +94,22 @@ var (
 	convMirrors   = map[string]*convMirror{}
 )
 
-// keepConvMirror keeps a conversation's ledger, executor and download past its loop.
+// keepConvMirror keeps a conversation's ledger, executor and download past its loop. A later
+// loop for the same conversation — a Continue, or a round the proxy refused and the kernel
+// started again — takes over the ledger of the one before it: what this machine already ran
+// for the conversation stays known, so the catch-up does not run it a second time. 11/19
+// 07:19:29 conversation 06ca028c's catch-up ran 47 calls again, writing src/kernels/ngram.cpp
+// three times and repeating two failed compiles it had already made here at 07:09.
 func keepConvMirror(convID string, cm *convMirror) {
 	if convID == "" || cm == nil {
 		return
 	}
 	convMirrorsMu.Lock()
+	defer convMirrorsMu.Unlock()
+	if old := convMirrors[convID]; old != nil && old.ledger != nil && cm.ledger != nil && old.ledger != cm.ledger {
+		cm.ledger.takeOver(old.ledger)
+	}
 	convMirrors[convID] = cm
-	convMirrorsMu.Unlock()
 }
 
 // MirrorCatchUp downloads convID and runs on this machine, in order, the tool calls the

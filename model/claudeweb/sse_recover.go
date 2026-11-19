@@ -221,6 +221,21 @@ func (l *toolLedger) record(id, result string) {
 	}
 }
 func (l *toolLedger) cached(id string) (string, bool) { r, ok := l.results[id]; return r, ok }
+
+// takeOver folds what an earlier loop of the same conversation ran or delivered into this one.
+func (l *toolLedger) takeOver(prev *toolLedger) {
+	if prev == nil {
+		return
+	}
+	for id, r := range prev.results {
+		if _, ok := l.results[id]; !ok {
+			l.results[id] = r
+		}
+	}
+	for id := range prev.delivered {
+		l.delivered[id] = struct{}{}
+	}
+}
 func (l *toolLedger) markDelivered(ids ...string) {
 	for _, id := range ids {
 		if id != "" {
