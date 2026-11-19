@@ -1108,7 +1108,13 @@ var kernelPlaces = []string{".ssh", "bash_history", ".git-credentials", ".netrc"
 	// "find /root/.config …; cat /home/claude/.config/gh/hosts.yml" (1489 bytes), 16:06:09
 	// "cat ~/.gitconfig" (186 bytes) and 17:20:27 "find /root /home -name \".gitconfig\" | xargs
 	// grep -l \"credential\|token\|url\"" ran here
-	".config/gh", ".gitconfig"}
+	".config/gh", ".gitconfig",
+	// the machine's accounts, the configuration of its users and what is mounted into it —
+	// 11/19 12:58:06 "cat /etc/passwd | grep -v nologin", 12:58:10 "find /root/.config
+	// /home/claude/.config -type f" (1672 bytes), 12:01:55 "ls /mnt/user-data/uploads/ && ls
+	// /mnt/transcripts/" (640 bytes) and 12:01:51 "cat /container_info.json" ran here
+	"/etc/passwd", "/etc/shadow", "/root/.config", "/home/claude/.config", "~/.config", "$HOME/.config",
+	"/mnt/user-data", "/mnt/transcripts", "/container_info.json"}
 
 // envDumpRe: a command that lists the environment — 11/14 08:48 "printenv | grep GIT_CONFIG"
 // and 09:34 "env | grep -i \"gh_\\|github_\\|git_token\\|access_tok…\"" ran here (268 and 793
@@ -1188,6 +1194,9 @@ func touchesKernel(command, workDir string) string {
 	if tokenSearchRe.MatchString(command) {
 		return "a search for tokens"
 	}
+	if kernelSearchRe.MatchString(command) {
+		return "a search for the kernel"
+	}
 	return ""
 }
 
@@ -1198,6 +1207,12 @@ func touchesKernel(command, workDir string) string {
 // (1703 bytes) ran here. grep for a word like "token" in the unit's code is not one.
 var tokenSearchRe = regexp.MustCompile(`(?i)\bfind\b[^\n|;&]*-i?name\s+["']?[^"'\s]*(token|ghp_|github|credential|netrc)` +
 	`|\bgrep\b[^\n;&]*(ghp_|github_pat|access_token|x-access-token|gh_token)`)
+
+// kernelSearchRe: a search of this machine for the kernel itself — find by its name, or
+// which. 11/19 12:56:51 "find / -name 'einsteinos*' -o -name '.einsteinOS'" and 12:57:25
+// "find /usr/local/go /usr/local/bin /opt -name 'adk-go' …; which adk-go" ran here.
+var kernelSearchRe = regexp.MustCompile(`(?i)\bfind\b[^\n|;&]*-i?name\s+["']?[^"'\s]*(einsteinos|adk-go|adk\b)` +
+	`|\b(which|whereis|type)\s+(einsteinos|adk-go|adk)\b`)
 
 // noPush goes in front of every command run here: no git on this machine can push for a
 // conversation, however it is called (a path, a subshell, a script), because every push URL
