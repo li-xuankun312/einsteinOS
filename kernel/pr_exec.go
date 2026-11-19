@@ -1774,10 +1774,7 @@ func dev_collect_child(childPid int64, repo string) (string, map[string]string) 
 		// child produced almost nothing — likely API failure, not a real attempt
 		status["compile"] = "no_response"
 		status["compile_error"] = fmt.Sprintf("child stdout=%d bytes, no files written", len(stdout))
-	} else if strings.Contains(stdout, "[API Error]") || strings.Contains(stdout, ModelDowngradeMarker) ||
-		strings.Contains(stdout, "http request:") ||
-		strings.Contains(stdout, "TLS handshake timeout") ||
-		strings.Contains(stdout, "net/http:") {
+	} else if endedOnAPIError(stdout) || strings.Contains(stdout, ModelDowngradeMarker) {
 		// child stdout is an API/network error message, not a real attempt
 		status["compile"] = "no_response"
 		status["compile_error"] = fmt.Sprintf("child returned API/network error (%d bytes)", len(stdout))

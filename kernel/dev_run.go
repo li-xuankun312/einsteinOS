@@ -955,9 +955,7 @@ func devCollectLite(childPid int64, repo string) (string, map[string]string) {
 		}
 	}
 
-	apiErr := strings.Contains(stdout, "[API Error]") ||
-		strings.Contains(stdout, "http request:") || strings.Contains(stdout, "TLS handshake timeout") ||
-		strings.Contains(stdout, "net/http:")
+	apiErr := endedOnAPIError(stdout)
 	// a conversation that wrote files or had its scripts run on this machine did something:
 	// an API error that ends it is not "no response", and its mirror is judged, not reset.
 	// 11/14 13:50 dev_unit_16 (f0e4c486) ended on 502s after 11 rounds, 151 tool calls and 7
@@ -1272,3 +1270,19 @@ func devUnitRole(unitID string, idx, attempt int) string {
 // apiEndedKey marks a conversation the model layer could not finish: an API error, which the
 // proxy's refusals are (dev_collect sets it, runUnit reads it).
 const apiEndedKey = "ended_on_api_error"
+
+// streamErrorMarker begins what the model layer writes when the server answers a request with
+// an error event inside its stream (model/claudeweb/model.go: "[Error] " + the event's data):
+// the request went out and the refusal came back in the stream, not as a failed request.
+const streamErrorMarker = `[Error] {"type":"error"`
+
+// endedOnAPIError: the conversation's output is the model layer's word that the API ended it —
+// a request that failed ("[API Error]", a transport error) or a refusal in the stream
+// (streamErrorMarker). 11/19 08:17:01 a2983f70 (dev_fix_1_pcd027bc02f) ended on a stream error
+// event, rate_limit_error concurrent_limit_reached, having written nothing; only "[API Error]"
+// was read as one, so the branch's existing code was judged (existing_code_fails, attempt 2).
+func endedOnAPIError(stdout string) bool {
+	return strings.Contains(stdout, "[API Error]") || strings.Contains(stdout, streamErrorMarker) ||
+		strings.Contains(stdout, "http request:") || strings.Contains(stdout, "TLS handshake timeout") ||
+		strings.Contains(stdout, "net/http:")
+}
