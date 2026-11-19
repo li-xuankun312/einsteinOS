@@ -37,3 +37,40 @@ func TestUnitsAreIndependentWhenNothingMeasuredLinksThem(t *testing.T) {
 		t.Fatalf("a file both have on the branch: %v", s)
 	}
 }
+
+// A unit whose reference sources #include another unit's are linked: one ports the header,
+// the other the implementation written against it. 11/19 06:50 pd8e380f419 (include/strata/
+// platform/direct_file.hpp, memory.hpp) rewrote include/baloon/direct_file.hpp while
+// p3199202ac2 (src/platform/direct_file.cpp, memory.cpp) wrote its .cpp against the old one;
+// both were started side by side at 08:06:25 and 08:07:06 again.
+func TestAUnitWhoseSourcesIncludeAnothersIsLinkedToIt(t *testing.T) {
+	tree := []string{"include/strata/platform/direct_file.hpp", "include/strata/platform/memory.hpp",
+		"src/platform/direct_file.cpp", "src/platform/memory.cpp", "include/strata/plan/plan.hpp"}
+	// the reference's own lines at 01529aaa82b9
+	direct := "// direct I/O\n#include \"strata/platform/direct_file.hpp\"\n\n#include <chrono>\n#include <cstdlib>\n#ifdef _WIN32\n#include <windows.h>\n#endif\n"
+	memory := "#include \"strata/platform/memory.hpp\"\n#include <sys/mman.h>\n"
+	if got := refIncludedFiles("src/platform/direct_file.cpp", direct, tree); !reflect.DeepEqual(got, []string{"include/strata/platform/direct_file.hpp"}) {
+		t.Fatalf("direct_file.cpp includes %v", got)
+	}
+
+	hdr := DevPlanNode{ID: "pd8e380f419"}
+	impl := DevPlanNode{ID: "p3199202ac2"}
+	other := DevPlanNode{ID: "p71c0367d2e"}
+	r := &devRun{repo: "o/r", raw: map[string]UnitRequirements{
+		hdr.ID: {Sources: []string{"include/strata/platform/direct_file.hpp", "include/strata/platform/memory.hpp"}},
+		impl.ID: {Sources: []string{"src/platform/direct_file.cpp", "src/platform/memory.cpp"},
+			Includes: append(refIncludedFiles("src/platform/direct_file.cpp", direct, tree),
+				refIncludedFiles("src/platform/memory.cpp", memory, tree)...)},
+		other.ID: {Sources: []string{"include/strata/plan/plan.hpp"}},
+	}}
+	fp := func(u DevPlanNode) unitFootprint { return r.footprint(u, nil) }
+	if s := fp(impl).sharedWith(fp(hdr)); len(s) == 0 {
+		t.Fatalf("the implementation and the header it includes taken for independent")
+	}
+	if s := fp(hdr).sharedWith(fp(impl)); len(s) == 0 {
+		t.Fatalf("the link is not the same both ways")
+	}
+	if s := fp(other).sharedWith(fp(impl)); len(s) != 0 {
+		t.Fatalf("a header nothing of the other includes links them: %v", s)
+	}
+}

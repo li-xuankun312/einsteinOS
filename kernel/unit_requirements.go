@@ -182,6 +182,9 @@ type UnitRequirements struct {
 	RefRead bool
 	// Vendored: sources the reference vendors (refVendoredRe), not ported
 	Vendored []string
+	// Includes: the reference files Sources #include (refIncludedFiles): a unit porting one of
+	// them is linked to this one (dev_independence.go)
+	Includes []string
 }
 
 // GPU: the unit's sources include CUDA.
@@ -303,8 +306,10 @@ func finishRequirements(bare, sha string, req *UnitRequirements) {
 	}
 	req.Sources = own
 	sort.Strings(req.Sources)
+	tree := refTreeFiles(bare, sha)
 	for _, f := range req.Sources {
 		if text, err := refGitFn(bare, "show", sha+":"+f); err == nil {
+			req.Includes = append(req.Includes, refIncludedFiles(f, text, tree)...)
 			syms := SymbolsOf(f, text)
 			req.Symbols = append(req.Symbols, syms...)
 			if req.FileNames == nil {
