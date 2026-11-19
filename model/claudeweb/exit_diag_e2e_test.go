@@ -102,3 +102,28 @@ func TestAnErrorExitLeavesARecordAndTheLogNamesItsBranch(t *testing.T) {
 		t.Fatal("no record was pushed")
 	}
 }
+
+// The server's refusal for the account's concurrency reaches the kernel, which starts no more
+// conversations than it took: 11/19 08:17:01 a2983f70's diag record, as the server sent it.
+func TestARefusalForConcurrencyBoundsTheConversationsAtOnce(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, `event: error
+data: {"type":"error","error":{"type":"rate_limit_error","message":"{\"type\":\"exceeded_limit\",\"resetsAt\":null,\"remaining\":null,\"perModelLimit\":null,\"representativeClaim\":\"concurrents\",\"overageInUse\":false,\"windows\":null}","details":{"error_code":"concurrent_limit_reached"}},"request_id":"req_011ChBxE3KGqVmbuMsqqbSXx"}
+
+`)
+	}))
+	defer srv.Close()
+	oldWin, oldPub := apiWin, exitDiagPublish
+	apiWin = newAPIWindow(1000, time.Minute)
+	exitDiagPublish = func(string, string, kernel.DiagRecord) {}
+	kernel.ResetConversationRoom()
+	t.Cleanup(func() { apiWin, exitDiagPublish = oldWin, oldPub; kernel.ResetConversationRoom() })
+
+	m := NewModel(NewClient(ClientConfig{BaseURL: srv.URL, OrgID: "org1", Cookie: "c=1"}), "claude-sonnet-4-6", "medium")
+	m.completionLoop(context.Background(), "a2983f70-c17b-4b70-af70-ee5ff1331748", m.newCompletionRequest("p"), false,
+		func(*model.LLMResponse, error) bool { return true })
+	if kernel.ConversationRoom() == 0 {
+		t.Fatal("the refusal for concurrency did not bound the conversations at once")
+	}
+}

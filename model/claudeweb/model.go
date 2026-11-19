@@ -935,6 +935,9 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 
 			case "error":
 				body.Close()
+				if strings.Contains(string(event.Data), "concurrent_limit_reached") {
+					kernel.ConcurrentLimitReached() // the account runs no more at once (kernel/conv_room.go)
+				}
 				doExit(exitError, fmt.Sprintf("[Error] %s", string(event.Data)))
 				return
 

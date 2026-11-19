@@ -149,6 +149,7 @@ func GetConvExec() func(pid int64, prompt string) (string, string) {
 func ForkWithRole(prompt string, pwd string, role string) (int64, error) {
 	// set role + termination BEFORE fork — child consumes both atomically
 	cond := TerminationForRole(role)
+	waitConversationRoom(role) // before the slots: a waiting fork holds nothing another needs
 	slot := claimForkSlot(role)
 	SetForkRole(role)
 	SetPendingTermination(cond)
@@ -208,6 +209,7 @@ func ForkWithTermination(prompt string, pwd string, role string, cond Terminatio
 		return 0, fmt.Errorf(forkRoleBusyFmt, role, pid)
 	}
 	// set both role and termination BEFORE fork — child consumes atomically
+	waitConversationRoom(role) // before the slots: a waiting fork holds nothing another needs
 	slot := claimForkSlot(role)
 	SetForkRole(role)
 	SetPendingTermination(cond)
@@ -287,7 +289,9 @@ func Fork(prompt string, pwd string) (int64, error) {
 
 	if convExecFn != nil {
 		go func() {
+			convStarted()
 			stdout, stderr := convExecFn(int64(pid), prompt)
+			convEnded()
 
 			// the child's conversation is the one bound to its pid while it ran (SetConvID)
 			metaMu.Lock()

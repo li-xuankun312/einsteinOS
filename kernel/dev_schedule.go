@@ -82,6 +82,11 @@ func (r *devRun) schedule(theory string, staleRerun map[string]bool, attempt fun
 				if r.accountRefusedBeside(len(running)) {
 					break
 				}
+				// the server took no more conversations at once than this (conv_room.go): a unit
+				// started past it would hold a mirror and a clone waiting for a conversation
+				if room := ConversationRoom(); room > 0 && len(running) >= room {
+					break
+				}
 				soloUnit := unit.Integration || r.alone[unit.ID]
 				if unit.Integration && (len(running) > 0 || len(nextUnitIndices(plan, leaves)) > 1) {
 					continue // the integration unit is the last, and alone
