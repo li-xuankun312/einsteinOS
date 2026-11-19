@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -114,6 +115,17 @@ type devRun struct {
 	owners                      map[string]string           // "file\tname" -> the unit that ports it
 	ownersFor                   string                      // the leaves the owners were computed for
 	alone                       map[string]bool             // units that run with no other beside them (dev_schedule.go)
+	// mu holds the plan and the measurement caches above for the unit whose goroutine uses
+	// them; a unit lets go of it while it waits on a conversation (whileWaiting), so units
+	// side by side (dev_schedule.go) never touch the plan at once
+	mu sync.Mutex
+}
+
+// whileWaiting runs f — a wait on a conversation, a fork, a review — with the run's lock let go.
+func (r *devRun) whileWaiting(f func()) {
+	r.mu.Unlock()
+	defer r.mu.Lock()
+	f()
 }
 
 // markAlone: unit's next attempt runs with no other unit beside it.
@@ -522,6 +534,8 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 // the unit passed, and whether infrastructure (git) failed so the whole call
 // should be re-queued.
 func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passed, requeue bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	plan := r.plan
 	fail := plan.LastFailure[unit.ID]
 	// a unit another unit's review faulted starts from that verdict, as a fix attempt, on
@@ -595,9 +609,11 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 	var status map[string]string
 	for try := 1; try <= 5; try++ {
 		var ferr error
-		waitRoleEnded(role, r.repo, unit.ID)
+		r.whileWaiting(func() { waitRoleEnded(role, r.repo, unit.ID) })
 		unchanged := 0
 		RegisterPreVerify(role, func() (bool, string) {
+			r.mu.Lock() // the conversation's goroutine; the unit's waits on it with the lock let go
+			defer r.mu.Unlock()
 			if changed, removed, err := treeDelta(mirror, base); err == nil && pre.sameRejected(deltaDigest(mirror, changed, removed)) {
 				unchanged++
 				if pre.unchangedEnd(unchanged) {
@@ -628,7 +644,7 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 			}
 			return false, preVerifyReport(o)
 		})
-		child, ferr = ForkWithTermination(prompt, ".", role, cond)
+		r.whileWaiting(func() { child, ferr = ForkWithTermination(prompt, ".", role, cond) })
 		if ferr != nil {
 			UnregisterPreVerify(role)
 			log.Printf("dev_from_theorems: %s unit %s fork failed (try %d/5): %v", r.repo, unit.ID, try, ferr)
@@ -637,8 +653,10 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 		// the fork returns at once and the conversation runs until Wait returns: the check
 		// stays registered for all of it (11/05 07:14:08 dev_fix_1 of u12d8dd5102 ended with no
 		// check at all — it had been unregistered the moment the fork returned)
-		Wait(child)
-		waitAbandoned(child, r.repo, unit.ID)
+		r.whileWaiting(func() {
+			Wait(child)
+			waitAbandoned(child, r.repo, unit.ID)
+		})
 		UnregisterPreVerify(role)
 		if m := getMeta(child); m != nil && m.ConvID != "" {
 			convID = m.ConvID
@@ -665,7 +683,9 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 		plan.VerifySeen[unit.ID] = true
 	}
 	if convID != "" {
-		if !WaitConvTree(convID, 90*time.Minute, 10*time.Second) {
+		var settled bool
+		r.whileWaiting(func() { settled = WaitConvTree(convID, 90*time.Minute, 10*time.Second) })
+		if !settled {
 			log.Printf("dev_from_theorems: %s unit %s: conversations below %s still running after 90 min", r.repo, unit.ID, shortID(convID))
 		}
 		if m := ConvManifest(convID); len(m.Children) > 0 {
@@ -790,12 +810,13 @@ func (r *devRun) reviewUnit(unit DevPlanNode, idx, total int, convID string, st 
 		}
 	}
 	before, beforeErr := snapshotTree(mirror)
-	verdict := dev_review_unit(r.pid, r.repo, r.branch, idx+1, total, du, st)
+	var verdict string
+	r.whileWaiting(func() { verdict = dev_review_unit(r.pid, r.repo, r.branch, idx+1, total, du, st) })
 	// a review that ended without a verdict judged nothing: the code is not at fault, so the
 	// review is asked again, in a new conversation, not counted against the unit
 	for try := 2; try <= reviewVerdictTries && strings.HasPrefix(verdict, reviewNoVerdict); try++ {
 		log.Printf("dev_from_theorems: %s unit %d/%d id=%s review %d/%d gave no verdict — asking a new review", r.repo, idx+1, total, unit.ID, try-1, reviewVerdictTries)
-		verdict = dev_review_unit(r.pid, r.repo, r.branch, idx+1, total, du, st)
+		r.whileWaiting(func() { verdict = dev_review_unit(r.pid, r.repo, r.branch, idx+1, total, du, st) })
 	}
 	if strings.HasPrefix(verdict, reviewNoVerdict) {
 		verdict = fmt.Sprintf(reviewNoVerdictFailFmt, reviewVerdictTries)
