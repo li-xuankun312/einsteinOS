@@ -172,6 +172,9 @@ func (c *Client) Completion(convID string, req *CompletionRequest) (io.ReadClose
 				continue
 			}
 
+			if isAccountRefused(errStr) {
+				kernel.SetProxyAccountUnusable(truncBody(errBody))
+			}
 			if resp.StatusCode >= 500 {
 				lastErr = fmt.Errorf("API %d: %s", resp.StatusCode, truncBody(errBody))
 				continue
@@ -179,6 +182,7 @@ func (c *Client) Completion(convID string, req *CompletionRequest) (io.ReadClose
 			return nil, fmt.Errorf("API %d: %s", resp.StatusCode, truncBody(errBody))
 		}
 
+		kernel.ProxyAccountAnswered()
 		return &progressBody{ReadCloser: resp.Body, w: watch}, nil
 	}
 
@@ -217,9 +221,13 @@ func (c *Client) Completion(convID string, req *CompletionRequest) (io.ReadClose
 			errBody, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
 			lastErr = fmt.Errorf("API %d: %s", resp.StatusCode, truncBody(errBody))
+			if isAccountRefused(string(errBody)) {
+				kernel.SetProxyAccountUnusable(truncBody(errBody))
+			}
 			log.Printf("claudeweb: slow retry %d/3 status %d", slowAttempt+1, resp.StatusCode)
 			continue
 		}
+		kernel.ProxyAccountAnswered()
 		return &progressBody{ReadCloser: resp.Body, w: watch}, nil
 	}
 
@@ -714,6 +722,13 @@ func isRateLimit(body string) bool {
 			contains(body, "提问次数已达上限") ||
 			contains(body, "频率过快") ||
 			contains(body, "count has reached the limit"))
+}
+
+// isAccountRefused: the proxy refuses the account itself, not a request ("你当前的车暂时无法使用，
+// 请重新选择车辆", 403 — 11/19 08:29:51): no unit is started beside the running ones until a
+// request of the account is answered again (kernel/proxy_quota.go).
+func isAccountRefused(body string) bool {
+	return contains(body, "重新选择车辆") || contains(body, "车暂时无法使用")
 }
 
 func isProxyThrottle(body string) bool {

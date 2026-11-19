@@ -58,3 +58,41 @@ func TestFilesAreUploadedIntoTheSandboxNotAttached(t *testing.T) {
 		}
 	}
 }
+
+// The proxy's refusal of the account itself is the kernel's to know: 11/19 08:29:51 the
+// upload of unit 32's review was answered 403 "你当前的车暂时无法使用，请重新选择车辆", and four
+// seconds later the last attempt of another unit was started into it. An answered request
+// says the account is back.
+func TestTheProxysRefusalOfTheAccountReachesTheKernel(t *testing.T) {
+	refuse := true
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if refuse {
+			w.WriteHeader(403)
+			w.Write([]byte(`{"error":{"details":{"error_visibility":"user_facing"},"message":"你当前的车暂时无法使用，请重新选择车辆。","type":"permission_error"},"type":"error"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Write([]byte("event: message_stop\ndata: {}\n\n"))
+	}))
+	defer srv.Close()
+	defer kernel.ProxyAccountAnswered()
+	oldDir := localUploadsDir
+	localUploadsDir = t.TempDir()
+	defer func() { localUploadsDir = oldDir }()
+	c := NewClient(ClientConfig{BaseURL: srv.URL, OrgID: "org1", Cookie: "c=1"})
+	if _, err := c.UploadFile("8c15ab93-cf4f-4ed0-a723-fe34286aa185", "dev_conversation_p45808a8a9c.md", []byte("x")); err == nil {
+		t.Fatal("a refused upload returned no error")
+	}
+	if since, why := kernel.ProxyAccountUnusable(); since.IsZero() || !strings.Contains(why, "重新选择车辆") {
+		t.Fatalf("the kernel was not told the account is refused: %v %q", since, why)
+	}
+	refuse = false
+	body, err := c.Completion("8c15ab93-cf4f-4ed0-a723-fe34286aa185", &CompletionRequest{Prompt: "p"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body.Close()
+	if since, _ := kernel.ProxyAccountUnusable(); !since.IsZero() {
+		t.Fatal("an answered request did not tell the kernel the account is back")
+	}
+}

@@ -79,6 +79,9 @@ func (r *devRun) schedule(theory string, staleRerun map[string]bool, attempt fun
 				if _, ok := running[unit.ID]; ok {
 					continue
 				}
+				if r.accountRefusedBeside(len(running)) {
+					break
+				}
 				soloUnit := unit.Integration || r.alone[unit.ID]
 				if unit.Integration && (len(running) > 0 || len(nextUnitIndices(plan, leaves)) > 1) {
 					continue // the integration unit is the last, and alone
@@ -252,3 +255,18 @@ func (r *devRun) afterUnit(res unitResult) (error, bool) {
 var quotaSleep = sleepWithKernelHeartbeat
 
 func sleepWithKernelHeartbeat(d time.Duration) { time.Sleep(d) }
+
+// accountRefusedBeside: the proxy refuses the account itself (kernel/proxy_quota.go) and units
+// are running — no unit is started beside them until a request of the account is answered.
+// With none running one starts: its request is what finds out whether the account is back.
+func (r *devRun) accountRefusedBeside(running int) bool {
+	since, why := ProxyAccountUnusable()
+	if since.IsZero() || running == 0 {
+		return false
+	}
+	if !r.unusableSaid.Equal(since) {
+		r.unusableSaid = since
+		log.Printf("dev_schedule: %s the proxy has refused this account since %s (%s) — no unit is started beside the %d running until a request of it is answered", r.repo, since.Format("15:04:05"), why, running)
+	}
+	return true
+}

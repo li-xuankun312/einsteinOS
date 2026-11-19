@@ -115,6 +115,7 @@ type devRun struct {
 	owners                      map[string]string           // "file\tname" -> the unit that ports it
 	ownersFor                   string                      // the leaves the owners were computed for
 	alone                       map[string]bool             // units that run with no other beside them (dev_schedule.go)
+	unusableSaid                time.Time                   // the proxy's refusal of the account last logged (dev_schedule.go)
 	// mu holds the plan and the measurement caches above for the unit whose goroutine uses
 	// them; a unit lets go of it while it waits on a conversation (whileWaiting), so units
 	// side by side (dev_schedule.go) never touch the plan at once

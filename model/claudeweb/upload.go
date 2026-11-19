@@ -56,6 +56,9 @@ func (c *Client) UploadFile(convID, name string, data []byte) (string, error) {
 	defer resp.Body.Close()
 	rb, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != 200 && resp.StatusCode != 201 {
+		if isAccountRefused(string(rb)) {
+			kernel.SetProxyAccountUnusable(truncBody(rb))
+		}
 		return "", fmt.Errorf("upload-file %s %s: status %d: %s", shortConv(convID), name, resp.StatusCode, truncBody(rb))
 	}
 	id := uploadedFileID(rb)

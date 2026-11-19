@@ -52,3 +52,49 @@ func TestNoUnitIsStartedWhileTheProxysQuotaIsSpent(t *testing.T) {
 		t.Fatalf("waits=%d started=%d", waits, started)
 	}
 }
+
+// While the proxy refuses the account itself ("你当前的车暂时无法使用，请重新选择车辆", 11/19
+// 08:29:51), no unit is started beside the ones running: 08:29:55 the last attempt of
+// pcd027bc02f was started into it. With none running one starts, and its answered request
+// is what lets the others start again.
+func TestNoUnitIsStartedBesideTheRunningWhileTheProxyRefusesTheAccount(t *testing.T) {
+	old := devRepoLocalDirHook
+	devRepoLocalDirHook = func(string) (string, error) { return "", errors.New("no clone in this test") }
+	defer func() { devRepoLocalDirHook = old }()
+	SetProxyAccountUnusable(`{"message":"你当前的车暂时无法使用，请重新选择车辆。","type":"permission_error"}`)
+	defer ProxyAccountAnswered()
+
+	mods := []DevModule{{Name: "A.lean", Hash: "a", Bytes: 100}, {Name: "B.lean", Hash: "b", Bytes: 100}}
+	p := newDevPlan("o/r", "s", mods, [][]string{{"A.lean"}, {"B.lean"}}, "plan")
+	leaves := p.Leaves()
+	r := &devRun{repo: "o/r", devRepo: "o/d", branch: "b", plan: p, raw: map[string]UnitRequirements{
+		leaves[0].ID: {Sources: []string{"src/a.cpp"}}, leaves[1].ID: {Sources: []string{"src/b.cpp"}}}}
+	var mu sync.Mutex
+	active, most, started := 0, 0, 0
+	attempt := func(u DevPlanNode, idx, total int) (string, bool, bool) {
+		mu.Lock()
+		active++
+		started++
+		if active > most {
+			most = active
+		}
+		first := started == 1
+		mu.Unlock()
+		if first {
+			// the other unit would be started now, were it allowed; then the account answers
+			time.Sleep(200 * time.Millisecond)
+			ProxyAccountAnswered()
+		}
+		mu.Lock()
+		active--
+		mu.Unlock()
+		r.mu.Lock()
+		p.MarkUnitPass(u)
+		r.mu.Unlock()
+		return "", true, false
+	}
+	r.schedule("", map[string]bool{}, attempt)
+	if most != 1 || started != 2 {
+		t.Fatalf("while the account was refused %d units ran at once (want 1); %d started (want 2)", most, started)
+	}
+}
