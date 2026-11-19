@@ -58,3 +58,20 @@ func TestASearchForKeysOrTheKernelsFilesDoesNotRunHere(t *testing.T) {
 		}
 	}
 }
+
+// A token file under another name is a credential too: 11/19 16:45:49 "ls ~/.github_token &&
+// cat ~/.github_token | head -c 20" ran here.
+func TestATokenFileUnderAnotherNameDoesNotRunHere(t *testing.T) {
+	for _, c := range []string{
+		`ls ~/.github_token 2>/dev/null && cat ~/.github_token | head -c 20 || echo "token not found"`,
+		`cat /root/.gh-token`,
+		`cat $HOME/github_token.txt`,
+	} {
+		if touchesKernel(c, "/home/claude") == "" {
+			t.Errorf("ran here: %q", c)
+		}
+	}
+	if p := touchesKernel(`cd /home/claude/baloon-p17652417b0 && python3 tests/k37_pytools/test_pytools.py`, "/home/claude"); p != "" {
+		t.Errorf("the unit's own test refused (%s)", p)
+	}
+}

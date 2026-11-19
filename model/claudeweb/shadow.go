@@ -1090,6 +1090,9 @@ var kernelPlaces = []string{".ssh", "bash_history", ".git-credentials", ".netrc"
 	// bytes), 09:44 git's credential helper (92 bytes), 16:15 "echo GITHUB_TOKEN=${GITHUB_TOKEN:+SET}"
 	// all ran here
 	".npmrc", "git credential", "credential.helper", "GITHUB_TOKEN", "GH_TOKEN",
+	// a token file under another name — 11/19 16:45:49 "ls ~/.github_token && cat
+	// ~/.github_token | head -c 20" ran here (there was none)
+	"github_token", ".gh-token", "gh_token",
 	// the stores a desktop or an agent keeps secrets in — 11/15 12:30–12:32 a dev conversation
 	// ran here "ssh-add -l", "cat /etc/credstore", "secret-tool lookup server github.com" and
 	// "ps aux | grep -i cred" with a query of the DBus secret service (875 bytes)
