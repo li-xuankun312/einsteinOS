@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 )
 
 // The units of a dev run used to run one after another, each waiting for the one before even
@@ -64,6 +65,13 @@ func (r *devRun) schedule(theory string, staleRerun map[string]bool, attempt fun
 	for {
 		// start every unit that may run now
 		for stopErr == nil && !requeued && !alone && turn < 400 {
+			if d := ProxyQuotaSpent(); d > 0 && len(running) > 0 {
+				break // the proxy answers no one until then; the units running hold what they have
+			} else if d > 0 {
+				log.Printf("dev_schedule: %s the proxy's quota for this account is spent for %v — no unit is started until it is back", r.repo, d.Round(time.Second))
+				r.whileWaiting(func() { quotaSleep(d + time.Second) })
+				continue
+			}
 			leaves := plan.Leaves()
 			started, prepared := false, false
 			for _, idx := range nextUnitIndices(plan, leaves) {
@@ -239,3 +247,8 @@ func (r *devRun) afterUnit(res unitResult) (error, bool) {
 	plan.InfraFails = 0
 	return nil, false
 }
+
+// quotaSleep waits for the proxy's quota to come back (a hook for tests).
+var quotaSleep = sleepWithKernelHeartbeat
+
+func sleepWithKernelHeartbeat(d time.Duration) { time.Sleep(d) }

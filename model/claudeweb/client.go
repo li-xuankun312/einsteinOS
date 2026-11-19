@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"google.golang.org/adk/v2/kernel"
 	"io"
 	"log"
 	"net/http"
@@ -142,6 +143,8 @@ func (c *Client) Completion(convID string, req *CompletionRequest) (io.ReadClose
 				if isProxyThrottle(errStr) {
 					apiWin.throttled() // the window lets out no more than the proxy took (api_window.go)
 					if waitDur := parseRetryAfter(errStr); waitDur > 0 {
+						// the account's quota is spent until then: no unit is started meanwhile
+						kernel.SetProxyQuotaSpent(time.Now().Add(waitDur))
 						log.Printf("claudeweb: proxy throttle, sleeping %v until quota resets", waitDur)
 						watch.pause()
 						sleepWithHeartbeat(waitDur)
