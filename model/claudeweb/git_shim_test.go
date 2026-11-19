@@ -64,3 +64,47 @@ func TestWhatFollowsGitRunsHere(t *testing.T) {
 		t.Fatalf("%s not written executable here (%v)", abs, err)
 	}
 }
+
+// A git command that changes the files of the tree (git rm, mv, checkout -- f, restore, apply,
+// reset --hard, clean, stash) writes files as much as a redirect does. 11/19 12:36:33 the dev
+// conversation of p3798e66f3c removed include/ref/ngram/ with a command of git alone: skipped
+// here, the file stayed in the mirror, and 12:41:32 and 12:50:21 the kernel told it twice that
+// its files were those of the rejected verification (ref_path_written) — the third time ends the
+// conversation and judges the tree; pb0569948de too from 12:36:52.
+func TestAGitCommandThatChangesTheTreeRunsHere(t *testing.T) {
+	for _, cmd := range []string{
+		"cd /home/claude/baloon-p3798e66f3c && git rm -r -q include/ref/ngram && git commit -qm 'drop the reference header'",
+		"git -C /home/claude/baloon-pb0569948de rm -q include/ref/prefill/gemm.hpp",
+		"git mv include/ref/plan/plan.hpp include/baloon/plan.hpp",
+		"git checkout -- include/baloon/plan.hpp",
+		"git restore --source=HEAD~1 include/baloon/logits_selection.hpp",
+		"git apply /tmp/fix.patch",
+		"git reset --hard HEAD~1",
+		"git clean -fdq include/ref",
+		"git stash",
+	} {
+		if !isGitCommand(cmd) || !gitCommandWritesFiles(cmd) {
+			t.Errorf("must run here: %q", cmd)
+		}
+	}
+	for _, pure := range []string{"git status", "git diff --stat", "git log --oneline -5", "git show HEAD:include/baloon/plan.hpp",
+		"git -C /home/claude/baloon-p3798e66f3c ls-files include/ref", "git checkout -b wip", "git reset --soft HEAD~1", "git stash list"} {
+		if gitCommandWritesFiles(pure) {
+			t.Errorf("changes no file of the tree: %q", pure)
+		}
+	}
+	// and it does remove the file here
+	dir := t.TempDir()
+	run := func(s string) {
+		c := exec.Command("bash", "-c", s)
+		c.Dir = dir
+		if out, err := c.CombinedOutput(); err != nil {
+			t.Fatalf("%s: %v: %s", s, err, out)
+		}
+	}
+	run("git init -q && git config user.email a@b && git config user.name a && mkdir -p include/ref/ngram && echo x > include/ref/ngram/ple_reader.hpp && git add -A && git commit -qm init")
+	run(gitShim + "git rm -r -q include/ref/ngram && git commit -qm drop && git push origin main")
+	if _, err := os.Stat(filepath.Join(dir, "include/ref/ngram/ple_reader.hpp")); err == nil {
+		t.Fatal("git rm run here left the file")
+	}
+}

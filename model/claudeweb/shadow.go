@@ -415,10 +415,57 @@ var gitWriteRe = regexp.MustCompile(`(^|[^0-9&>])>>?\s*[^&\s/]|\btee\s|\bcp\s|\b
 // (a redirect not to an absolute path) did not see it, and every later call exited 127 here.
 func gitCommandWritesFiles(command string) bool {
 	for _, seg := range shellCommands(command) {
+		if startsWithGit(seg) && gitChangesTree(seg) {
+			return true
+		}
 		if startsWithGit(seg) || strings.HasPrefix(seg, "GIT_DIR=") || strings.HasPrefix(seg, "cd ") {
 			continue
 		}
 		return true
+	}
+	return false
+}
+
+// gitChangesTree: the git command seg changes the files of the work tree — what the sandbox's
+// git did to them has to be done here too, or the mirror keeps what the conversation removed.
+// 11/19 12:36:33 p3798e66f3c removed include/ref/ngram/ with git rm alone: skipped here, the
+// file stayed, and twice the kernel told the conversation its files had not changed.
+func gitChangesTree(seg string) bool {
+	f := strings.Fields(envAssignRe.ReplaceAllString(seg, ""))
+	i := 0
+	for i < len(f) && f[i] != "git" {
+		i++
+	}
+	i++
+	for i < len(f) && strings.HasPrefix(f[i], "-") { // git's own options: -C dir, -c k=v, --git-dir=…
+		if f[i] == "-C" || f[i] == "-c" {
+			i++
+		}
+		i++
+	}
+	if i >= len(f) {
+		return false
+	}
+	sub, args := f[i], f[i+1:]
+	has := func(opts ...string) bool {
+		for _, a := range args {
+			for _, o := range opts {
+				if a == o {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	switch sub {
+	case "rm", "mv", "restore", "apply", "clean", "am", "cherry-pick", "revert", "merge", "rebase":
+		return true
+	case "checkout", "switch":
+		return !has("-b", "-B", "-c", "-C", "--orphan") || has("--")
+	case "reset":
+		return has("--hard", "--merge", "--keep")
+	case "stash":
+		return len(args) == 0 || !has("list", "show")
 	}
 	return false
 }
