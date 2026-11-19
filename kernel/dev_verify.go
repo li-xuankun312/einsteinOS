@@ -43,6 +43,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -402,6 +403,41 @@ func runWatched(command, dir string, timeout time.Duration) (int, string, ProcTr
 // runUnitVerifyWith is runUnitVerify plus what the reference requires of the unit: both
 // scripts run watched, and after they pass the gates are judged on the measurements.
 func runUnitVerifyWith(ws, unitID, gpuUsable string, req UnitRequirements, changed []string, buildTimeout, testTimeout time.Duration) VerifyResult {
+	return onTheRealMachine(unitID, func() VerifyResult {
+		return runUnitVerifyAlone(ws, unitID, gpuUsable, req, changed, buildTimeout, testTimeout)
+	})
+}
+
+// the real machine runs one verification at a time: each opens every GPU, and units that run
+// side by side (dev_schedule.go) reach their verifications at any time
+var (
+	realMachineMu   sync.Mutex
+	realMachineUnit string
+	realMachineStat sync.Mutex
+)
+
+// onTheRealMachine runs f when no other unit's verification runs, and says whom it waited for.
+func onTheRealMachine(unitID string, f func() VerifyResult) VerifyResult {
+	realMachineStat.Lock()
+	busy := realMachineUnit
+	realMachineStat.Unlock()
+	if busy != "" {
+		log.Printf("dev_verify: unit %s waits for unit %s's verification on the real machine", unitID, busy)
+	}
+	realMachineMu.Lock()
+	defer realMachineMu.Unlock()
+	realMachineStat.Lock()
+	realMachineUnit = unitID
+	realMachineStat.Unlock()
+	defer func() {
+		realMachineStat.Lock()
+		realMachineUnit = ""
+		realMachineStat.Unlock()
+	}()
+	return f()
+}
+
+func runUnitVerifyAlone(ws, unitID, gpuUsable string, req UnitRequirements, changed []string, buildTimeout, testTimeout time.Duration) VerifyResult {
 	if len(req.Tests) > 0 {
 		// the integration unit's test.sh is the reference's registered tests, written here
 		_, test := devVerifyScripts(unitID)
