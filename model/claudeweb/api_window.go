@@ -47,6 +47,10 @@ type apiWindow struct {
 	// take (throttled); every full window without a 429 gives one back, up to limit.
 	cap      int
 	capSince time.Time // when cap last changed
+	// took: the most of ours the proxy answered within one window (answered), measured, and
+	// after a refusal what it took then. A refusal with fewer of ours than that is the shared
+	// count spent by others on the same car, not a smaller count for us.
+	took int
 	// account: whose requests the slots are (windowAccount): the proxy counts per account, and
 	// slots in the file of another account — or of none — are not counted
 	account   string
@@ -68,16 +72,36 @@ func (w *apiWindow) throttled() {
 	w.mergeFromDiskLocked()
 	now := w.now()
 	w.pruneLocked(now)
-	took := len(w.times) - 1
+	n := len(w.times)
+	if n < w.took {
+		// 11/19 the proxy took nine of ours before 12:00, then refused at 12:21:39 with five and
+		// at 12:25:48 with four: "当前车队模型…提问频率过快", the car's count, spent by others
+		log.Printf("api_throttle: the proxy refused a request with %d of ours in the last %v, fewer than the %d it has taken — the car's shared count was spent by others; the window stays at %d",
+			n, w.dur, w.took, w.cap)
+		return
+	}
+	took := n - 1
 	if took < 1 {
 		took = 1
 	}
+	w.took = took
 	if took < w.cap {
 		log.Printf("api_throttle: the proxy refused a request with %d of ours in the last %v — the window lets %d out until %v pass without a refusal",
 			len(w.times), w.dur, took, w.dur)
 		w.cap = took
 	}
 	w.capSince = now
+}
+
+// answered: the proxy answered a request of ours; the requests of ours in the window now are
+// that many it takes.
+func (w *apiWindow) answered() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.pruneLocked(w.now())
+	if n := len(w.times); n > w.took {
+		w.took = n
+	}
 }
 
 // the proxy says ten; one in reserve for a question that is not ours (a browser tab).

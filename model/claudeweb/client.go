@@ -184,6 +184,7 @@ func (c *Client) Completion(convID string, req *CompletionRequest) (io.ReadClose
 		}
 
 		kernel.ProxyAccountAnswered()
+		apiWin.answered()
 		return &progressBody{ReadCloser: resp.Body, w: watch}, nil
 	}
 
@@ -229,6 +230,7 @@ func (c *Client) Completion(convID string, req *CompletionRequest) (io.ReadClose
 			continue
 		}
 		kernel.ProxyAccountAnswered()
+		apiWin.answered()
 		return &progressBody{ReadCloser: resp.Body, w: watch}, nil
 	}
 

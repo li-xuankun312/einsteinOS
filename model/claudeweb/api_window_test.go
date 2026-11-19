@@ -209,3 +209,40 @@ func TestTheWindowCountsOnlyItsOwnAccountsRequests(t *testing.T) {
 		t.Fatalf("an account counted %d requests of a file that names no account", n)
 	}
 }
+
+// A refusal with fewer of ours than the proxy has already taken in one window is the shared
+// count spent by others on the same car ("当前车队模型…提问频率过快"), not a smaller count for us:
+// the window does not narrow on it. 11/19 the proxy took nine of ours before 12:00, then refused
+// at 12:21:39 with five and at 12:25:48 with four, and the window went 8 → 4 → 3 — ten
+// conversations sharing three requests in ten minutes, each waiting up to 5m50s.
+func TestARefusalWithFewerThanTheProxyTookDoesNotNarrowTheWindow(t *testing.T) {
+	w, clock, _ := testWindow(9)
+	for i := 0; i < 8; i++ { // eight of ours answered in one window
+		w.acquire()
+		w.answered()
+		*clock = clock.Add(10 * time.Second)
+	}
+	w.acquire()
+	w.throttled() // 12:00:37: the ninth refused, nine of ours in the window
+	if w.cap != 8 {
+		t.Fatalf("a refusal at what the proxy took narrows to %d, want 8", w.cap)
+	}
+	*clock = clock.Add(11 * time.Minute) // they age out
+	for i := 0; i < 5; i++ {
+		w.acquire()
+		*clock = clock.Add(10 * time.Second)
+	}
+	before := w.cap // a quiet window gave one back
+	w.throttled()   // 12:21:39: refused with five of ours
+	if w.cap != before {
+		t.Fatalf("a refusal with five of ours, the proxy having taken eight, narrowed the window from %d to %d", before, w.cap)
+	}
+	for i := 0; i < 3; i++ {
+		w.acquire()
+		w.answered()
+	}
+	w.throttled() // refused with eight of ours again: that is what it takes now
+	if w.cap != 7 {
+		t.Fatalf("a refusal at what the proxy took narrows to %d, want 7", w.cap)
+	}
+}
