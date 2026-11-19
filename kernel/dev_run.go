@@ -544,7 +544,7 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 		return r.reviewUnit(unit, idx, total, "", st, "")
 	}
 
-	cloneDir, err := devRepoLocalDir(r.devRepo)
+	cloneDir, err := devUnitCloneDir(r.devRepo, unit.ID)
 	if err != nil {
 		log.Printf("dev_run: %s no local clone: %v", r.repo, err)
 		return "", false, true
@@ -767,7 +767,7 @@ func (r *devRun) reviewUnit(unit DevPlanNode, idx, total int, convID string, st 
 	mirror := devUnitMirrorDir(r.devRepo, unit.ID)
 	du.Mirror = mirror
 	if _, err := os.Stat(mirror); err != nil {
-		if dir, derr := devRepoLocalDir(r.devRepo); derr == nil && gitUseBranchFromRemote(dir, r.branch, r.branch) == nil {
+		if dir, derr := devUnitCloneDir(r.devRepo, unit.ID); derr == nil && gitUseBranchFromRemote(dir, r.branch, r.branch) == nil {
 			primeMirror(dir, mirror)
 		}
 	}
@@ -784,7 +784,7 @@ func (r *devRun) reviewUnit(unit DevPlanNode, idx, total int, convID string, st 
 	}
 	if beforeErr == nil {
 		verdict = reviewEditVerdict(verdict, mirror, before, func(f string) string {
-			dir, err := devRepoLocalDir(r.devRepo)
+			dir, err := devUnitCloneDir(r.devRepo, unit.ID)
 			if err != nil {
 				return ""
 			}
@@ -808,7 +808,7 @@ func (r *devRun) reviewUnit(unit DevPlanNode, idx, total int, convID string, st 
 	if blames := r.reviewBlame(unit, verdict); len(plan.ReopenableUnits(blames)) > 0 {
 		blames = plan.ReopenableUnits(blames)
 		copies := ""
-		if dir, err := devRepoLocalDir(r.devRepo); err == nil {
+		if dir, err := devUnitCloneDir(r.devRepo, unit.ID); err == nil {
 			copies = reviewCopiesText(r.branch, definitionCopies(dir, r.branch, verdict))
 		}
 		for _, id := range blames {
@@ -832,7 +832,7 @@ func (r *devRun) reviewUnit(unit DevPlanNode, idx, total int, convID string, st 
 	}
 	plan.ClearSilent(unit.ID)
 	failure := DevFailure{Kind: kind, Text: reason, BaseRef: r.branch}
-	if dir, err := devRepoLocalDir(r.devRepo); err == nil {
+	if dir, err := devUnitCloneDir(r.devRepo, unit.ID); err == nil {
 		failure.Copies = reviewCopiesText(r.branch, definitionCopies(dir, r.branch, verdict))
 	}
 	n := plan.Fail(unit.ID, failure)
@@ -1045,7 +1045,7 @@ const reopenReasonFmt = "%[1]s (said by the review of unit %[2]s, whose files th
 // it owns and only while this unit owns none of the named ones, so a verdict about its own
 // code stays its own.
 func (r *devRun) reviewBlame(unit DevPlanNode, verdict string) []string {
-	dir, err := devRepoLocalDir(r.devRepo)
+	dir, err := devUnitCloneDir(r.devRepo, unit.ID)
 	if err != nil {
 		return nil
 	}

@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -635,4 +636,32 @@ func truncStr(s string, n int) string {
 		return s
 	}
 	return s[:n] + "..."
+}
+
+// devUnitCloneDir: the clone of devRepo a unit's attempt works from — its checkouts, the
+// workspaces its verifications assemble, its pushes. It is made from the kernel's clone
+// (devRepoLocalDir) with git clone --shared, which copies no object, and fetches and pushes
+// where that clone does. Units that run side by side (dev_schedule.go) each move their own
+// checkout; until 11/19 every attempt checked out and pushed from the one clone.
+func devUnitCloneDir(devRepo, unitID string) (string, error) {
+	main, err := devRepoLocalDir(devRepo)
+	if err != nil {
+		return "", err
+	}
+	dir := main + "_" + unitID
+	if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+		return dir, nil
+	}
+	os.RemoveAll(dir)
+	if out, err := exec.Command("git", "clone", "-q", "--shared", main, dir).CombinedOutput(); err != nil {
+		return "", fmt.Errorf("clone of %s for unit %s: %v: %s", devRepo, unitID, err, truncStr(strings.TrimSpace(string(out)), 200))
+	}
+	url, err := exec.Command("git", "-C", main, "remote", "get-url", "origin").Output()
+	if err != nil {
+		return "", fmt.Errorf("origin of %s: %v", main, err)
+	}
+	if out, err := exec.Command("git", "-C", dir, "remote", "set-url", "origin", strings.TrimSpace(string(url))).CombinedOutput(); err != nil {
+		return "", fmt.Errorf("origin of %s: %v: %s", dir, err, out)
+	}
+	return dir, nil
 }
