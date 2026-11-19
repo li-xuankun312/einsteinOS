@@ -299,3 +299,26 @@ func portRefFiles(ws, unitID string, syms []RefSymbol) []string {
 	}
 	return out
 }
+
+// refPathsWritten: the files of changed that are at the path of one of the unit's reference
+// files as the conversation is shown them (req is the masked requirements: include/ref/… for
+// include/strata/…). 11/19 pb0569948de, p4fde6588a6 and p71c0367d2e each wrote their reference
+// header at that path (include/ref/prefill/gemm.hpp, include/ref/program/logits_selection.hpp,
+// include/ref/plan/plan.hpp); 2c49a7d8 kept such files out of the port map's reference column
+// only, and pb0569948de's was verified and pushed.
+func refPathsWritten(changed []string, req UnitRequirements) []string {
+	ref := map[string]bool{}
+	for _, f := range refFilesOf(req.Symbols) {
+		ref[f] = true
+	}
+	for f := range req.FileNames {
+		ref[f] = true
+	}
+	var out []string
+	for _, f := range changed {
+		if ref[f] {
+			out = append(out, f)
+		}
+	}
+	return sortedCopy(out)
+}

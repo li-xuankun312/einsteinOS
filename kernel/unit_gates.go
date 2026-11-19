@@ -57,6 +57,9 @@ type GateInput struct {
 	// PortRefFiles: port map lines whose reference file is not one of the unit's
 	// (portRefFiles)
 	PortRefFiles []string
+	// RefPathsWritten: files the unit wrote at a path of one of its reference files as the
+	// conversation is shown it (refPathsWritten)
+	RefPathsWritten []string
 	// PortExtra: port map lines that name no definition the unit ports (portExtra)
 	PortExtra []string
 	// PortForeign: port map lines whose counterpart is a name the reference file does not
@@ -105,6 +108,7 @@ const (
 	gateIntegrationNoKernelFmt = "integration_kernel_not_launched: the reference builds CUDA and its %[1]d registered tests passed here, but none of them launched a kernel of this repository (it defines %[2]d: %[3]s); kernels launched: %[4]s"
 	gateKernelShadowedFmt      = "kernel_shadowed_in_test: %[1]s define a __global__ kernel of the same name as a counterpart in the unit's port map %[2]s. The launch probe reads a launch by name, so a test that launches its own copy proves nothing about the ported kernel: remove these definitions and call the ported kernel (or its launcher) from the test instead"
 	gatePortRefFileFmt         = "port_ref_file_unknown: %[1]d reference file(s) in %[2]s are not files of the reference the kernel measured — that column is the reference's, and a header written in this repository is not one of its files, whatever it is called:\n%[3]s\nthe unit's reference files: %[4]s"
+	gateRefPathWrittenFmt      = "ref_path_written: %[1]d file(s) the unit wrote are at the path of a reference file as it is shown here (%[2]s) — the reference's files are the kernel's to read, not this repository's; the unit's counterparts are files of its own:\n%[3]s"
 	gatePortExtraFmt           = "port_extra: %[1]d line(s) of %[2]s name no definition this unit ports — the map holds exactly the %[3]d the kernel measured from the reference:\n%[4]s"
 	gatePortForeignFmt         = "port_name_foreign: %[1]d line(s) of %[2]s give a counterpart the reference file does not define — a port keeps the reference's names:\n%[3]s"
 	gatePortScriptFmt          = "port_count_in_script: %[1]s read the port map — the kernel checks %[2]s against the %[3]d definitions it measured from the reference, and a count a script checks is the conversation's own number (remove the port check from the scripts; they test the code)"
@@ -287,6 +291,9 @@ func unitGates(in GateInput) (kind, text string) {
 	}
 	if len(in.Shadowed) > 0 {
 		fail("kernel_shadowed_in_test", fmt.Sprintf(gateKernelShadowedFmt, strings.Join(in.Shadowed, ", "), PortMapPath(in.UnitID)))
+	}
+	if len(in.RefPathsWritten) > 0 {
+		fail("ref_path_written", fmt.Sprintf(gateRefPathWrittenFmt, len(in.RefPathsWritten), shortList(sortedCopy(refFilesOf(in.Req.Symbols)), 12), strings.Join(in.RefPathsWritten, "\n")))
 	}
 	if len(in.PortRefFiles) > 0 {
 		fail("port_ref_file_unknown", fmt.Sprintf(gatePortRefFileFmt, len(in.PortRefFiles), PortMapPath(in.UnitID), strings.Join(in.PortRefFiles, "\n"), shortList(sortedCopy(refFilesOf(in.Req.Symbols)), 12)))
