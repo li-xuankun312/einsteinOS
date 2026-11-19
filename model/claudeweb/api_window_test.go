@@ -127,3 +127,34 @@ func TestTwoProcessesShareOneWindowThroughTheFile(t *testing.T) {
 		t.Fatalf("the second process must wait for the first one's requests to age out; slept %v", *slept)
 	}
 }
+
+// The proxy refused a request while the window still let requests out: from then on the window
+// lets out what the proxy took, and gives one back per window without a refusal.
+func TestARefusalFromTheProxyNarrowsTheWindowToWhatItTookAndQuietWidensItAgain(t *testing.T) {
+	w, clock, slept := testWindow(9)
+	for i := 0; i < 5; i++ { // the fifth is refused: the proxy took four of ours
+		w.acquire()
+		*clock = clock.Add(10 * time.Second)
+	}
+	w.throttled()
+	if w.cap != 4 {
+		t.Fatalf("the window lets %d out after a refusal with 5 of ours, want 4", w.cap)
+	}
+	before := len(*slept)
+	w.acquire() // 5 held, 4 allowed: waits for the oldest to age out
+	if len(*slept) == before {
+		t.Fatalf("a request went out over what the proxy took")
+	}
+	// a quiet window: one more
+	*clock = clock.Add(10 * time.Minute)
+	w.acquire()
+	if w.cap != 5 {
+		t.Fatalf("after a window without a refusal the window lets %d out, want 5", w.cap)
+	}
+	// never past the configured limit
+	*clock = clock.Add(2 * time.Hour)
+	w.acquire()
+	if w.cap != 9 {
+		t.Fatalf("the window lets %d out after a long quiet, want 9", w.cap)
+	}
+}

@@ -140,6 +140,7 @@ func (c *Client) Completion(convID string, req *CompletionRequest) (io.ReadClose
 
 			if isRateLimit(errStr) {
 				if isProxyThrottle(errStr) {
+					apiWin.throttled() // the window lets out no more than the proxy took (api_window.go)
 					if waitDur := parseRetryAfter(errStr); waitDur > 0 {
 						log.Printf("claudeweb: proxy throttle, sleeping %v until quota resets", waitDur)
 						watch.pause()

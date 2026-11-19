@@ -39,10 +39,39 @@ type apiWindow struct {
 	dur   time.Duration
 	now   func() time.Time
 	sleep func(time.Duration)
+	// cap: how many requests the window lets out now. It is limit until the proxy answers
+	// 429 with fewer than limit of ours in its ten minutes — its count is shared with whoever
+	// else uses the account, which this process cannot see. Then cap is what the proxy did
+	// take (throttled); every full window without a 429 gives one back, up to limit.
+	cap      int
+	capSince time.Time // when cap last changed
 }
 
 func newAPIWindow(limit int, dur time.Duration) *apiWindow {
-	return &apiWindow{limit: limit, dur: dur, now: time.Now, sleep: time.Sleep}
+	return &apiWindow{limit: limit, cap: limit, dur: dur, now: time.Now, sleep: time.Sleep}
+}
+
+// throttled: the proxy answered 429 to a request of ours. The window lets out no more than the
+// proxy took in its ten minutes: the requests of ours it holds, less the one it refused. 11/19
+// 06:23–06:33 sixteen units side by side met a 429 at 06:23:49, 06:28:04, 06:29:14, 06:30:08 and
+// 06:32:59 while this window still let nine out — each a 2 minute wait and one of a request's
+// six tries.
+func (w *apiWindow) throttled() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.mergeFromDiskLocked()
+	now := w.now()
+	w.pruneLocked(now)
+	took := len(w.times) - 1
+	if took < 1 {
+		took = 1
+	}
+	if took < w.cap {
+		log.Printf("api_throttle: the proxy refused a request with %d of ours in the last %v — the window lets %d out until %v pass without a refusal",
+			len(w.times), w.dur, took, w.dur)
+		w.cap = took
+	}
+	w.capSince = now
 }
 
 // the proxy says ten; one in reserve for a question that is not ours (a browser tab).
@@ -119,7 +148,13 @@ func (w *apiWindow) acquire() time.Time {
 		w.mergeFromDiskLocked()
 		now := w.now()
 		w.pruneLocked(now)
-		if len(w.times) < w.limit {
+		// a full window without a refusal gives one request back
+		for w.cap < w.limit && !w.capSince.IsZero() && now.Sub(w.capSince) >= w.dur {
+			w.cap++
+			w.capSince = w.capSince.Add(w.dur)
+			log.Printf("api_throttle: %v without a refusal from the proxy — the window lets %d out", w.dur, w.cap)
+		}
+		if len(w.times) < w.cap {
 			w.times = append(w.times, now)
 			w.saveLocked()
 			w.mu.Unlock()
