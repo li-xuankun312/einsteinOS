@@ -40,7 +40,7 @@ type fakeModel struct {
 	reviews   int
 }
 
-func (f *fakeModel) exec(prompt string) (string, string) {
+func (f *fakeModel) exec(pid int64, prompt string) (string, string) {
 	ForkSlotTaken() // the child has taken what its fork handed it, as the model's does
 	f.mu.Lock()
 	f.prompts = append(f.prompts, prompt)
@@ -55,7 +55,7 @@ func (f *fakeModel) exec(prompt string) (string, string) {
 	f.mu.Unlock()
 	id := fmt.Sprintf("%08x-0000-4000-8000-%012x", len(f.prompts)*7919, len(f.prompts))
 	SetForkConvID(id)
-	SetConvID(GetLastForkedPid(), id)
+	SetConvID(pid, id)
 
 	switch {
 	case strings.Contains(prompt, "[VERDICT] the kernel reads the last line"):

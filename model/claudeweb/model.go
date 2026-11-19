@@ -1470,7 +1470,7 @@ func (m *Model) decideNext(lastOutput string) string {
 			"if the output is theory/analysis/PDF without code, action=continue.",
 		truncate(lastOutput, 4000))
 
-	stdout, _ := kernel.GetConvExec()(prompt)
+	stdout, _ := kernel.GetConvExec()(0, prompt) // no fork started it: bound to no task
 
 	kvs := parseKV(stdout)
 	if kvs["action"] == "stop" {
@@ -1539,7 +1539,9 @@ func (m *Model) ContinueConversation(existingConvID, prompt string) (string, str
 	return stdout, stderr
 }
 
-func (m *Model) RunConversation(prompt string) (string, string) {
+// RunConversation runs a forked child's conversation; pid is that child's, handed by the fork
+// (kernel.SetConvExec), and 0 for a conversation no fork started.
+func (m *Model) RunConversation(pid int64, prompt string) (string, string) {
 	convID := generateUUID()
 
 	webReq := m.newCompletionRequest(prompt)
@@ -1557,10 +1559,9 @@ func (m *Model) RunConversation(prompt string) (string, string) {
 
 	parentPid := int64(kernel.SysGetpid())
 	kernel.TrackChildConv(parentPid, convID)
-	// set convID on the child's TaskMeta directly — race-free, no global
-	childPid := kernel.GetLastForkedPid()
-	if childPid > 0 {
-		kernel.SetConvID(childPid, convID)
+	// the conversation is the pid's the fork handed it, not the most recently forked one's
+	if pid > 0 {
+		kernel.SetConvID(pid, convID)
 	}
 	kernel.SetForkConvID(convID) // legacy fallback
 

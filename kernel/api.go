@@ -75,7 +75,11 @@ func Init() {
 	taskMeta[0] = &TaskMeta{Pwd: "."}
 }
 
-var convExecFn func(prompt string) (string, string)
+// convExecFn runs a forked child's conversation. It is handed the child's own pid: the
+// conversation it starts is that pid's, whatever was forked since. 11/19 08:10–08:17, with
+// units side by side, the model layer took "the most recently forked pid" (GetLastForkedPid)
+// for its child, and conversations were bound to other units' children.
+var convExecFn func(pid int64, prompt string) (string, string)
 
 // forkConvID: goroutine writes convID here before convExecFn returns.
 // Fork goroutine reads it after convExecFn returns to set TaskMeta.ConvID.
@@ -153,11 +157,13 @@ func ConsumeForkRole() string {
 	return r
 }
 
-func SetConvExec(fn func(string) (string, string)) {
+func SetConvExec(fn func(pid int64, prompt string) (string, string)) {
 	convExecFn = fn
 }
 
-func GetConvExec() func(string) (string, string) {
+// GetConvExec: the hook that runs a conversation; a caller that is not a fork's child passes
+// pid 0, and its conversation is bound to no task.
+func GetConvExec() func(pid int64, prompt string) (string, string) {
 	return convExecFn
 }
 
@@ -311,7 +317,7 @@ func Fork(prompt string, pwd string) (int64, error) {
 
 	if convExecFn != nil {
 		go func() {
-			stdout, stderr := convExecFn(prompt)
+			stdout, stderr := convExecFn(int64(pid), prompt)
 
 			// Grab the convID: per-pid map first (race-free), global fallback (legacy)
 			forkConvMu.Lock()

@@ -159,14 +159,14 @@ type seqModel struct {
 	reply   func(prompt string) string
 }
 
-func (m *seqModel) exec(prompt string) (string, string) {
+func (m *seqModel) exec(pid int64, prompt string) (string, string) {
 	m.mu.Lock()
 	m.prompts = append(m.prompts, prompt)
 	n := len(m.prompts)
 	m.mu.Unlock()
 	id := fmt.Sprintf("%08x-1111-4111-8111-%012x", n*104729, n)
 	SetForkConvID(id)
-	SetConvID(GetLastForkedPid(), id)
+	SetConvID(pid, id)
 	return m.reply(prompt), ""
 }
 
