@@ -139,9 +139,23 @@ func maskRequirements(req UnitRequirements, m *refMasker) UnitRequirements {
 	}
 	out := req
 	out.Symbols = make([]RefSymbol, len(req.Symbols))
+	masked := map[string]bool{}
 	for i, s := range req.Symbols {
 		out.Symbols[i] = RefSymbol{File: m.Replace(s.File), Kind: s.Kind, Name: m.Replace(s.Name)}
+		if out.Symbols[i].File != s.File {
+			masked[out.Symbols[i].File] = true
+		}
 	}
+	for f := range req.FileNames {
+		if mf := m.Replace(f); mf != f {
+			masked[mf] = true
+		}
+	}
+	out.MaskedPaths = nil
+	for f := range masked {
+		out.MaskedPaths = append(out.MaskedPaths, f)
+	}
+	sort.Strings(out.MaskedPaths)
 	if req.FileNames != nil {
 		out.FileNames = map[string]map[string]bool{}
 		for f, names := range req.FileNames {

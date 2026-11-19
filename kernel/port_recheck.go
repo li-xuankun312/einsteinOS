@@ -90,6 +90,11 @@ func devPortRecheck(r *devRun) {
 		log.Printf("dev_requirements: %s %d passed unit(s) no longer cover what the reference requires — reopened: %s", r.repo, len(ids), strings.Join(ids, " "))
 		devPlanSave(r.repo, r.devRepo, r.branch, r.plan, fmt.Sprintf("plan: %s reopened, measured against the reference again", strings.Join(ids, " ")))
 	}
+	prior := func(id string) []string { return devUnitPriorFiles(dir, r.branch, id) }
+	if ids := refPathRecheck(r.plan, prior, r.shown); len(ids) > 0 {
+		log.Printf("dev_requirements: %s %d passed unit(s) left a file at a reference file's path on the branch — reopened: %s", r.repo, len(ids), strings.Join(ids, " "))
+		devPlanSave(r.repo, r.devRepo, r.branch, r.plan, fmt.Sprintf("plan: %s reopened, a file at a reference file's path", strings.Join(ids, " ")))
+	}
 }
 
 // recheckOn holds the passed units to what the reference requires as the branch writes it:
@@ -101,4 +106,42 @@ func devPortRecheck(r *devRun) {
 // include/strata/kernels/ngram.hpp, all 25 on the branch as include/ref/kernels/ngram.hpp.
 func (r *devRun) recheckOn(tree string) []string {
 	return portRecheck(r.plan, tree, r.shown)
+}
+
+// refPathRecheck reopens, in plan, every passed unit (not the integration unit) one of whose
+// files on the branch (priorFiles: what its verified commits put there) is at the path of a
+// reference file as the conversations are shown it (shownFn: the masked requirements of every
+// unit). 11/19 11:56:31 and 12:25:26 dev conversations of p4fde6588a6 and p71c0367d2e read
+// include/ref/core/expert_cache.hpp — include/strata/core/expert_cache.hpp shown, put on the
+// branch by u6561d2f27c when it passed — and took it that reference headers belong under
+// include/ref/. ref_path_written (e3da5f3e) stops a unit writing one; this finds the ones the
+// branch already holds, and the unit that put each there ports it again without it.
+func refPathRecheck(plan *DevPlan, priorFiles func(string) []string, shownFn func(DevPlanNode) UnitRequirements) []string {
+	ref := map[string]bool{}
+	for _, l := range plan.Leaves() {
+		for _, f := range shownFn(l).MaskedPaths {
+			ref[f] = true
+		}
+	}
+	var reopened []string
+	for _, l := range plan.Leaves() {
+		if l.Integration || !plan.UnitPass(l) {
+			continue
+		}
+		var hits []string
+		for _, f := range priorFiles(l.ID) {
+			if ref[f] {
+				hits = append(hits, f)
+			}
+		}
+		if len(hits) == 0 {
+			continue
+		}
+		hits = sortedCopy(hits)
+		own := sortedCopy(refFilesOf(shownFn(l).Symbols))
+		plan.MarkReopen(l.ID, DevFailure{Kind: "ref_path_written",
+			Text: fmt.Sprintf(gateRefPathWrittenFmt, len(hits), shortList(own, 12), strings.Join(hits, "\n"))})
+		reopened = append(reopened, l.ID)
+	}
+	return reopened
 }

@@ -308,10 +308,7 @@ func portRefFiles(ws, unitID string, syms []RefSymbol) []string {
 // only, and pb0569948de's was verified and pushed.
 func refPathsWritten(changed []string, req UnitRequirements) []string {
 	ref := map[string]bool{}
-	for _, f := range refFilesOf(req.Symbols) {
-		ref[f] = true
-	}
-	for f := range req.FileNames {
+	for _, f := range req.MaskedPaths {
 		ref[f] = true
 	}
 	var out []string
@@ -321,4 +318,25 @@ func refPathsWritten(changed []string, req UnitRequirements) []string {
 		}
 	}
 	return sortedCopy(out)
+}
+
+// withRefPathsPresent: changed, and every file of the workspace ws at the path of one of the
+// unit's reference files as shown — what the branch already held there is the unit's too
+// (refPathRecheck reopens the unit that put it there; leaving it in place does not pass).
+func withRefPathsPresent(ws string, changed []string, req UnitRequirements) []string {
+	out := append([]string{}, changed...)
+	seen := map[string]bool{}
+	for _, f := range changed {
+		seen[f] = true
+	}
+	for _, f := range req.MaskedPaths {
+		if seen[f] {
+			continue
+		}
+		if st, err := os.Stat(filepath.Join(ws, f)); err == nil && !st.IsDir() {
+			seen[f] = true
+			out = append(out, f)
+		}
+	}
+	return out
 }

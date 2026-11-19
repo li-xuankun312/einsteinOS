@@ -169,6 +169,10 @@ type UnitRequirements struct {
 	// FileNames: per reference source, the base names of every definition it holds (all of
 	// them, also those other units port): what a port map line may name as a counterpart
 	FileNames map[string]map[string]bool
+	// MaskedPaths: the reference file paths the mask changed, as shown (include/ref/… for
+	// include/strata/…) — set by maskRequirements; a file there is the reference's, under its
+	// name, not a port that happens to sit where the reference keeps its own (src/core/layer.cpp)
+	MaskedPaths []string
 	// Tests: the reference's registered tests, for the integration unit (integration.go);
 	// RequireGPU: the reference builds CUDA, so they must open a GPU device
 	Tests []RefTest

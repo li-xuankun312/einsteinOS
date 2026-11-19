@@ -569,7 +569,7 @@ func unitGateInput(ws, unitID string, req UnitRequirements, changed []string, bu
 	pm := readPortMap(ws, unitID)
 	mutScript, mutMissing := testMutatesMissing(ws, unitID, changed)
 	return GateInput{Req: req, Changed: changed, Build: build, Test: test, Compilers: presentGPUCompilers(),
-		PortMissing: portMissing(ws, unitID, req.Symbols), PortExtra: portExtra(ws, unitID, req.Symbols), PortRefFiles: portRefFiles(ws, unitID, req.Symbols), RefPathsWritten: refPathsWritten(changed, req),
+		PortMissing: portMissing(ws, unitID, req.Symbols), PortExtra: portExtra(ws, unitID, req.Symbols), PortRefFiles: portRefFiles(ws, unitID, req.Symbols), RefPathsWritten: refPathsWritten(withRefPathsPresent(ws, changed, req), req),
 		PortForeign: portForeignNames(ws, unitID, req.FileNames), PortScripts: unitPortScripts(ws, unitID, req), MutatesMissingScript: mutScript, MutatesMissing: mutMissing, Kernels: unitKernels(ws, changed), KernelsMeasured: true,
 		Shadowed: shadowedKernels(unitKernels(ws, changed), portKernels(ws, unitID)),
 		ISAFuncs: isaPortFuncs(pm, req.FlagFiles), PortKernels: portKernels(ws, unitID), UnitID: unitID,
