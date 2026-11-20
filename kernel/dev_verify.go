@@ -548,6 +548,9 @@ func runUnitVerifyAlone(ws, unitID, gpuUsable string, req UnitRequirements, chan
 		// the integration unit: the port against the reference and the integration before,
 		// on this machine (eval_integration.go)
 		if fn := integrationEval(unitID); fn != nil && res.Gate == "" {
+			// the verification's own line comes when the evaluation returns, which can be
+			// hours later: what was measured until here is logged now
+			log.Printf("dev_verify: unit %s: compile=%s smoke=%s, every gate passed — the integration's evaluation starts", unitID, res.Compile, res.Smoke)
 			res.Gate, res.GateText = fn(ws, req.Benches)
 		}
 	}
