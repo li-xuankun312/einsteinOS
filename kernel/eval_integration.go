@@ -12,6 +12,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -116,6 +118,15 @@ func evalBaseFor(repo, sha string, benches []EvalBench) evalBase {
 // evalIntegration is the evaluation dev_run registers for an integration unit.
 func evalIntegration(pid int64, repo, sha, devRepo, unitID string, benches []EvalBench, mask func(string) string) func(string, []EvalBench) (string, string) {
 	return func(ws string, shown []EvalBench) (string, string) {
+		// no e2e.sh: nothing the reference or the search would measure can be compared with
+		// anything, so the unit is told before either runs (11/20 01:25–02:49 a reference
+		// build of 21 minutes and a search of 56 for an integration that had none)
+		if _, err := os.Stat(filepath.Join(ws, devE2EScript(unitID))); err != nil {
+			br := EvalBenchRun{Bench: EvalBench{File: devE2EScript(unitID), Kind: "e2e", Name: "e2e.sh"}, Exit: -1, Tail: "missing"}
+			k, t := e2eGate(br)
+			log.Printf("eval: %s %s: %s does not exist — the reference is not built and nothing is searched; gate=%q", repo, shortSHA(sha), br.Bench.File, k)
+			return k, t
+		}
 		base := evalBaseFor(repo, sha, benches)
 		rec := EvalRecord{Repo: repo, RefSHA: sha, Reference: base.reference, External: base.external,
 			Clues: base.clues, Dev: evalRunPort(ws, shown), When: time.Now().UTC(),
