@@ -249,13 +249,10 @@ func (s *ShadowExecutor) execute(toolName string, inputJSON string) string {
 		return fmt.Sprintf("[pid -1] fork: %v", err)
 	}
 
-	log.Printf("[pid %d] exec: %s", pid, truncateCmd(command, 120))
+	logExec(pid, command)
 
 	childPid, exitCode, err := waitWithHeartbeat(func() (int64, int, error) { return kernel.Wait(pid) },
-		2*time.Minute, func(elapsed time.Duration) {
-			log.Printf("[pid %d] still running after %s: %s", pid, elapsed.Round(time.Second),
-				truncateCmd(redactAxle(strings.Join(strings.Fields(command), " ")), 160))
-		})
+		2*time.Minute, func(elapsed time.Duration) { logStillRunning(pid, elapsed, command) })
 	if err != nil {
 		return fmt.Sprintf("[pid %d] wait: %v", pid, err)
 	}
@@ -1260,4 +1257,16 @@ func einsteinOSRoots() []string {
 		}
 	}
 	return out
+}
+
+// logExec and logStillRunning log what this machine runs without the credentials it carries:
+// redacted before it is cut, so a token cut in half is not left in the log. 11/20 01:53:07 and
+// every two minutes after, the log said "[pid 898] exec: TOKEN=ghp_cMgQ… python3 …" in plain.
+func logExec(pid int64, command string) {
+	log.Printf("[pid %d] exec: %s", pid, truncateCmd(kernel.RedactSecrets(command), 120))
+}
+
+func logStillRunning(pid int64, elapsed time.Duration, command string) {
+	log.Printf("[pid %d] still running after %s: %s", pid, elapsed.Round(time.Second),
+		truncateCmd(kernel.RedactSecrets(redactAxle(strings.Join(strings.Fields(command), " "))), 160))
 }
