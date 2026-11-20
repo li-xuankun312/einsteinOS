@@ -1,6 +1,7 @@
 package kernel
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -53,5 +54,45 @@ func TestTheImplementationScriptSaysWhenItCannotRun(t *testing.T) {
 	_, _, why := evalTeacherForcedFn(t.TempDir(), "Qwen3_5MoeForCausalLM", []int{1}, []int{2})
 	if !strings.Contains(why, evalCorrectUnavailableMarker) || !strings.Contains(why, "ModuleNotFoundError") {
 		t.Fatalf("why: %s", why)
+	}
+}
+
+// When this machine's python3 cannot load the class config.json names, the teacher forcing
+// runs in the judge environment measured and built for it (eval_judge.go), and what it ran
+// with is in the class the gate names. 11/20 on cc-1c97a71e python3's transformers 4.51.3 has
+// no Qwen3_5MoeForCausalLM: every integration would have ended integration_reference_impl_missing.
+func TestTheJudgeRunsInItsOwnEnvironmentWhenPython3CannotLoadTheClass(t *testing.T) {
+	model := filepath.Join(t.TempDir(), "Qwen3.6-35B-A3B")
+	os.MkdirAll(model, 0o755)
+	os.WriteFile(filepath.Join(model, "config.json"), []byte(`{"architectures":["Qwen3_5MoeForCausalLM"],"model_type":"qwen3_5_moe"}`), 0o644)
+	oldRun, oldEnv := teacherForcedRun, judgeEnvForFn
+	defer func() { teacherForcedRun, judgeEnvForFn = oldRun, oldEnv }()
+	var ran []string
+	teacherForcedRun = func(python, script, spec string) (string, error) {
+		ran = append(ran, python)
+		if python == "python3" {
+			return "unavailable: ValueError: The checkpoint you are trying to load has model type `qwen3_5_moe` but Transformers does not recognize this architecture.", fmt.Errorf("exit status 3")
+		}
+		return `{"class": "Qwen3_5MoeForCausalLM", "argmax": [220, 248046, 198, 248045]}`, nil
+	}
+	judgeEnvForFn = func(modelDir, arch string) (string, string, error) {
+		return "/root/.einsteinOS/judge/transformers-5.20.2-torch-2.6-py3.10.12/bin/python", "transformers 5.20.2 torch 2.6.0+cpu", nil
+	}
+	br := EvalBenchRun{PromptIDs: []int{9707, 11, 1879}, GeneratedIDs: []int{220, 248046, 198, 999}}
+	k, txt := evalCorrectGate(br, model)
+	if strings.Join(ran, " ") != "python3 /root/.einsteinOS/judge/transformers-5.20.2-torch-2.6-py3.10.12/bin/python" {
+		t.Fatalf("ran %v", ran)
+	}
+	if k != "integration_wrong_tokens" || !strings.Contains(txt, "transformers 5.20.2 torch 2.6.0+cpu") {
+		t.Fatalf("%s: %s", k, txt)
+	}
+	// the judge environment cannot be built: both reasons are in the machine gate's text
+	judgeEnvForFn = func(modelDir, arch string) (string, string, error) {
+		return "", "", fmt.Errorf("python3 -m venv: exit status 1: ensurepip is not available")
+	}
+	ran = nil
+	k, txt = evalCorrectGate(br, model)
+	if k != GateReferenceImplMissing || !strings.Contains(txt, "does not recognize") || !strings.Contains(txt, "ensurepip") {
+		t.Fatalf("%s: %s", k, txt)
 	}
 }

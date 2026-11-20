@@ -14,6 +14,7 @@ package kernel
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -51,9 +52,14 @@ with torch.no_grad():
 print(json.dumps({"class": type(model).__name__, "argmax": logits[len(p) - 1:].argmax(-1).tolist()}))
 `
 
-// evalTeacherForcedFn runs the model's named implementation (a variable for tests): the
-// first-ranked token at each generated position, the class run, and why it could not be run.
-var evalTeacherForcedFn = func(modelDir, arch string, prompt, generated []int) (argmax []int, class, unavailable string) {
+// teacherForcedRun runs the teacher-forcing script with python (a variable for tests).
+var teacherForcedRun = func(python, script, spec string) (string, error) {
+	return runKillingGroup(evalBuildTimeout, python, script, spec)
+}
+
+// teacherForcedWith: the first-ranked tokens python's transformers gives, the class it ran,
+// and why it could not be run.
+func teacherForcedWith(python, modelDir, arch string, prompt, generated []int) (argmax []int, class, unavailable string) {
 	dir, err := os.MkdirTemp("", "einsteinos_correct_")
 	if err != nil {
 		return nil, "", err.Error()
@@ -63,7 +69,7 @@ var evalTeacherForcedFn = func(modelDir, arch string, prompt, generated []int) (
 	specPath, script := filepath.Join(dir, "spec.json"), filepath.Join(dir, evalCorrectScriptName)
 	os.WriteFile(specPath, spec, 0o644)
 	os.WriteFile(script, []byte(evalCorrectScript), 0o644)
-	out, err := runKillingGroup(evalBuildTimeout, "python3", script, specPath)
+	out, err := teacherForcedRun(python, script, specPath)
 	if err != nil {
 		return nil, "", tailText(strings.TrimSpace(out)+" ("+err.Error()+")", 1500)
 	}
@@ -76,6 +82,48 @@ var evalTeacherForcedFn = func(modelDir, arch string, prompt, generated []int) (
 		return nil, "", tailText(out, 1500)
 	}
 	return res.Argmax, res.Class, ""
+}
+
+// judgeEnvForFn: the judge environment for the model, measured and built (eval_judge.go); a
+// variable for tests.
+var judgeEnvForFn = func(modelDir, arch string) (python, versions string, err error) {
+	out, err := judgeRunFn(os.Environ(), "python3", "-c", "import sys; print('%d.%d.%d' % sys.version_info[:3])")
+	if err != nil {
+		return "", "", fmt.Errorf("python3's version: %v: %s", err, tailText(out, 200))
+	}
+	mt := modelType(modelDir)
+	if mt == "" {
+		return "", "", fmt.Errorf("%s/config.json names no model_type", modelDir)
+	}
+	spec, err := measureJudgeSpec(mt, strings.TrimSpace(out))
+	if err != nil {
+		return "", "", err
+	}
+	log.Printf("eval_correct: %s is shipped from transformers %s; the judge runs %s (Requires-Python %s, PyTorch >= %s) for python %s",
+		mt, spec.FirstWithModel, spec.Transformers, spec.RequiresPython, spec.Torch, spec.Python)
+	return buildJudgeEnv(spec, arch)
+}
+
+// evalTeacherForcedFn runs the model's named implementation (a variable for tests): the
+// first-ranked token at each generated position, the class run, and why it could not be run —
+// in this machine's python3, and when that cannot load the class, in the judge environment
+// built for it. 11/20 on cc-1c97a71e python3's transformers 4.51.3 has no
+// Qwen3_5MoeForCausalLM.
+var evalTeacherForcedFn = func(modelDir, arch string, prompt, generated []int) (argmax []int, class, unavailable string) {
+	argmax, class, unavailable = teacherForcedWith("python3", modelDir, arch, prompt, generated)
+	if unavailable == "" {
+		return argmax, class, ""
+	}
+	python, versions, err := judgeEnvForFn(modelDir, arch)
+	if err != nil {
+		return nil, "", fmt.Sprintf("python3: %s; the judge environment: %v", unavailable, err)
+	}
+	log.Printf("eval_correct: python3 cannot run %s (%s); the judge runs in %s (%s)", arch, tailText(unavailable, 200), python, versions)
+	argmax, class, un := teacherForcedWith(python, modelDir, arch, prompt, generated)
+	if un != "" {
+		return nil, "", fmt.Sprintf("python3: %s; %s (%s): %s", unavailable, python, versions, un)
+	}
+	return argmax, fmt.Sprintf("%s (%s, on the CPU)", class, versions), ""
 }
 
 // modelArchitecture: the first class the model directory's config.json names.
