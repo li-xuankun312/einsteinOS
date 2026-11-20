@@ -113,7 +113,12 @@ type DevPlan struct {
 	// while units 3, 4 and 5 had each needed a second attempt.
 	FailHistory map[string][]string   `json:"fail_history,omitempty"`
 	LastFailure map[string]DevFailure `json:"last_failure"` // unit id -> why the last attempt failed
-	InfraFails  int                   `json:"infra_fails"`  // consecutive git/push failures (not the child's fault)
+	// InProgress: the tree an attempt that has not ended had rejected at a done line, parked on
+	// the unit's wip branch — unit id -> where. A run stopped before the attempt ended starts
+	// the unit again from there (11/20 02:49 the integration unit's attempt 1 was stopped and
+	// its 25 files were written anew at 03:38). The attempt's end, passed or failed, clears it.
+	InProgress map[string]DevFailure `json:"in_progress,omitempty"`
+	InfraFails int                   `json:"infra_fails"` // consecutive git/push failures (not the child's fault)
 	// ReviewPending: units whose code passed the real-machine verification and is on the dev
 	// branch, but whose review has not answered yet — unit id -> the verified status. A run
 	// that stops here (11/04 10:16:54: u9dc1be2eae pushed at 10:16:47, Ctrl+C before its
@@ -523,6 +528,7 @@ func (p *DevPlan) TakeReviewPending(id string) (map[string]string, bool) {
 }
 
 func (p *DevPlan) MarkUnitPass(n DevPlanNode) {
+	delete(p.InProgress, n.ID)
 	p.withdrawIntegrationPass(n)
 	if len(n.Sources) > 0 || n.Integration {
 		if p.PortPass == nil {
@@ -565,6 +571,7 @@ func (p *DevPlan) SetConv(id, conv string) { p.setConv(id, conv) }
 
 // Fail records a failed attempt: counts it and remembers why.
 func (p *DevPlan) Fail(id string, f DevFailure) int {
+	delete(p.InProgress, id)
 	if p.LastFailure == nil {
 		p.LastFailure = map[string]DevFailure{}
 	}
@@ -581,6 +588,27 @@ func (p *DevPlan) Fail(id string, f DevFailure) int {
 		return p.FixAttempts[id]
 	}
 	return p.BumpFix(id)
+}
+
+// NoteInProgress records where the attempt running now parked the tree it had rejected.
+func (p *DevPlan) NoteInProgress(id string, f DevFailure) {
+	if p.InProgress == nil {
+		p.InProgress = map[string]DevFailure{}
+	}
+	p.InProgress[id] = f
+}
+
+// ResumeFrom is the failure an attempt of the unit starts from: its last attempt's, or, when
+// that attempt never ended, the branch its rejected tree was parked on.
+func (p *DevPlan) ResumeFrom(id string) DevFailure {
+	f := p.LastFailure[id]
+	if f.BaseRef != "" {
+		return f
+	}
+	if ip, ok := p.InProgress[id]; ok {
+		f.BaseRef, f.BaseSHA = ip.BaseRef, ip.BaseSHA
+	}
+	return f
 }
 
 // NoteSilent records that a conversation for this unit wrote nothing, and returns how

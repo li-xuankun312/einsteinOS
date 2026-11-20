@@ -626,14 +626,28 @@ var devGitDeleteBranch = gitDeleteRemoteBranch
 // remote has it, else forked from `from`), applies the delta, commits and pushes
 // it. Returns whether anything was committed.
 func commitDelta(cloneDir, devRepo, from, onto, mirrorDir string, changed, removed []string, msg string) error {
-	if err := gitUseBranchFromRemote(cloneDir, onto, from); err != nil {
-		return fmt.Errorf("checkout %s: %w", onto, err)
+	target := onto
+	if from == onto {
+		if err := gitUseBranchFromRemote(cloneDir, onto, from); err != nil {
+			return fmt.Errorf("checkout %s: %w", onto, err)
+		}
+	} else {
+		// the delta was measured against from: laid over what onto held before (an earlier
+		// park of the same attempt), a file that delta changed and this one set back would
+		// keep the earlier text — onto is from with the delta, and replaces what it held
+		if err := gitUseBranchFromRemote(cloneDir, from, from); err != nil {
+			return fmt.Errorf("checkout %s: %w", from, err)
+		}
+		if err := runLocalGit(fmt.Sprintf("cd %q && git checkout -q -B %s", cloneDir, onto), cloneDir); err != nil {
+			return fmt.Errorf("checkout %s from %s: %w", onto, from, err)
+		}
+		target = "+HEAD:refs/heads/" + onto
 	}
 	if err := applyDelta(mirrorDir, cloneDir, changed, removed); err != nil {
 		return fmt.Errorf("apply delta: %w", err)
 	}
 	GitCommit(cloneDir, msg)
-	if err := devGitPush(cloneDir, devRepo, onto, 20); err != nil {
+	if err := devGitPush(cloneDir, devRepo, target, 20); err != nil {
 		return fmt.Errorf("push %s: %w", onto, err)
 	}
 	noteKernelPush(devRepo, onto, gitLine(cloneDir, "rev-parse", "HEAD"))

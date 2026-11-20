@@ -443,6 +443,13 @@ func dev_from_theorems(pid int64, step *Step) (string, error) {
 	return lastStdout, nil
 }
 
+// parkRejectedTree: whether a tree a done line's verification rejected is parked on the unit's
+// wip branch — only in an attempt from the dev branch: a fix attempt's base is that wip
+// branch, and parking there would move its base under its own delta (branchMovedUnder).
+func parkRejectedTree(branch, baseRef string, verified bool) bool {
+	return verified && baseRef == branch
+}
+
 // runUnit makes ONE attempt at a unit. Returns the child's last text, whether
 // the unit passed, and whether infrastructure (git) failed so the whole call
 // should be re-queued.
@@ -450,7 +457,10 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	plan := r.plan
-	fail := plan.LastFailure[unit.ID]
+	fail := plan.ResumeFrom(unit.ID)
+	if ip, ok := plan.InProgress[unit.ID]; ok && fail.BaseRef == ip.BaseRef {
+		log.Printf("dev_from_theorems: %s unit %s: its last attempt was stopped before it ended — continuing from the tree it had rejected at %s (gate=%q)", r.repo, unit.ID, ip.BaseRef, ip.Kind)
+	}
 	// a unit another unit's review faulted starts from that verdict, as a fix attempt, on
 	// the branch as it stands (its own code is already there)
 	if f, ok := plan.TakeReopen(unit.ID); ok {
@@ -554,6 +564,19 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 				preVerifyLogFields(o), map[bool]string{true: "the conversation may end", false: "sent back to the conversation"}[end])
 			if end {
 				return true, ""
+			}
+			// what it rejected is parked, so a run stopped before this attempt ends starts the
+			// unit again from it, not from the dev branch (11/20 02:49 → 03:38)
+			if parkRejectedTree(r.branch, baseRef, o.Verified && o.Err == nil) {
+				wip := devWipBranch(r.branch, unit.ID)
+				msg := fmt.Sprintf("unit %s: rejected at a done line, parked [compile=%s smoke=%s gate=%s]", unit.ID, o.Result.Compile, o.Result.Smoke, gateOrNone(o.Result.Gate))
+				if err := commitDelta(cloneDir, r.devRepo, baseRef, wip, mirror, changed, removed, msg); err != nil {
+					log.Printf("dev_preverify: %s unit %s: the rejected tree was not parked on %s: %v", r.repo, unit.ID, wip, err)
+				} else {
+					plan.NoteInProgress(unit.ID, DevFailure{Kind: o.Result.Gate, BaseRef: wip, BaseSHA: KernelPushed(r.devRepo, wip)})
+					devPlanSave(r.repo, r.devRepo, r.branch, plan, fmt.Sprintf("plan: %s rejected tree parked on %s", unit.ID, wip))
+					log.Printf("dev_preverify: %s unit %s: the rejected tree is parked on %s — a run stopped before this attempt ends continues from it", r.repo, unit.ID, wip)
+				}
 			}
 			return false, preVerifyReport(o)
 		})
