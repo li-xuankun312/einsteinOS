@@ -75,6 +75,7 @@ func evalBaseFor(repo, sha string, benches []EvalBench) evalBase {
 		}
 		evalBaseMu.Unlock()
 		if ok {
+			log.Printf("eval: %s %s: the reference and the search were measured before — reused", repo, shortSHA(sha))
 			return b
 		}
 		if !measuring {
@@ -89,12 +90,18 @@ func evalBaseFor(repo, sha string, benches []EvalBench) evalBase {
 		delete(evalBaseInFlight, key)
 		evalBaseMu.Unlock()
 	}()
+	start := time.Now()
+	log.Printf("eval: %s %s: building the reference and running its %d benchmark(s) here", repo, shortSHA(sha), len(benches))
 	b.reference = evalRunRepo(repo, refBareDir(repo), sha, benches)
+	log.Printf("eval: %s %s: the reference built and run in %s (build exit %d, %d metric(s))", repo, shortSHA(sha), time.Since(start).Round(time.Second), b.reference.BuildExit, len(b.reference.Metrics()))
 	if len(benches) == 0 && b.reference.Err == "" {
 		b.reference.Err = evalNoBenchReason(refBareDir(repo), sha)
 	}
 	b.clues = evalClues(repo, refBareDir(repo), sha)
+	start = time.Now()
+	log.Printf("eval: %s %s: searching for repositories to compare with", repo, shortSHA(sha))
 	taken, trace := evalDiscover(evalSearchFacts(measureEvalConditions(repo, sha)), []string{repo}, evalAcceptRepo)
+	log.Printf("eval: %s %s: the search ended in %s, %d repositor(ies) taken", repo, shortSHA(sha), time.Since(start).Round(time.Second), len(taken))
 	b.discover = trace
 	for _, r := range taken {
 		name := r.Owner + "/" + r.Name
@@ -140,7 +147,10 @@ func evalIntegration(pid int64, repo, sha, devRepo, unitID string, benches []Eva
 		if prev != nil {
 			rec.PrevSHA = prev.RefSHA
 		}
+		start := time.Now()
+		log.Printf("eval: %s %s: running %s on the model at %s", repo, shortSHA(sha), devE2EScript(unitID), evalModel())
 		rec.E2E = evalRunE2E(ws, unitID)
+		log.Printf("eval: %s %s: %s exited %d in %s, %d metric(s)", repo, shortSHA(sha), devE2EScript(unitID), rec.E2E.Exit, time.Since(start).Round(time.Second), len(rec.E2E.Metrics))
 		if k, t := e2eGate(rec.E2E); k != "" {
 			rec.Gate, rec.GateText = k, t
 		} else if k, t := e2eModelGate(rec.E2E, evalModel()); k != "" {
