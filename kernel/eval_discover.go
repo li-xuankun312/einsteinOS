@@ -50,9 +50,13 @@ func evalBareDir(repo string) string {
 }
 
 var (
-	// evalAskFn asks a child the search prompt and returns its reply (a variable for tests)
+	// evalAskFn asks a child the search prompt and returns its reply (a variable for tests).
+	// It is forked with its role, as ref_discover's search is: 11/20 01:51:53 conversation
+	// 1db7c0db, forked without one, ran under the default termination (a git push or 20
+	// rounds), ran a script of its own here for 44 minutes and ended after pushing three
+	// commits to the dev repository's main.
 	evalAskFn = func(prompt string) (string, error) {
-		pid, err := Fork(prompt, ".")
+		pid, err := ForkWithRole(prompt, ".", "eval_discover")
 		if err != nil {
 			return "", err
 		}

@@ -497,7 +497,7 @@ func terminationForRoleBase(role string) TerminationCondition {
 			&MaxRounds{Limit: 1},
 			&ConsecutiveTextRounds{Threshold: 1},
 		)
-	case role == "hw_probe" || role == "ref_discover":
+	case role == "hw_probe" || role == "ref_discover" || role == "eval_discover":
 		return OrConditions(
 			&MaxRounds{Limit: 3},
 			&ConsecutiveTextRounds{Threshold: 2},
