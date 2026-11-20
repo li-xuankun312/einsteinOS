@@ -15,6 +15,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -102,6 +103,25 @@ const evalDiscoverKeepFact = "only a repository under 200 MiB, with benchmark co
 // as the kernel recorded them (tr.NotTaken)
 const evalNotTakenFmt = "[NOT TAKEN]\n%[1]s\n"
 
+// evalNotTakenSection: evalNotTakenFmt with each "<repo>: <why>" line once, or nothing when
+// there is none
+func evalNotTakenSection(lists ...[]string) string {
+	seen := map[string]bool{}
+	var lines []string
+	for _, l := range lists {
+		for _, x := range l {
+			if !seen[x] {
+				seen[x] = true
+				lines = append(lines, x)
+			}
+		}
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return fmt.Sprintf(evalNotTakenFmt, strings.Join(lines, "\n"))
+}
+
 // why a repository the search named is not one it compares with
 const (
 	evalNotTakenReference   = "the reference, measured here as the baseline"
@@ -117,7 +137,19 @@ func evalDiscover(task string, exclude []string, accept func(repo string) (bool,
 	}
 	skip := map[string]bool{}
 	var good []RefRepo
-	prompt := refDiscoverPrompt(truncDiff(task, 3000), MAX_REFS, evalDiscoverKeepFact)
+	// the repositories it does not compare are inserted from the start, with their reasons:
+	// 11/20 1db7c0db had the reference's name in the conditions and nothing saying it is not
+	// compared, and answered the reference and the dev repository
+	var upfront []string
+	for _, e := range exclude {
+		upfront = append(upfront, e+": "+evalNotTakenReference)
+	}
+	devs := GetDevRepos()
+	sort.Strings(devs)
+	for _, d := range devs {
+		upfront = append(upfront, d+": "+evalNotTakenDevRepo)
+	}
+	prompt := refDiscoverPrompt(truncDiff(task, 3000), MAX_REFS, evalDiscoverKeepFact) + evalNotTakenSection(upfront, nil)
 	for tried := 1; tried <= 3 && len(good) < MAX_REFS; tried++ {
 		raw, err := evalAskFn(prompt)
 		tr.Asked++
@@ -186,7 +218,7 @@ func evalDiscover(task string, exclude []string, accept func(repo string) (bool,
 			break
 		}
 		prompt = refDiscoverPrompt(truncDiff(task, 3000), MAX_REFS-len(good), evalDiscoverKeepFact) +
-			fmt.Sprintf(evalNotTakenFmt, strings.Join(tr.NotTaken, "\n"))
+			evalNotTakenSection(upfront, tr.NotTaken)
 	}
 	return good, tr
 }
