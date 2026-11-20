@@ -98,12 +98,24 @@ func SetEvalTask(task string) {
 // what the evaluation's search keeps of the answer (be244ef9, 6851fefd, a47fad18)
 const evalDiscoverKeepFact = "only a repository under 200 MiB, with benchmark code the kernel can run, that publishes a number in tok/s is kept; it is run beside the port, never built into it."
 
+// evalNotTakenFmt: the repositories the search measured and did not take, and why, inserted
+// as the kernel recorded them (tr.NotTaken)
+const evalNotTakenFmt = "[NOT TAKEN]\n%[1]s\n"
+
+// why a repository the search named is not one it compares with
+const (
+	evalNotTakenReference   = "the reference, measured here as the baseline"
+	evalNotTakenDevRepo     = "a dev repository, the code being evaluated"
+	evalNotTakenNamedBefore = "named before in this search"
+)
+
 func evalDiscover(task string, exclude []string, accept func(repo string) (bool, string)) ([]RefRepo, EvalDiscoverTrace) {
 	var tr EvalDiscoverTrace
-	skip := map[string]bool{}
+	excluded := map[string]bool{}
 	for _, e := range exclude {
-		skip[strings.ToLower(e)] = true
+		excluded[strings.ToLower(e)] = true
 	}
+	skip := map[string]bool{}
 	var good []RefRepo
 	prompt := refDiscoverPrompt(truncDiff(task, 3000), MAX_REFS, evalDiscoverKeepFact)
 	for tried := 1; tried <= 3 && len(good) < MAX_REFS; tried++ {
@@ -116,12 +128,22 @@ func evalDiscover(task string, exclude []string, accept func(repo string) (bool,
 		}
 		cands := parseRefRepos(raw)
 		log.Printf("eval_discover: attempt %d: %d candidate(s) named", tried, len(cands))
-		var failed []string
+		var failed, notCompared []string
 		for _, r := range cands {
 			key := r.Owner + "/" + r.Name
 			tr.Named = append(tr.Named, key)
-			if skip[strings.ToLower(key)] || is_dev_repo(r.Owner, r.Name) {
-				tr.NotTaken = append(tr.NotTaken, key+": the reference, a dev repository or named before")
+			why := ""
+			switch {
+			case excluded[strings.ToLower(key)]:
+				why = evalNotTakenReference
+			case is_dev_repo(r.Owner, r.Name):
+				why = evalNotTakenDevRepo
+			case skip[strings.ToLower(key)]:
+				why = evalNotTakenNamedBefore
+			}
+			if why != "" {
+				tr.NotTaken = append(tr.NotTaken, key+": "+why)
+				notCompared = append(notCompared, key)
 				continue
 			}
 			skip[strings.ToLower(key)] = true
@@ -157,10 +179,14 @@ func evalDiscover(task string, exclude []string, accept func(repo string) (bool,
 				break
 			}
 		}
-		if len(failed) == 0 && len(cands) > 0 {
+		// an answer naming only repositories the search does not compare is asked again:
+		// 11/20 1db7c0db answered the reference and the dev repository, and the search ended
+		// with nothing to compare
+		if len(failed) == 0 && len(cands) > len(notCompared) {
 			break
 		}
-		prompt = refDiscoverPrompt(truncDiff(task, 3000), MAX_REFS-len(good), evalDiscoverKeepFact)
+		prompt = refDiscoverPrompt(truncDiff(task, 3000), MAX_REFS-len(good), evalDiscoverKeepFact) +
+			fmt.Sprintf(evalNotTakenFmt, strings.Join(tr.NotTaken, "\n"))
 	}
 	return good, tr
 }
