@@ -279,6 +279,15 @@ func applyDelta(mirrorDir, dst string, changed, removed []string) error {
 
 // ---- running the unit's scripts on the real machine ------------------------------------
 
+// gateLogText: the gate of a verification as its log line names it — every gate that failed,
+// not the first only, which is all the conversation's text does not hide.
+func gateLogText(r VerifyResult) string {
+	if len(r.Gates) > 1 {
+		return fmt.Sprintf("gate=%q (also failed: %s)", r.Gate, strings.Join(r.Gates[1:], ", "))
+	}
+	return fmt.Sprintf("gate=%q", r.Gate)
+}
+
 // VerifyResult is the kernel's own measurement of a unit.
 type VerifyResult struct {
 	Compile   string // pass | fail | missing
@@ -292,8 +301,10 @@ type VerifyResult struct {
 	// GateText says what was measured. Build/Test are what the scripts' processes did.
 	Gate     string
 	GateText string
-	Build    ProcTrace
-	Test     ProcTrace
+	// Gates: every gate unit_gates.go measured failed, Gate first
+	Gates []string
+	Build ProcTrace
+	Test  ProcTrace
 	// NoToolchain: build.sh run again with the toolchain hidden, for GPU units
 	// (build_without_toolchain.go)
 	NoToolchain NoToolchainBuild
@@ -511,7 +522,9 @@ func runUnitVerifyAlone(ws, unitID, gpuUsable string, req UnitRequirements, chan
 	default:
 		res.Smoke = "pass"
 		gi := unitGateInput(ws, unitID, req, changed, res.Build, res.Test, res.NoToolchain)
-		res.Gate, res.GateText = unitGates(gi)
+		if kinds, texts := unitGatesAll(gi); len(kinds) > 0 {
+			res.Gates, res.Gate, res.GateText = kinds, kinds[0], strings.Join(texts, "\n")
+		}
 		// its Lean modules must check in Lean (lean_gate.go)
 		if res.Gate == "" {
 			res.Gate, res.GateText = leanGate(ws, changed)
@@ -725,9 +738,9 @@ func devVerifyOnly(cloneDir, mirror, branch, baseRef, unitID, gpuUsable string, 
 	// the gates judge the unit's code, not this attempt's edit of it (unitFiles)
 	out.Result = runUnitVerifyWith(ws, unitID, gpuUsable, req, unitFiles(changed, removed, devUnitPriorFiles(cloneDir, baseRef, unitID)), 60*time.Minute, 60*time.Minute)
 	out.Status = out.Result.Status()
-	log.Printf("dev_verify: unit %s: compile=%s (exit %d) smoke=%s (exit %d) in %s; gate=%q; devices opened %v; kernels launched: %s",
+	log.Printf("dev_verify: unit %s: compile=%s (exit %d) smoke=%s (exit %d) in %s; %s; devices opened %v; kernels launched: %s",
 		unitID, out.Result.Compile, out.Result.BuildExit, out.Result.Smoke, out.Result.TestExit, out.Result.Elapsed.Round(time.Second),
-		out.Result.Gate, out.Result.Test.Devices, out.Result.Test.LaunchSummaryOr("not measured"))
+		gateLogText(out.Result), out.Result.Test.Devices, out.Result.Test.LaunchSummaryOr("not measured"))
 
 	out.Verified = true
 	return out
@@ -802,9 +815,9 @@ func devVerifyExisting(cloneDir, mirror, branch, baseRef, unitID, gpuUsable stri
 	out.Result = runUnitVerifyWith(ws, unitID, gpuUsable, req, prior, 60*time.Minute, 60*time.Minute)
 	out.Status = out.Result.Status()
 	out.Status["existing_code"] = "true"
-	log.Printf("dev_verify: unit %s (existing code): compile=%s (exit %d) smoke=%s (exit %d) in %s; gate=%q; devices opened %v; kernels launched: %s",
+	log.Printf("dev_verify: unit %s (existing code): compile=%s (exit %d) smoke=%s (exit %d) in %s; %s; devices opened %v; kernels launched: %s",
 		unitID, out.Result.Compile, out.Result.BuildExit, out.Result.Smoke, out.Result.TestExit, out.Result.Elapsed.Round(time.Second),
-		out.Result.Gate, out.Result.Test.Devices, out.Result.Test.LaunchSummaryOr("not measured"))
+		gateLogText(out.Result), out.Result.Test.Devices, out.Result.Test.LaunchSummaryOr("not measured"))
 	if out.Result.Passed() {
 		out.Pushed = baseRef
 	}

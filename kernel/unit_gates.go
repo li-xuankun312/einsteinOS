@@ -145,7 +145,15 @@ func preverifyMayEnd(passed bool, gate string) bool { return passed || gateOutsi
 
 // unitGates returns the first failed gate's kind and the text of every failed gate.
 func unitGates(in GateInput) (kind, text string) {
-	var kinds, texts []string
+	kinds, texts := unitGatesAll(in)
+	if len(kinds) == 0 {
+		return "", ""
+	}
+	return kinds[0], strings.Join(texts, "\n")
+}
+
+// unitGatesAll: every gate the unit fails, in order, with its text.
+func unitGatesAll(in GateInput) (kinds, texts []string) {
 	fail := func(k, t string) { kinds = append(kinds, k); texts = append(texts, t) }
 
 	// a GPU unit is only judged on a machine that can build for the GPU: the 11/03 build.sh
@@ -308,10 +316,7 @@ func unitGates(in GateInput) (kind, text string) {
 		fail("port_incomplete", fmt.Sprintf(gatePortFmt, len(in.PortMissing), len(in.Req.Symbols), strings.Join(in.PortMissing, "\n")))
 	}
 
-	if len(kinds) == 0 {
-		return "", ""
-	}
-	return kinds[0], strings.Join(texts, "\n")
+	return kinds, texts
 }
 
 // refFilesOf: the files the symbols come from, deduplicated.
