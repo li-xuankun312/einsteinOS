@@ -223,3 +223,19 @@ func TestTheSearchIsGivenTheMeasuredConditions(t *testing.T) {
 		}
 	}
 }
+
+// The evaluation's search is given the task without its credentials, as ref_discover is. 11/20
+// 01:51:53 the integration's search conversation 1db7c0db was given the task as PRSetup got it,
+// with the GitHub token the user's line carried, and at 01:53:07 ran
+// "TOKEN=ghp_… python3 …" to page through the reference's commits with it.
+func TestTheEvaluationSearchIsNotGivenTheTasksToken(t *testing.T) {
+	old := evalTask
+	defer SetEvalTask(old)
+	SetEvalTask("项目在 zeng-bin3123/baloon 参考 Niko1221/Strata，api 用这个 ghp_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789 password: hunter2hunter2")
+	evalTaskMu.Lock()
+	got := evalTask
+	evalTaskMu.Unlock()
+	if strings.Contains(got, "ghp_AbCd") || strings.Contains(got, "hunter2") || !strings.Contains(got, "Niko1221/Strata") {
+		t.Fatalf("the search's task: %q", got)
+	}
+}

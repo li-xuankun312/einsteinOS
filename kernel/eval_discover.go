@@ -77,10 +77,13 @@ var (
 	evalTask   string // the task ref_discover was given (PRSetup)
 )
 
-// SetEvalTask records the task the evaluation search runs on.
+// SetEvalTask records the task the evaluation search runs on, without its credentials, as
+// ref_discover gives it (strip_credentials). 11/20 01:51:53 the integration's search
+// conversation was given the task with the GitHub token the user's line carried, and at
+// 01:53:07 ran "TOKEN=ghp_… python3 …" with it.
 func SetEvalTask(task string) {
 	evalTaskMu.Lock()
-	evalTask = task
+	evalTask = strip_credentials(task)
 	evalTaskMu.Unlock()
 }
 
