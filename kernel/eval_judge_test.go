@@ -170,3 +170,29 @@ func TestTheJudgeEnvironmentIsBuiltApartAndReused(t *testing.T) {
 		t.Fatalf("built once, then reused: %v\n%s", err, strings.Join(calls, "\n"))
 	}
 }
+
+// The measurement is kept beside the environments: the next judge of the same model type on
+// the same python reads it instead of downloading the wheels again (five for 22 s against PyPI
+// on 11/20).
+func TestTheJudgeSpecIsMeasuredOncePerModelTypeAndPython(t *testing.T) {
+	type r = struct {
+		models   []string
+		reqPy    string
+		torchMin string
+	}
+	srv, downloads := fakePyPI(t, map[string]r{
+		"5.1.0": {[]string{"qwen3_moe"}, ">=3.10.0", "2.4"},
+		"5.2.0": {[]string{"qwen3_5_moe"}, ">=3.10.0", "2.4"},
+	})
+	defer srv.Close()
+	oldP, oldH := judgePyPI, judgeHome
+	home := t.TempDir()
+	judgePyPI, judgeHome = srv.URL, func() string { return home }
+	defer func() { judgePyPI, judgeHome = oldP, oldH }()
+	a, err := judgeSpecFor("qwen3_5_moe", "3.10.12")
+	first := *downloads
+	b, err2 := judgeSpecFor("qwen3_5_moe", "3.10.12")
+	if err != nil || err2 != nil || a != b || a.Transformers != "5.2.0" || *downloads != first {
+		t.Fatalf("%+v %+v %v %v downloads %d then %d", a, b, err, err2, first, *downloads)
+	}
+}

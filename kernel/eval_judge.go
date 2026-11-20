@@ -397,3 +397,24 @@ func buildJudgeEnv(spec judgeSpec, arch string) (python, versions string, err er
 	os.WriteFile(marker, b, 0o644)
 	return python, v, nil
 }
+
+// judgeSpecFor: measureJudgeSpec, kept beside the environments — the next judge of the same
+// model type on the same python reads it instead of downloading the wheels again (five, 22 s
+// against PyPI on 11/20).
+func judgeSpecFor(mt, python string) (judgeSpec, error) {
+	path := filepath.Join(judgeHome(), fmt.Sprintf("spec-%s-py%s.json", mt, python))
+	if b, err := os.ReadFile(path); err == nil {
+		var s judgeSpec
+		if json.Unmarshal(b, &s) == nil && s.Transformers != "" {
+			return s, nil
+		}
+	}
+	s, err := measureJudgeSpec(mt, python)
+	if err != nil {
+		return s, err
+	}
+	os.MkdirAll(judgeHome(), 0o755)
+	b, _ := json.MarshalIndent(s, "", "  ")
+	os.WriteFile(path, b, 0o644)
+	return s, nil
+}

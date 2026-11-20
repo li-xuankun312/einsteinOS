@@ -95,7 +95,7 @@ var judgeEnvForFn = func(modelDir, arch string) (python, versions string, err er
 	if mt == "" {
 		return "", "", fmt.Errorf("%s/config.json names no model_type", modelDir)
 	}
-	spec, err := measureJudgeSpec(mt, strings.TrimSpace(out))
+	spec, err := judgeSpecFor(mt, strings.TrimSpace(out))
 	if err != nil {
 		return "", "", err
 	}
