@@ -20,6 +20,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -280,4 +282,118 @@ func measureJudgeSpec(mt, python string) (judgeSpec, error) {
 		}
 	}
 	return spec, fmt.Errorf("transformers %s on ship models/%s/, and none of them accepts python %s (the first requires %q)", spec.FirstWithModel, mt, python, rel[lo].requiresPython)
+}
+
+// judgeHome: where judge environments are kept (a variable for tests).
+var judgeHome = func() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		home = os.TempDir()
+	}
+	return filepath.Join(home, ".einsteinOS", "judge")
+}
+
+// judgeTorchIndex: CPU builds of torch — the judge runs on the CPU, beside the GPU stack.
+var judgeTorchIndex = "https://download.pytorch.org/whl/cpu"
+
+// judgeRunFn runs one step of building or checking a judge environment with env (a variable
+// for tests).
+var judgeRunFn = func(env []string, name string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), evalBuildTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Env = env
+	setProcGroup(cmd)
+	cmd.Cancel = func() error { killProcGroup(cmd); return nil }
+	cmd.WaitDelay = 2 * time.Second
+	out, err := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		err = fmt.Errorf("killed after %v", evalBuildTimeout)
+	}
+	return string(out), err
+}
+
+// envWithoutProxy: env with the proxy variables removed, so a step goes directly.
+func envWithoutProxy(env []string) []string {
+	var out []string
+	for _, e := range env {
+		k, _, _ := strings.Cut(e, "=")
+		switch strings.ToUpper(k) {
+		case "ALL_PROXY", "HTTP_PROXY", "HTTPS_PROXY":
+			continue
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
+// judgeStep runs one network step directly, then with the machine's proxy in its environment.
+func judgeStep(name string, args ...string) error {
+	envs := [][]string{envWithoutProxy(os.Environ())}
+	if refProxy() != "" {
+		envs = append(envs, os.Environ())
+	}
+	var errs []string
+	for i, env := range envs {
+		out, err := judgeRunFn(env, name, args...)
+		if err == nil {
+			return nil
+		}
+		route := "directly"
+		if i > 0 {
+			route = "with the proxy"
+		}
+		errs = append(errs, fmt.Sprintf("%s: %v: %s", route, err, tailText(out, 400)))
+	}
+	return fmt.Errorf("%s %s: %s", name, strings.Join(args, " "), strings.Join(errs, "; "))
+}
+
+// judgeCheckScript prints the versions it runs with; exit 4 when transformers has no such class.
+const judgeCheckScript = `import sys, transformers, torch
+print("transformers %s torch %s" % (transformers.__version__, torch.__version__))
+sys.exit(0 if hasattr(transformers, sys.argv[1]) else 4)`
+
+// buildJudgeEnv: a venv of the judge's own under judgeHome — never the system python's
+// packages, where the GPU stack's torch (2.1 on cc-1c97a71e) has to stay as it is — with CPU
+// torch at least spec.Torch and transformers spec.Transformers; built once, reused while it
+// still loads arch. It returns the venv's python and what it runs with.
+func buildJudgeEnv(spec judgeSpec, arch string) (python, versions string, err error) {
+	dir := filepath.Join(judgeHome(), fmt.Sprintf("transformers-%s-torch-%s-py%s", spec.Transformers, spec.Torch, spec.Python))
+	python = filepath.Join(dir, "bin", "python")
+	marker := filepath.Join(dir, "einsteinos_judge.json")
+	check := func() (string, error) {
+		out, err := judgeRunFn(os.Environ(), python, "-c", judgeCheckScript, arch)
+		lines := strings.Split(strings.TrimSpace(out), "\n")
+		return lines[len(lines)-1], err
+	}
+	if fileExists(marker) {
+		if v, err := check(); err == nil {
+			return python, v, nil
+		}
+	}
+	os.MkdirAll(judgeHome(), 0o755)
+	if out, err := judgeRunFn(os.Environ(), "python3", "-m", "venv", "--clear", dir); err != nil {
+		return "", "", fmt.Errorf("python3 -m venv: %v: %s", err, tailText(out, 400))
+	}
+	torch := "torch"
+	if spec.Torch != "" {
+		torch = "torch>=" + spec.Torch
+	}
+	// pysocks: pip reaches a socks proxy (the machine's is socks5, setup_proxy.sh) only with it
+	if err := judgeStep(python, "-m", "pip", "install", "-q", "--upgrade", "pip", "pysocks"); err != nil {
+		return "", "", err
+	}
+	if err := judgeStep(python, "-m", "pip", "install", "-q", "--index-url", judgeTorchIndex, torch); err != nil {
+		return "", "", err
+	}
+	if err := judgeStep(python, "-m", "pip", "install", "-q", "transformers=="+spec.Transformers, "safetensors", "accelerate"); err != nil {
+		return "", "", err
+	}
+	v, err := check()
+	if err != nil {
+		return "", "", fmt.Errorf("the judge environment does not load %s: %v: %s", arch, err, v)
+	}
+	b, _ := json.MarshalIndent(map[string]any{"spec": spec, "arch": arch, "runs_with": v}, "", "  ")
+	os.WriteFile(marker, b, 0o644)
+	return python, v, nil
 }

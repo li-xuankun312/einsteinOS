@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -104,5 +105,68 @@ func TestTheModelTypeIsReadFromConfig(t *testing.T) {
 	os.WriteFile(filepath.Join(d, "config.json"), []byte(`{"architectures":["Qwen3_5MoeForCausalLM"],"model_type":"qwen3_5_moe","text_config":{"model_type":"qwen3_5_moe_text"}}`), 0o644)
 	if m := modelType(d); m != "qwen3_5_moe" {
 		t.Fatalf("%q", m)
+	}
+}
+
+// The judge's environment is a venv of its own under the kernel's state — never the system
+// python's packages, where the GPU stack's torch (2.1 on cc-1c97a71e) has to stay as it is —
+// with CPU torch at least the version measured and that transformers; each install goes
+// directly, then with the machine's proxy; built once, the next judge reuses it.
+func TestTheJudgeEnvironmentIsBuiltApartAndReused(t *testing.T) {
+	home := t.TempDir()
+	oldHome, oldRun := judgeHome, judgeRunFn
+	judgeHome = func() string { return home }
+	t.Setenv("ALL_PROXY", "socks5://127.0.0.1:1080")
+	defer func() { judgeHome, judgeRunFn = oldHome, oldRun }()
+	var calls []string
+	torchTries := 0
+	judgeRunFn = func(env []string, name string, args ...string) (string, error) {
+		line := name + " " + strings.Join(args, " ")
+		proxied := false
+		for _, e := range env {
+			if strings.HasPrefix(strings.ToUpper(e), "ALL_PROXY=") {
+				proxied = true
+			}
+		}
+		calls = append(calls, fmt.Sprintf("%v %s", proxied, line))
+		switch {
+		case strings.Contains(line, "-m venv"):
+			os.MkdirAll(filepath.Join(args[len(args)-1], "bin"), 0o755)
+		case strings.Contains(line, "whl/cpu"):
+			torchTries++
+			if !proxied {
+				return "ERROR: Could not find a version that satisfies the requirement torch>=2.6", fmt.Errorf("exit status 1")
+			}
+		case strings.Contains(line, "transformers.__version__"):
+			return "transformers 5.20.2 torch 2.6.0+cpu", nil
+		}
+		return "", nil
+	}
+	spec := judgeSpec{ModelType: "qwen3_5_moe", FirstWithModel: "5.2.0", Transformers: "5.20.2", RequiresPython: ">=3.10.0", Torch: "2.6", Python: "3.10.12"}
+	py, versions, err := buildJudgeEnv(spec, "Qwen3_5MoeForCausalLM")
+	if err != nil {
+		t.Fatal(err, calls)
+	}
+	if !strings.HasPrefix(py, home) || versions != "transformers 5.20.2 torch 2.6.0+cpu" {
+		t.Fatalf("%s %q", py, versions)
+	}
+	all := strings.Join(calls, "\n")
+	for _, want := range []string{"python3 -m venv", "torch>=2.6", "transformers==5.20.2", "safetensors", "accelerate"} {
+		if !strings.Contains(all, want) {
+			t.Fatalf("missing %q in\n%s", want, all)
+		}
+	}
+	var torchCalls []string
+	for _, c := range calls {
+		if strings.Contains(c, "whl/cpu") {
+			torchCalls = append(torchCalls, c)
+		}
+	}
+	if torchTries != 2 || !strings.HasPrefix(torchCalls[0], "false") || !strings.HasPrefix(torchCalls[1], "true") {
+		t.Fatalf("torch: directly, then with the proxy:\n%s", all)
+	}
+	calls = nil
+	if _, _, err := buildJudgeEnv(spec, "Qwen3_5MoeForCausalLM"); err != nil || len(calls) != 1 || !strings.Contains(calls[0], "transformers.__version__") {
+		t.Fatalf("built once, then reused: %v\n%s", err, strings.Join(calls, "\n"))
 	}
 }
