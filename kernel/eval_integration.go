@@ -92,10 +92,7 @@ func evalBaseFor(repo, sha string, benches []EvalBench) evalBase {
 		b.reference.Err = evalNoBenchReason(refBareDir(repo), sha)
 	}
 	b.clues = evalClues(repo, refBareDir(repo), sha)
-	evalTaskMu.Lock()
-	task := evalTask
-	evalTaskMu.Unlock()
-	taken, trace := evalDiscover(evalTaskWithConditions(task, measureEvalConditions(repo, sha)), []string{repo}, evalAcceptRepo)
+	taken, trace := evalDiscover(evalSearchFacts(measureEvalConditions(repo, sha)), []string{repo}, evalAcceptRepo)
 	b.discover = trace
 	for _, r := range taken {
 		name := r.Owner + "/" + r.Name
@@ -242,19 +239,15 @@ func evalNothingComparedText(rec EvalRecord, prev *EvalRecord) string {
 	return fmt.Sprintf(gateNothingComparedFmt, ref, p, strings.Join(ext, "; "), pub)
 }
 
-// evalTaskConditionsFmt: the task and, inserted as they are, the conditions the kernel
-// measured on this machine (the model, the GPUs, the memory)
-const evalTaskConditionsFmt = "%[1]s\n\n%[2]s"
-
-// evalTaskWithConditions: the search for repositories to compare with is given the measured
-// conditions beside the task. 11/10 it was given the task alone and named llvm/llvm-project,
-// ROCm/HIP and triton-lang/triton — compilers, none running the model on this machine
-// (Qwen3.6-35B-A3B) — and of the 68 published numbers the planner then read, none was
-// measured on that model, so none was comparable.
-func evalTaskWithConditions(task string, cond EvalConditions) string {
-	cj, err := json.Marshal(cond)
-	if err != nil {
-		return task
-	}
-	return fmt.Sprintf(evalTaskConditionsFmt, task, cj)
+// evalSearchFacts: what the search for repositories to compare with is given — the
+// conditions the kernel measured on this machine (the model, the GPUs, the memory, the
+// reference), inserted as they are, and not the user's task. 11/10 it had the task alone and
+// named llvm/llvm-project, ROCm/HIP and triton-lang/triton, compilers, none running the model
+// here (534d7731 put the conditions beside the task). 11/20 01:51:53 conversation 1db7c0db,
+// given the task beside them, did what the task asks of the pipeline: it collected Strata's
+// 1384 new commits, pushed three commits to the dev repository's main (01:54:49–01:57:31) and
+// answered with the reference and the dev repository, both excluded.
+func evalSearchFacts(cond EvalConditions) string {
+	cj, _ := json.Marshal(cond)
+	return string(cj)
 }

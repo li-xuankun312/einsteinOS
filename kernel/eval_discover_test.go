@@ -202,25 +202,32 @@ func resetEvalSearch() {
 }
 
 // The search for repositories to compare with is given what the kernel measured on this
-// machine beside the task. 11/10 it had the task alone and named llvm/llvm-project, ROCm/HIP
-// and triton-lang/triton — compilers, none running the model here — and none of the 68
-// published numbers the planner then read had been measured on that model.
-func TestTheSearchIsGivenTheMeasuredConditions(t *testing.T) {
+// machine — the model, the GPUs, the memory, the reference — and not the user's task. 11/10
+// it had the task alone and named llvm/llvm-project, ROCm/HIP and triton-lang/triton,
+// compilers, none running the model here (534d7731 added the conditions beside the task).
+// 11/20 01:51:53 conversation 1db7c0db, given the task beside them, did what the task asks of
+// the pipeline: it collected Strata's 1384 new commits, pushed three commits to the dev
+// repository's main (f611539, 7d71afe, f6f29d7, 01:54:49–01:57:31) and answered with the
+// reference and the dev repository, both of which the search excludes.
+func TestTheSearchIsGivenTheMeasuredConditionsNotTheTask(t *testing.T) {
 	model := filepath.Join(t.TempDir(), "Qwen3.6-35B-A3B")
 	os.MkdirAll(model, 0o755)
 	os.WriteFile(filepath.Join(model, "config.json"), []byte(`{"architectures":["Qwen3_5MoeForCausalLM"],"model_type":"qwen3_5_moe","num_experts":256}`), 0o644)
 	os.WriteFile(filepath.Join(model, "model-00001-of-00026.safetensors"), []byte("x"), 0o644)
-	old, oldAsk := evalModelDir, evalAskFn
-	defer func() { evalModelDir, evalAskFn = old, oldAsk }()
+	old, oldAsk, oldTask := evalModelDir, evalAskFn, evalTask
+	defer func() { evalModelDir, evalAskFn = old, oldAsk; SetEvalTask(oldTask) }()
 	evalModelDir = model
 	var prompt string
 	evalAskFn = func(p string) (string, error) { prompt = p; return "", nil }
-	task := "把 Niko1221/Strata 移植到这台机器"
-	evalDiscover(evalTaskWithConditions(task, measureEvalConditions("Niko1221/Strata", "07b4a6263ab9")), []string{"Niko1221/Strata"}, evalAcceptRepo)
-	for _, want := range []string{task, `"model_name":"Qwen3.6-35B-A3B"`, "Qwen3_5MoeForCausalLM", `"num_experts":256`} {
+	SetEvalTask("项目在 zeng-bin3123/baloon … 收集github Strata 仓库的所有commit(先在你的code exec环境遍历,然后慢慢扫。)")
+	evalDiscover(evalSearchFacts(measureEvalConditions("Niko1221/Strata", "07b4a6263ab9")), []string{"Niko1221/Strata"}, evalAcceptRepo)
+	for _, want := range []string{`"model_name":"Qwen3.6-35B-A3B"`, "Qwen3_5MoeForCausalLM", `"num_experts":256`, `"ref_repo":"Niko1221/Strata"`} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("the search prompt lacks %s:\n%s", want, prompt)
 		}
+	}
+	if strings.Contains(prompt, "收集github Strata") || strings.Contains(prompt, "zeng-bin3123/baloon") {
+		t.Fatalf("the search prompt carries the task:\n%s", prompt)
 	}
 }
 
