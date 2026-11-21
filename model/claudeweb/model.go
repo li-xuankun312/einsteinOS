@@ -857,8 +857,10 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 					}
 				}
 				if ev.ContentBlock.Type == "tool_use" {
-					if st.isChild && kernel.RoleAnswersInText(childRole) {
-						// the answer is the text; a tool would run in the sandbox (kernel/bagu.go)
+					if st.isChild && (kernel.RoleAnswersInText(childRole) ||
+						kernel.RoleSearchesOnly(childRole) && !kernel.SearchTool(ev.ContentBlock.Name)) {
+						// the answer is the text; a tool would run in the sandbox (kernel/bagu.go),
+						// and a search's only tools are the web's
 						log.Printf("claudeweb: role=%s answers in text and started %s: stopped, its answer is what it wrote", childRole, ev.ContentBlock.Name)
 						m.client.StopResponse(st.convID)
 						body.Close()
