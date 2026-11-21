@@ -880,10 +880,11 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 					}
 				}
 				if ev.ContentBlock.Type == "tool_use" {
-					if st.isChild && (kernel.RoleAnswersInText(childRole) ||
-						kernel.RoleSearchesOnly(childRole) && !kernel.SearchTool(ev.ContentBlock.Name)) {
-						// the answer is the text; a tool would run in the sandbox (kernel/bagu.go),
-						// and a search's only tools are the web's
+					// a search is not stopped at its tools: they run in its sandbox and nothing of
+					// them here (shadowExecuteRaw); 11/21 08:45:26-08:46:10 stopped at its first
+					// bash_tool, three searches named 0 repositories in 1m7s
+					if st.isChild && kernel.RoleAnswersInText(childRole) {
+						// the answer is the text; a tool would run in the sandbox (kernel/bagu.go)
 						log.Printf("claudeweb: role=%s answers in text and started %s: stopped, its answer is what it wrote", childRole, ev.ContentBlock.Name)
 						m.client.StopResponse(st.convID)
 						body.Close()

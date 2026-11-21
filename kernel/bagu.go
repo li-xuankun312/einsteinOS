@@ -95,18 +95,12 @@ func RoleAnswersInText(role string) bool {
 }
 
 // RoleSearchesOnly: the conversations whose answer is owner/name lines they find by searching
-// the web — the search for references (ref_discover) and its copy for the evaluation
-// (eval_discover). Searching and reading the web are their work; any other tool is a machine
-// put to work for an answer that is a few lines. 11/21 06:26–06:47 the evaluation's search
-// a07300a2 ran 50 tools in its first round, wrote a project of eight files into
-// /home/claude/baloon and ran vllm benchmarks on this machine's GPUs.
+// — the search for references (ref_discover) and its copy for the evaluation (eval_discover).
+// Their tools run in their sandbox and nothing of them on this machine: 11/21 06:26–06:47 the
+// evaluation's search a07300a2 wrote a project of eight files into /home/claude/baloon and
+// ran vllm benchmarks on this machine's GPUs.
 func RoleSearchesOnly(role string) bool {
 	return role == "ref_discover" || role == "eval_discover"
-}
-
-// SearchTool: the claude.ai tools that search and read the web.
-func SearchTool(name string) bool {
-	return name == "web_search" || name == "web_fetch"
 }
 
 // RoleWritesCode: the conversations the shell is for — the ones whose work is code (a dev

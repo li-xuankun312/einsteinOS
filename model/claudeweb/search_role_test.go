@@ -68,40 +68,28 @@ func runSearchRole(t *testing.T, srv *httptest.Server, role string) string {
 	return got.String()
 }
 
-// The evaluation's search is stopped at a tool that is not the web's, and its answer is what
-// it wrote before it — 11/21 06:26 a07300a2 ran bash_tool 50 times in its first round and went
-// on to write and benchmark a project on this machine.
-func TestASearchIsStoppedAtAToolThatIsNotTheWebs(t *testing.T) {
+// A search is not stopped at its tools — they run in its sandbox, and nothing of them here
+// (search_not_run_here_test.go): 11/21 08:45:26-08:46:10 stopped at their first bash_tool,
+// three searches named 0 repositories. A conversation that answers in text still is.
+func TestASearchIsNotStoppedAtItsTools(t *testing.T) {
 	for _, role := range []string{"eval_discover", "ref_discover"} {
-		srv, stops, comps := searchStream(t, "bash_tool")
-		got := runSearchRole(t, srv, role)
-		if stops() != 1 || comps() != 1 {
-			t.Fatalf("%s: stopped at bash_tool and not continued: stops=%d completions=%d", role, stops(), comps())
+		srv, stops, _ := searchStream(t, "bash_tool")
+		runSearchRole(t, srv, role)
+		if stops() != 0 {
+			t.Fatalf("%s: stopped at bash_tool: stops=%d", role, stops())
 		}
-		if !strings.Contains(got, "vllm-project/vllm") {
-			t.Fatalf("%s: its answer is what it wrote before the tool: %q", role, got)
-		}
+	}
+	srv, stops, _ := searchStream(t, "bash_tool")
+	runSearchRole(t, srv, "detect_dev")
+	if stops() != 1 {
+		t.Fatalf("detect_dev was not stopped at its tool: stops=%d", stops())
 	}
 }
 
-// A search's web_search is its work and is not stopped.
-func TestASearchsWebSearchIsNotStopped(t *testing.T) {
-	srv, stops, _ := searchStream(t, "web_search")
-	runSearchRole(t, srv, "eval_discover")
-	if stops() != 0 {
-		t.Fatalf("web_search stopped the search: stops=%d", stops())
-	}
-}
-
-func TestSearchRolesAndTools(t *testing.T) {
+func TestSearchRoles(t *testing.T) {
 	for role, want := range map[string]bool{"eval_discover": true, "ref_discover": true, "hw_probe": false, "dev_unit_3": false, "detect_dev": false} {
 		if kernel.RoleSearchesOnly(role) != want {
 			t.Fatalf("RoleSearchesOnly(%q) = %v", role, !want)
-		}
-	}
-	for name, want := range map[string]bool{"web_search": true, "web_fetch": true, "bash_tool": false, "create_file": false, "str_replace": false} {
-		if kernel.SearchTool(name) != want {
-			t.Fatalf("SearchTool(%q) = %v", name, !want)
 		}
 	}
 }
