@@ -1,13 +1,12 @@
 package kernel
 
 import (
-	"strings"
 	"testing"
 )
 
 // 11/21 14:15:45 the integration unit, its four attempts used, was "left to the integration
 // unit" — itself — and the commit was reported complete with every unit passing. The
-// integration unit is never deferred: the run stops and says so, and a plan that has it
+// integration unit is never deferred and its fix attempts do not end it, and a plan that has it
 // deferred does not count it as passed.
 func TestTheIntegrationUnitIsNeverDeferred(t *testing.T) {
 	integ := DevPlanNode{ID: "uintegration01529aaa82b9", Integration: true}
@@ -17,11 +16,9 @@ func TestTheIntegrationUnitIsNeverDeferred(t *testing.T) {
 		VerifySeen:  map[string]bool{integ.ID: true},
 	}
 	r := &devRun{plan: p, repo: "Niko1221/Strata", branch: "einsteinOS/dev-c880662efd"}
-	if !r.prepareUnit(integ, "") || r.halt == nil {
-		t.Fatal("an exhausted integration unit did not stop the run")
-	}
-	if !strings.Contains(r.halt.Error(), "the commit is not complete") || !strings.Contains(r.halt.Error(), "compile_fail") {
-		t.Fatalf("the stop does not say why: %v", r.halt)
+	// it runs on: its fix attempts do not end it (its directions are budgeted, eval_direction.go)
+	if r.prepareUnit(integ, "") || r.halt != nil {
+		t.Fatalf("the integration unit was decided about instead of run: halt %v", r.halt)
 	}
 	if _, deferred := p.Deferred[integ.ID]; deferred {
 		t.Fatal("the integration unit was deferred")
