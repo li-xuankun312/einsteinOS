@@ -145,23 +145,18 @@ func evalIntegration(pid int64, repo, sha, devRepo, unitID string, benches []Eva
 			log.Printf("eval: %s %s: %s does not exist — the reference is not built and nothing is searched; gate=%q", repo, shortSHA(sha), br.Bench.File, k)
 			return k, t
 		}
-		// the reference at sha measured by an earlier run is on the state branch: it is not
-		// built again (11/21 06:04:48-06:26:42 a build of 21m54s for 0 benchmarks, after a
-		// restart, of a commit whose reference an earlier run had built)
+		var prev *EvalRecord
 		var stored *EvalRun
 		if dir, err := evalStateDir(devRepo); err == nil {
-			stored = storedReference(dir, repo, sha, benches)
-		}
-		base := evalBaseFor(repo, sha, benches, stored)
-		rec := EvalRecord{Repo: repo, RefSHA: sha, Reference: base.reference, External: base.external,
-			Clues: base.clues, Dev: evalRunPort(ws, shown), When: time.Now().UTC(),
-			Conditions: measureEvalConditions(repo, sha), Discover: base.discover}
-		var prev *EvalRecord
-		if dir, err := evalStateDir(devRepo); err == nil {
 			prev = prevEvalRecord(dir, sha)
+			// the reference at sha measured by an earlier run is on the state branch: it is
+			// not built again (11/21 06:04:48-06:26:42 a build of 21m54s for 0 benchmarks,
+			// after a restart, of a commit whose reference an earlier run had built)
+			stored = storedReference(dir, repo, sha, benches)
 		} else {
 			log.Printf("eval: %s: the state branch could not be read (%v) — judged against the reference only", repo, err)
 		}
+		rec := EvalRecord{Repo: repo, RefSHA: sha, When: time.Now().UTC(), Conditions: measureEvalConditions(repo, sha)}
 		if prev != nil {
 			rec.PrevSHA = prev.RefSHA
 		}
@@ -170,42 +165,31 @@ func evalIntegration(pid int64, repo, sha, devRepo, unitID string, benches []Eva
 		if killed := KillLeftoverProcessGroups(); len(killed) > 0 {
 			log.Printf(evalLeftoversKilledFmt, repo, shortSHA(sha), len(killed), strings.Join(killed, "; "))
 		}
+		// the port's own run on the model comes first, and the reference is built and the
+		// search run only for a run that is the port's: 11/21 the restarted integration was to
+		// build the reference for 22 minutes and search for 39 before its e2e.sh — vllm and a
+		// formula's rates — was looked at
 		start := time.Now()
 		log.Printf("eval: %s %s: running %s on the model at %s", repo, shortSHA(sha), devE2EScript(unitID), evalModel())
 		rec.E2E = evalRunE2E(ws, unitID)
 		log.Printf("eval: %s %s: %s exited %d in %s, %d metric(s)", repo, shortSHA(sha), devE2EScript(unitID), rec.E2E.Exit, time.Since(start).Round(time.Second), len(rec.E2E.Metrics))
-		if k, t := e2eGate(rec.E2E); k != "" {
-			rec.Gate, rec.GateText = k, t
-		} else if k, t := e2eMachineGate(rec.E2E); k != "" {
-			rec.Gate, rec.GateText = k, t
-		} else if k, t := e2eModelGate(rec.E2E, evalModel()); k != "" {
-			rec.Gate, rec.GateText = k, t
-		} else if k, t := e2ePortGate(rec.E2E, e2ePortKernels(ws, unitID)); k != "" {
-			rec.Gate, rec.GateText = k, t
-		} else if k, t := e2eLoaderGate(rec.E2E, e2ePortKernels(ws, unitID)); k != "" {
-			rec.Gate, rec.GateText = k, t
-		} else if k, t := e2eShardsGate(rec.E2E, evalModel()); k != "" {
-			rec.Gate, rec.GateText = k, t
-		} else if k, t := e2eRateGate(rec.E2E); k != "" {
-			rec.Gate, rec.GateText = k, t
-		} else if k, t := e2eUnchangedSince(repo, sha, ws, rec.E2E, prev); k != "" {
-			rec.Gate, rec.GateText = k, t
-		} else if k, t := e2eTokensGate(rec.E2E); k != "" {
-			rec.Gate, rec.GateText = k, t
-		} else if k, t := evalCorrectGate(rec.E2E, evalModel()); k != "" {
-			rec.Gate, rec.GateText = k, t
-		} else {
-			external, trace := evalComparisons(pid, repo, rec.Conditions, rec.E2E, rec.Clues, base.docs)
-			rec.Compare = trace
-			var own []EvalComparison
-			rec.Gate, rec.GateText, own = evalGateCompared(rec, prev, mask)
-			rec.Compared = append(own, external...)
-			if rec.Gate == "" {
-				rec.Gate, rec.GateText = evalExternalGate(external)
-			}
-			if rec.Gate == "" && len(rec.Compared) == 0 {
-				rec.Gate, rec.GateText = GateNothingCompared, evalNothingComparedText(rec, prev)
-			}
+		if k, t := e2eGates(repo, sha, ws, unitID, rec.E2E, prev); k != "" {
+			log.Printf(evalE2EFirstFmt, repo, shortSHA(sha), devE2EScript(unitID), k)
+			return k, t
+		}
+		base := evalBaseFor(repo, sha, benches, stored)
+		rec.Reference, rec.External, rec.Clues, rec.Discover = base.reference, base.external, base.clues, base.discover
+		rec.Dev = evalRunPort(ws, shown)
+		external, trace := evalComparisons(pid, repo, rec.Conditions, rec.E2E, rec.Clues, base.docs)
+		rec.Compare = trace
+		var own []EvalComparison
+		rec.Gate, rec.GateText, own = evalGateCompared(rec, prev, mask)
+		rec.Compared = append(own, external...)
+		if rec.Gate == "" {
+			rec.Gate, rec.GateText = evalExternalGate(external)
+		}
+		if rec.Gate == "" && len(rec.Compared) == 0 {
+			rec.Gate, rec.GateText = GateNothingCompared, evalNothingComparedText(rec, prev)
 		}
 		log.Printf("eval: %s %s: reference build=%d %d metric(s); port %d metric(s); end-to-end on %s exit=%d %d metric(s); %d searched repo(s); %d clue(s); previous %q; gate=%q",
 			repo, shortSHA(sha), rec.Reference.BuildExit, len(rec.Reference.Metrics()), len(rec.Dev.Metrics()),
@@ -215,6 +199,33 @@ func evalIntegration(pid int64, repo, sha, devRepo, unitID string, benches []Eva
 		}
 		return rec.Gate, rec.GateText
 	}
+}
+
+// %[1]s repo, %[2]s commit, %[3]s the script, %[4]s the gate
+const evalE2EFirstFmt = "eval: %[1]s %[2]s: %[3]s is not yet the port's run on the model (gate=%[4]q) — the reference is not built and nothing is searched"
+
+// e2eGates: the first gate the end-to-end run itself fails, in order — it ran, changed nothing
+// of the machine, loaded the model it was given, is the port (its kernels, its loading
+// process, every shard), has the kernel's measured rate, followed the reference, printed its
+// tokens, and generated what the model's own implementation does.
+func e2eGates(repo, sha, ws, unitID string, br EvalBenchRun, prev *EvalRecord) (string, string) {
+	for _, g := range []func() (string, string){
+		func() (string, string) { return e2eGate(br) },
+		func() (string, string) { return e2eMachineGate(br) },
+		func() (string, string) { return e2eModelGate(br, evalModel()) },
+		func() (string, string) { return e2ePortGate(br, e2ePortKernels(ws, unitID)) },
+		func() (string, string) { return e2eLoaderGate(br, e2ePortKernels(ws, unitID)) },
+		func() (string, string) { return e2eShardsGate(br, evalModel()) },
+		func() (string, string) { return e2eRateGate(br) },
+		func() (string, string) { return e2eUnchangedSince(repo, sha, ws, br, prev) },
+		func() (string, string) { return e2eTokensGate(br) },
+		func() (string, string) { return evalCorrectGate(br, evalModel()) },
+	} {
+		if k, t := g(); k != "" {
+			return k, t
+		}
+	}
+	return "", ""
 }
 
 // evalClueDocs reads the documents the clues are in, once each.

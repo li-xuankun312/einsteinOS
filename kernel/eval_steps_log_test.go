@@ -52,21 +52,36 @@ func TestEachStepOfTheEvaluationIsLogged(t *testing.T) {
 	}
 	out := buf.String()
 	short := shortSHA(sha)
+	// a run that is not yet the port's: the reference is not built and nothing is searched
 	for _, want := range []string{
-		"eval: o/Strata " + short + ": building the reference",
-		"eval: o/Strata " + short + ": the reference built and run in ",
-		"eval: o/Strata " + short + ": searching for repositories to compare with",
-		"eval: o/Strata " + short + ": the search ended in ",
 		"eval: o/Strata " + short + ": running .einsteinOS/verify/uint2/e2e.sh on the model",
 		"eval: o/Strata " + short + ": .einsteinOS/verify/uint2/e2e.sh exited 4 in ",
+		"eval: o/Strata " + short + `: .einsteinOS/verify/uint2/e2e.sh is not yet the port's run on the model (gate="integration_e2e_failed") — the reference is not built and nothing is searched`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("no %q in\n%s", want, out)
 		}
 	}
+	if strings.Contains(out, "building the reference") || strings.Contains(out, "searching for repositories") {
+		t.Fatalf("the reference was built or the search run for a failed end-to-end run:\n%s", out)
+	}
+	// the reference's build and the search, for a run that is the port's: each step logged
 	buf = syncBuf{}
 	log.SetOutput(&buf)
-	fn(ws, nil)
+	evalBaseFor("o/Strata", sha, nil, nil)
+	for _, want := range []string{
+		"eval: o/Strata " + short + ": building the reference",
+		"eval: o/Strata " + short + ": the reference built and run in ",
+		"eval: o/Strata " + short + ": searching for repositories to compare with",
+		"eval: o/Strata " + short + ": the search ended in ",
+	} {
+		if !strings.Contains(buf.String(), want) {
+			t.Fatalf("no %q in\n%s", want, buf.String())
+		}
+	}
+	buf = syncBuf{}
+	log.SetOutput(&buf)
+	evalBaseFor("o/Strata", sha, nil, nil)
 	if !strings.Contains(buf.String(), "eval: o/Strata "+short+": the reference and the search were measured before — reused") {
 		t.Fatalf("second verification:\n%s", buf.String())
 	}
