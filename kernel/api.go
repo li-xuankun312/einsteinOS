@@ -121,6 +121,14 @@ func ConsumeForkFiles() []ForkFile {
 	return f
 }
 
+// PeekForkRole: the role set for this fork, left in its slot for the child to take
+// (ConsumeForkRole) — what the conversation is told depends on it before its first message.
+func PeekForkRole() string {
+	forkConvMu.Lock()
+	defer forkConvMu.Unlock()
+	return forkRole
+}
+
 // ConsumeForkRole takes the role, the last of what a fork hands its child: the slots are
 // free for the next fork (fork_slot.go).
 func ConsumeForkRole() string {

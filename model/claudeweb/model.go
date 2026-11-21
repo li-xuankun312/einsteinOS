@@ -77,6 +77,18 @@ const localExecFactsFmt = `[THIS MACHINE] every tool call is mirrored and run on
 - pr_status {"pid":N} — the pipeline's progress
 `
 
+// localFactsFor: what a conversation of role is told about the machine that runs its tool calls
+// and the registered services. A conversation whose answer is text or the web's results has
+// nothing run on that machine and calls no service, so it is told neither: 11/21 06:26:50-06:28
+// the evaluation's search a07300a2 tried pr_setup and sync_repo, looked for their socket, a
+// fifo and open ports, and went on to treat the machine as one it was to build on.
+func localFactsFor(role string) string {
+	if kernel.RoleAnswersInText(role) || kernel.RoleSearchesOnly(role) {
+		return ""
+	}
+	return localExecPrefix
+}
+
 type Model struct {
 	client    *Client
 	modelName string
@@ -1566,7 +1578,10 @@ func (m *Model) RunConversation(pid int64, prompt string) (string, string) {
 		IsTemporary:                    false,
 	}
 
-	fullPrompt := kernel.BaguInsert(prompt, localExecPrefix)
+	fullPrompt := prompt
+	if facts := localFactsFor(kernel.PeekForkRole()); facts != "" {
+		fullPrompt = kernel.BaguInsert(prompt, facts)
+	}
 
 	log.Printf("claudeweb: fork %s/chat/%s", m.client.baseURL, convID)
 	log.Printf("claudeweb: → %s prompt=%q", convID[:8], truncate(prompt, 80))
