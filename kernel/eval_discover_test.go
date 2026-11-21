@@ -143,11 +143,11 @@ func TestTheCommitIsMeasuredOnceForVerificationsSideBySide(t *testing.T) {
 	var wg sync.WaitGroup
 	for i := 0; i < 3; i++ {
 		wg.Add(1)
-		go func() { defer wg.Done(); evalBaseFor(repo, sha, nil) }()
+		go func() { defer wg.Done(); evalBaseFor(repo, sha, nil, nil) }()
 	}
 	wg.Wait()
 	one := asks
-	evalBaseFor(repo, sha, nil)
+	evalBaseFor(repo, sha, nil, nil)
 	if one == 0 || asks != one || one > 3 {
 		t.Fatalf("asks: %d side by side, %d after", one, asks)
 	}

@@ -62,12 +62,15 @@ func integrationEval(unitID string) func(string, []EvalBench) (string, string) {
 // %[1]s repo, %[2]s commit, %[3]d how many groups, %[4]s which
 const evalLeftoversKilledFmt = "eval: %[1]s %[2]s: before the end-to-end run, %[3]d process group(s) commands left running here were killed: %[4]s"
 
+// %[1]s repo, %[2]s commit, %[3]d build exit, %[4]d metrics
+const evalReferenceReusedFmt = "eval: %[1]s %[2]s: the reference was built and run here by an earlier run (build exit %[3]d, %[4]d metric(s)) — read from the state branch, not built again"
+
 // evalBaseFor measures the reference at sha and the searched repositories, once per sha.
 //
 // Verifications that ask at the same time wait for the one measuring: 11/10 between 16:46 and
 // 22:45 the integration unit's verifications, running side by side, each found the cache
 // empty and ran the search again — six searches of the same commit.
-func evalBaseFor(repo, sha string, benches []EvalBench) evalBase {
+func evalBaseFor(repo, sha string, benches []EvalBench, stored *EvalRun) evalBase {
 	key := repo + "@" + sha
 	for {
 		evalBaseMu.Lock()
@@ -94,11 +97,16 @@ func evalBaseFor(repo, sha string, benches []EvalBench) evalBase {
 		evalBaseMu.Unlock()
 	}()
 	start := time.Now()
-	log.Printf("eval: %s %s: building the reference and running its %d benchmark(s) here", repo, shortSHA(sha), len(benches))
-	b.reference = evalRunRepo(repo, refBareDir(repo), sha, benches)
-	log.Printf("eval: %s %s: the reference built and run in %s (build exit %d, %d metric(s))", repo, shortSHA(sha), time.Since(start).Round(time.Second), b.reference.BuildExit, len(b.reference.Metrics()))
-	if len(benches) == 0 && b.reference.Err == "" {
-		b.reference.Err = evalNoBenchReason(refBareDir(repo), sha)
+	if stored != nil {
+		b.reference = *stored
+		log.Printf(evalReferenceReusedFmt, repo, shortSHA(sha), b.reference.BuildExit, len(b.reference.Metrics()))
+	} else {
+		log.Printf("eval: %s %s: building the reference and running its %d benchmark(s) here", repo, shortSHA(sha), len(benches))
+		b.reference = evalRunRepo(repo, refBareDir(repo), sha, benches)
+		log.Printf("eval: %s %s: the reference built and run in %s (build exit %d, %d metric(s))", repo, shortSHA(sha), time.Since(start).Round(time.Second), b.reference.BuildExit, len(b.reference.Metrics()))
+		if len(benches) == 0 && b.reference.Err == "" {
+			b.reference.Err = evalNoBenchReason(refBareDir(repo), sha)
+		}
 	}
 	b.clues = evalClues(repo, refBareDir(repo), sha)
 	start = time.Now()
@@ -137,7 +145,14 @@ func evalIntegration(pid int64, repo, sha, devRepo, unitID string, benches []Eva
 			log.Printf("eval: %s %s: %s does not exist — the reference is not built and nothing is searched; gate=%q", repo, shortSHA(sha), br.Bench.File, k)
 			return k, t
 		}
-		base := evalBaseFor(repo, sha, benches)
+		// the reference at sha measured by an earlier run is on the state branch: it is not
+		// built again (11/21 06:04:48-06:26:42 a build of 21m54s for 0 benchmarks, after a
+		// restart, of a commit whose reference an earlier run had built)
+		var stored *EvalRun
+		if dir, err := evalStateDir(devRepo); err == nil {
+			stored = storedReference(dir, repo, sha, benches)
+		}
+		base := evalBaseFor(repo, sha, benches, stored)
 		rec := EvalRecord{Repo: repo, RefSHA: sha, Reference: base.reference, External: base.external,
 			Clues: base.clues, Dev: evalRunPort(ws, shown), When: time.Now().UTC(),
 			Conditions: measureEvalConditions(repo, sha), Discover: base.discover}

@@ -79,6 +79,33 @@ func prevEvalRecord(dir, sha string) *EvalRecord {
 	return &r
 }
 
+// storedReference: the reference at sha as an earlier run measured it here, from that commit's
+// record on the state branch — nil when there is none, or when it ran other benchmarks than
+// benches (what the kernel measures as the reference's benchmarks has changed since).
+func storedReference(dir, repo, sha string, benches []EvalBench) *EvalRun {
+	b, err := os.ReadFile(filepath.Join(dir, evalRecordPath(sha)))
+	if err != nil {
+		return nil
+	}
+	var r EvalRecord
+	if json.Unmarshal(b, &r) != nil || r.Repo != repo || r.RefSHA != sha || r.Reference.SHA != sha {
+		return nil
+	}
+	ran := map[string]bool{}
+	for _, br := range r.Reference.Benches {
+		ran[br.Bench.Name] = true
+	}
+	if len(ran) != len(benches) {
+		return nil
+	}
+	for _, eb := range benches {
+		if !ran[eb.Name] {
+			return nil
+		}
+	}
+	return &r.Reference
+}
+
 // writeEvalRecord writes rec and puts its commit in the index (once, at the end).
 func writeEvalRecord(dir string, rec EvalRecord) error {
 	if err := os.MkdirAll(filepath.Join(dir, evalDir), 0o755); err != nil {
