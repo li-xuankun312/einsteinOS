@@ -179,10 +179,12 @@ func evalIntegration(pid int64, repo, sha, devRepo, unitID string, benches []Eva
 			book = loadDirections(dir, unitID)
 		}
 		key := directionKey(ws, rec.E2E)
+		evalTokensAgreed = 0
 		k, t := e2eGates(repo, sha, ws, unitID, rec.E2E, prev)
 		if book != nil {
-			d := book.noteDirection(key, k, time.Now())
-			log.Printf(evalDirectionFmt, repo, shortSHA(sha), key, d.Verifications)
+			m := measureDirection(rec.E2E, e2ePortKernels(ws, unitID), evalTokensAgreed)
+			d, progressed := book.noteDirection(key, k, time.Now(), m)
+			log.Printf(evalDirectionFmt, repo, shortSHA(sha), key, d.Verifications, d.Budget, m.TookPermille/10, m.Units, m.UnitsOf, m.Tokens, progressed)
 			if err := storeDirections(devRepo, book); err != nil {
 				log.Printf("eval: %s %s: the directions were not stored: %v", repo, shortSHA(sha), err)
 			}
@@ -221,8 +223,9 @@ func evalIntegration(pid int64, repo, sha, devRepo, unitID string, benches []Eva
 // %[1]s repo, %[2]s commit, %[3]s the script, %[4]s the gate
 const evalE2EFirstFmt = "eval: %[1]s %[2]s: %[3]s is not yet the port's run on the model (gate=%[4]q) — the reference is not built and nothing is searched"
 
-// %[1]s repo, %[2]s commit, %[3]s the direction, %[4]d its verifications
-const evalDirectionFmt = "eval: %[1]s %[2]s: the run's direction: %[3]s (verification %[4]d in it)"
+// %[1]s repo, %[2]s commit, %[3]s the direction, %[4]d its verifications, %[5]d its budget,
+// %[6]d%% of the model taken in by its runner, %[7]d of %[8]d units, %[9]d tokens, %[10]v progress
+const evalDirectionFmt = "eval: %[1]s %[2]s: the run's direction: %[3]s — verification %[4]d of %[5]d; its runner took in %[6]d%% of the model, launched kernels of %[7]d of %[8]d units, %[9]d token(s) agree; meaningful progress: %[10]v"
 
 // %[1]s repo, %[2]s commit, %[3]s the gate's text
 const evalE2EGateTextFmt = "eval: %[1]s %[2]s: the gate's text, as sent to the conversation:\n%[3]s"

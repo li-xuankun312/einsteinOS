@@ -144,7 +144,12 @@ func modelArchitecture(modelDir string) string {
 // evalCorrectGate checks the run's generated tokens against the model's named implementation.
 // 11/09 and 11/10 the only check of what the port computed was its own chunked prefill
 // against its own sequential prefill; nothing outside the pipeline had looked at its tokens.
+// evalTokensAgreed: the generated tokens, from the first, that the last correctness check
+// found agreeing with the model's own implementation (a direction's measure, eval_direction.go).
+var evalTokensAgreed int
+
 func evalCorrectGate(br EvalBenchRun, modelDir string) (kind, text string) {
+	evalTokensAgreed = 0
 	arch := modelArchitecture(modelDir)
 	if arch == "" {
 		arch = "AutoModelForCausalLM"
@@ -168,7 +173,9 @@ func evalCorrectGate(br EvalBenchRun, modelDir string) (kind, text string) {
 			}
 		}
 	}
+	evalTokensAgreed = first
 	if diff == 0 {
+		evalTokensAgreed = len(want)
 		return "", ""
 	}
 	return "integration_wrong_tokens", fmt.Sprintf(gateWrongTokensFmt, class, diff, len(want), first, br.GeneratedIDs[first], want[first])

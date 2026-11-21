@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -27,6 +28,57 @@ type DirectionStat struct {
 	LastAt        time.Time `json:"last_at"`
 	Verifications int       `json:"verifications"`
 	LastGate      string    `json:"last_gate,omitempty"`
+	// Budget: the verifications the direction is given — directionLength when it first
+	// appears, directionLength more at each meaningful progress (directionProgress)
+	Budget int `json:"budget"`
+	// the direction's best of the measures only real work raises: the most of the model's
+	// bytes its runner took in (per mille), the units whose kernels that runner launched
+	// itself, the generated tokens agreeing with the model's own implementation
+	BestTookPermille int `json:"best_took_permille"`
+	BestUnits        int `json:"best_units"`
+	BestTokens       int `json:"best_tokens"`
+}
+
+// DirectionMeasure: what one run measured of the three.
+type DirectionMeasure struct {
+	TookPermille, Units, UnitsOf, Tokens int
+}
+
+// directionLength: the verifications a direction is given at first and at each meaningful
+// progress — the .format argument EINSTEINOS_DIRECTION_LENGTH (3 when it is not set).
+var directionLength = func() int {
+	if n, err := strconv.Atoi(os.Getenv("EINSTEINOS_DIRECTION_LENGTH")); err == nil && n > 0 {
+		return n
+	}
+	return 3
+}
+
+// measureDirection: the run's three measures — its runner is the port's process that took in
+// the most of the model's bytes; the units are those (of perUnit) whose kernels that process
+// launched itself; the tokens are those agreeing with the model's own implementation.
+func measureDirection(br EvalBenchRun, perUnit map[string][]string, tokens int) DirectionMeasure {
+	m := DirectionMeasure{Tokens: tokens, UnitsOf: len(perUnit)}
+	var runner *E2ELoader
+	for i, l := range br.Loaders {
+		if l.Port && (runner == nil || l.TookBytes > runner.TookBytes) {
+			runner = &br.Loaders[i]
+		}
+	}
+	if runner == nil {
+		return m
+	}
+	if br.ModelBytes > 0 {
+		m.TookPermille = int(runner.TookBytes * 1000 / br.ModelBytes)
+		if m.TookPermille > 1000 {
+			m.TookPermille = 1000
+		}
+	}
+	var units []string
+	for u := range perUnit {
+		units = append(units, u)
+	}
+	m.Units = len(units) - len(missingUnits(*runner, units, perUnit))
+	return m
 }
 
 // DirectionBook: every direction a unit's end-to-end runs took, by key.
@@ -120,14 +172,26 @@ func directionKey(ws string, br EvalBenchRun) string {
 	return strings.Join(progs, " + ")
 }
 
-// noteDirection counts one verification of the run in direction key and returns its record.
-func (b *DirectionBook) noteDirection(key, gate string, at time.Time) *DirectionStat {
+// noteDirection counts one verification of the run in direction key and returns its record
+// and whether the run made meaningful progress in it: one of the three measures above the
+// direction's own best so far (a gate further on is none — 11/21 12:28 loader_not_port gave
+// way to partial_model by copying 64 elements of each shard). Progress gives the direction
+// directionLength more verifications; a direction's first run sets its bests.
+func (b *DirectionBook) noteDirection(key, gate string, at time.Time, m DirectionMeasure) (*DirectionStat, bool) {
 	d := b.Dirs[key]
-	if d == nil {
-		d = &DirectionStat{Key: key, FirstAt: at}
+	first := d == nil
+	if first {
+		d = &DirectionStat{Key: key, FirstAt: at, Budget: directionLength()}
 		b.Dirs[key] = d
 	}
 	d.Verifications++
 	d.LastAt, d.LastGate = at, gate
-	return d
+	progressed := !first && (m.TookPermille > d.BestTookPermille || m.Units > d.BestUnits || m.Tokens > d.BestTokens)
+	d.BestTookPermille = max(d.BestTookPermille, m.TookPermille)
+	d.BestUnits = max(d.BestUnits, m.Units)
+	d.BestTokens = max(d.BestTokens, m.Tokens)
+	if progressed {
+		d.Budget += directionLength()
+	}
+	return d, progressed
 }
