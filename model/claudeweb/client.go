@@ -180,6 +180,10 @@ func (c *Client) Completion(convID string, req *CompletionRequest) (io.ReadClose
 				lastErr = fmt.Errorf("API %d: %s", resp.StatusCode, truncBody(errBody))
 				continue
 			}
+			// the request is over: its silence clock stops with it. Left running, it said five
+			// minutes later "no byte from the stream for 5m0s — cancelling it" about a request
+			// that had no stream (11/21 05:49:17, while the round of fe0b9e5d went on unharmed)
+			watch.stop()
 			return nil, fmt.Errorf("API %d: %s", resp.StatusCode, truncBody(errBody))
 		}
 
