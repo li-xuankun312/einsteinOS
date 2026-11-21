@@ -581,6 +581,9 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 			}
 			// what it rejected is parked, so a run stopped before this attempt ends starts the
 			// unit again from it, not from the dev branch (11/20 02:49 → 03:38)
+			if notePreverifySeen(plan, unit.ID, o) {
+				devPlanSave(r.repo, r.devRepo, r.branch, plan, fmt.Sprintf("plan: %s's conversation saw its scripts run here", unit.ID))
+			}
 			if parkRejectedTree(r.branch, baseRef, o.Verified && o.Err == nil) {
 				wip := parkTarget(r.branch, baseRef, unit.ID)
 				msg := fmt.Sprintf("unit %s: rejected at a done line, parked [compile=%s smoke=%s gate=%s]", unit.ID, o.Result.Compile, o.Result.Smoke, gateOrNone(o.Result.Gate))
