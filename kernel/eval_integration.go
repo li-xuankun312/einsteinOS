@@ -59,6 +59,9 @@ func integrationEval(unitID string) func(string, []EvalBench) (string, string) {
 	return integrationEvalHooks[unitID]
 }
 
+// %[1]s repo, %[2]s commit, %[3]d how many groups, %[4]s which
+const evalLeftoversKilledFmt = "eval: %[1]s %[2]s: before the end-to-end run, %[3]d process group(s) commands left running here were killed: %[4]s"
+
 // evalBaseFor measures the reference at sha and the searched repositories, once per sha.
 //
 // Verifications that ask at the same time wait for the one measuring: 11/10 between 16:46 and
@@ -146,6 +149,11 @@ func evalIntegration(pid int64, repo, sha, devRepo, unitID string, benches []Eva
 		}
 		if prev != nil {
 			rec.PrevSHA = prev.RefSHA
+		}
+		// the port is measured on GPUs nothing else here holds: what a command run for a
+		// conversation left running is killed first
+		if killed := KillLeftoverProcessGroups(); len(killed) > 0 {
+			log.Printf(evalLeftoversKilledFmt, repo, shortSHA(sha), len(killed), strings.Join(killed, "; "))
 		}
 		start := time.Now()
 		log.Printf("eval: %s %s: running %s on the model at %s", repo, shortSHA(sha), devE2EScript(unitID), evalModel())

@@ -10,3 +10,9 @@ import "syscall"
 func killPgid(pgid int) {
 	_ = syscall.Kill(-pgid, syscall.SIGKILL)
 }
+
+// pgidAlive: whether any process of the group led by pgid is still there (kill with signal 0
+// reaches the group).
+func pgidAlive(pgid int) bool {
+	return syscall.Kill(-pgid, 0) == nil
+}

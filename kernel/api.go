@@ -377,7 +377,13 @@ func ForkExecLabeled(command string, workDir string, label string) (int64, error
 	taskMeta[int64(pid)] = meta
 	metaMu.Unlock()
 
+	// its own process group: what it leaves running when it returns is found and can be
+	// killed (proc_leftover.go); tracked so a Ctrl-C kills the group (proc_registry.go)
+	setProcGroup(cmd)
 	err := cmd.Start()
+	if err == nil {
+		TrackProcessGroup(cmd.Process.Pid)
+	}
 	if err != nil {
 		if live != nil {
 			live.finish(1)
@@ -391,6 +397,7 @@ func ForkExecLabeled(command string, workDir string, label string) (int64, error
 
 	go func() {
 		werr := cmd.Wait()
+		noteReturned(cmd.Process.Pid, command)
 		exitCode := int32(0)
 		if werr != nil {
 			if exitErr, ok := werr.(*exec.ExitError); ok {
