@@ -50,6 +50,8 @@ type EvalBenchRun struct {
 	// Started: when the run started — a weight file written since is the run's own
 	// conversion of the model (e2eModelGate)
 	Started time.Time `json:"started,omitempty"`
+	// ModelBytes: the size of the weight files the model is made of (modelShards)
+	ModelBytes int64 `json:"model_bytes,omitempty"`
 }
 
 // EvalRun is a repository at one commit, built and benchmarked here.

@@ -225,6 +225,7 @@ func e2eGates(repo, sha, ws, unitID string, br EvalBenchRun, prev *EvalRecord) (
 		func() (string, string) { return e2ePortGate(br, e2ePortKernels(ws, unitID)) },
 		func() (string, string) { return e2eLoaderGate(br, e2ePortKernels(ws, unitID)) },
 		func() (string, string) { return e2eShardsGate(br, evalModel()) },
+		func() (string, string) { return e2eModelTakenGate(br, evalModel()) },
 		func() (string, string) { return e2eRateGate(br) },
 		func() (string, string) { return e2eUnchangedSince(repo, sha, ws, br, prev) },
 		func() (string, string) { return e2eTokensGate(br) },

@@ -40,12 +40,15 @@ type E2ELoader struct {
 	PortKernels []string `json:"port_kernels,omitempty"`
 	// Seconds: how long the watcher saw it running (eval_e2e_rate.go)
 	Seconds float64 `json:"seconds"`
+	// TookBytes: what it took in — the bytes it read plus the most of its weight mappings
+	// resident at once (ProcSeen.ReadBytes + MappedWeightBytes)
+	TookBytes int64 `json:"took_bytes,omitempty"`
 }
 
 const (
 	gateE2EReaderNotPortFmt = "integration_e2e_loader_not_port: in %[1]s a process that is not the port's read the model's weights — the weights are read by the port's own programs (an executable of the workspace, a process mapping a library it built, or an interpreter running a file of it); the processes that read weights or launched ported kernels:\n%[2]s"
-	gateE2ENoRunnerFmt      = "integration_e2e_loader_not_port: in %[1]s no process of the port both launched, itself, a ported kernel of every unit and read the weights (the model's files, or a large file written during the run from them); the processes that read weights or launched ported kernels:\n%[2]s%[3]s"
-	e2eLoaderLineFmt        = "  pid %[1]d %[2]s (%[3]s): the port's: %[4]v; model weight files %[5]d; large files written during the run %[6]d; kernels it launched itself: %[7]s"
+	gateE2ENoRunnerFmt      = "integration_e2e_loader_not_port: in %[1]s no process of the port both launched, itself, a ported kernel of every unit and took in the weights — the model's files, at least %[4]d%% of their bytes (what /proc/<pid>/io counts it reading, plus the most of its weight-file mappings /proc/<pid>/smaps shows resident, sampled every 50 ms), or a large file written during the run from them; the processes that read weights or launched ported kernels:\n%[2]s%[3]s"
+	e2eLoaderLineFmt        = "  pid %[1]d %[2]s (%[3]s): the port's: %[4]v; model weight files %[5]d; took in %[8]s of the model's %[9]s; large files written during the run %[6]d; kernels it launched itself: %[7]s"
 	e2eLoaderMissingFmt     = "\n  units none of whose kernels the port's process closest to it launched:\n%[1]s"
 )
 
@@ -60,7 +63,7 @@ func e2eLoaders(ws string, procs []ProcSeen, launchedBy map[int][]string, since 
 			continue
 		}
 		l := E2ELoader{PID: p.PID, Exe: p.Exe, Cmdline: p.Cmdline, Weights: len(p.Weights), WeightFiles: p.Weights,
-			Seconds: p.Last.Sub(p.First).Seconds()}
+			Seconds: p.Last.Sub(p.First).Seconds(), TookBytes: p.ReadBytes + p.MappedWeightBytes}
 		l.Port = (root != "" && strings.HasPrefix(p.Exe, root+"/")) || len(p.WorkspaceLibs) > 0 || len(p.WorkspaceArgs) > 0
 		for _, f := range p.Large {
 			if st, err := os.Stat(f); err == nil && st.ModTime().After(since.Add(-machineClockSlack)) {
@@ -87,7 +90,7 @@ func e2eLoaderLines(br EvalBenchRun) string {
 		if ks == "" {
 			ks = "none"
 		}
-		lines = append(lines, fmt.Sprintf(e2eLoaderLineFmt, l.PID, l.Exe, l.Cmdline, l.Port, l.Weights, len(l.Derived), ks))
+		lines = append(lines, fmt.Sprintf(e2eLoaderLineFmt, l.PID, l.Exe, l.Cmdline, l.Port, l.Weights, len(l.Derived), ks, gib(l.TookBytes), gib(br.ModelBytes)))
 	}
 	if len(lines) == 0 {
 		return "  (none)"
@@ -125,7 +128,7 @@ func e2eRunner(br EvalBenchRun, perUnit map[string][]string) (E2ELoader, bool) {
 	var best E2ELoader
 	found := false
 	for _, l := range br.Loaders {
-		if l.Port && (l.Weights > 0 || len(l.Derived) > 0) && len(missingUnits(l, units, perUnit)) == 0 && (!found || l.Seconds > best.Seconds) {
+		if l.Port && (tookTheModel(l, br.ModelBytes) || len(l.Derived) > 0) && len(missingUnits(l, units, perUnit)) == 0 && (!found || l.Seconds > best.Seconds) {
 			best, found = l, true
 		}
 	}
@@ -162,5 +165,22 @@ func e2eLoaderGate(br EvalBenchRun, perUnit map[string][]string) (kind, text str
 		}
 		miss = fmt.Sprintf(e2eLoaderMissingFmt, strings.Join(ml, "\n"))
 	}
-	return "integration_e2e_loader_not_port", fmt.Sprintf(gateE2ENoRunnerFmt, br.Bench.File, e2eLoaderLines(br), miss)
+	return "integration_e2e_loader_not_port", fmt.Sprintf(gateE2ENoRunnerFmt, br.Bench.File, e2eLoaderLines(br), miss, modelTakenPercent)
 }
+
+// modelTakenPercent: how much of the model's bytes a process takes in to have loaded it. 11/21
+// 12:28-13:59 the integration's e2e.sh had a python copy 64 elements of one tensor of each
+// shard to the GPU, and a test binary mmap one shard and copy a slice of it, so that each
+// "read the weights" — neither ran the model.
+const modelTakenPercent = 90
+
+// tookTheModel: l took in at least modelTakenPercent of modelBytes (0: the size is unknown and
+// opening a weight file is all that can be asked).
+func tookTheModel(l E2ELoader, modelBytes int64) bool {
+	if modelBytes <= 0 {
+		return l.Weights > 0
+	}
+	return l.Weights > 0 && l.TookBytes*100 >= modelBytes*modelTakenPercent
+}
+
+func gib(n int64) string { return fmt.Sprintf("%.2f GiB", float64(n)/(1<<30)) }

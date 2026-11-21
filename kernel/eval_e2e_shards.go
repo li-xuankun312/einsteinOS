@@ -83,3 +83,34 @@ func e2eShardsGate(br EvalBenchRun, modelDir string) (kind, text string) {
 	}
 	return "integration_e2e_partial_model", fmt.Sprintf(gateE2EPartialModelFmt, br.Bench.File, len(shards)-len(missing), len(shards), modelDir, src, strings.Join(shown, " "))
 }
+
+// modelBytes: the size of the weight files the model at dir is made of.
+func modelBytes(dir string) int64 {
+	var n int64
+	for _, f := range modelShards(dir) {
+		if st, err := os.Stat(filepath.Join(dir, f)); err == nil {
+			n += st.Size()
+		}
+	}
+	return n
+}
+
+const gateE2EModelNotTakenFmt = "integration_e2e_model_not_read: the port's processes in %[1]s took in %[2]s of the %[3]s the model at %[4]s is made of — at least %[5]d%% is a loaded model (each process: what /proc/<pid>/io counts it reading, plus the most of its weight-file mappings /proc/<pid>/smaps shows resident, sampled every 50 ms); every shard opened is not every shard read"
+
+// e2eModelTakenGate: the port's processes that opened the model's weight files took in, together,
+// at least modelTakenPercent of the model's bytes.
+func e2eModelTakenGate(br EvalBenchRun, modelDir string) (kind, text string) {
+	if br.ModelBytes <= 0 {
+		return "", ""
+	}
+	var took int64
+	for _, l := range br.Loaders {
+		if l.Port && l.Weights > 0 {
+			took += l.TookBytes
+		}
+	}
+	if took*100 >= br.ModelBytes*modelTakenPercent {
+		return "", ""
+	}
+	return "integration_e2e_model_not_read", fmt.Sprintf(gateE2EModelNotTakenFmt, br.Bench.File, gib(took), gib(br.ModelBytes), modelDir, modelTakenPercent)
+}

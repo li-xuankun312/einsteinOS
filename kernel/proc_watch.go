@@ -69,6 +69,12 @@ type ProcSeen struct {
 	Cmdline       string   `json:"cmdline,omitempty"`
 	WorkspaceArgs []string `json:"workspace_args,omitempty"`
 	Large         []string `json:"large,omitempty"`
+	// ReadBytes: the most /proc/<pid>/io counted it reading (rchar: every read() it made);
+	// MappedWeightBytes: the most of its weight-file mappings seen resident at once
+	// (/proc/<pid>/smaps Rss) — together what it took in of the weights, whether it read
+	// them or touched them through a mapping
+	ReadBytes         int64 `json:"read_bytes,omitempty"`
+	MappedWeightBytes int64 `json:"mapped_weight_bytes,omitempty"`
 	// First, Last: when the watcher first and last saw it running
 	First time.Time `json:"first"`
 	Last  time.Time `json:"last"`
@@ -132,14 +138,17 @@ func (w *procWatcher) noteArgs(p *procSeenSets, dir string, argv []string) {
 }
 
 type procSeenSets struct {
-	cmdline string
-	wsArgs  map[string]bool
-	large   map[string]bool
-	first   time.Time
-	last    time.Time
-	exe     string
-	weights map[string]bool
-	libs    map[string]bool
+	rchar     int64
+	mappedMax int64
+	smapsAt   time.Time
+	cmdline   string
+	wsArgs    map[string]bool
+	large     map[string]bool
+	first     time.Time
+	last      time.Time
+	exe       string
+	weights   map[string]bool
+	libs      map[string]bool
 }
 
 func (w *procWatcher) proc(pid int) *procSeenSets {
@@ -249,7 +258,11 @@ func (w *procWatcher) scan(root int) {
 				w.noteLarge(ps, target)
 			}
 		}
+		if n := procRChar(dir); n > ps.rchar {
+			ps.rchar = n
+		}
 		// a loader that maps the weights can close their descriptors at once: the mappings stay
+		mapsWeights := false
 		if b, err := os.ReadFile(filepath.Join(dir, "maps")); err == nil {
 			for _, line := range strings.Split(string(b), "\n") {
 				i := strings.IndexByte(line, '/')
@@ -260,6 +273,7 @@ func (w *procWatcher) scan(root int) {
 				if weightFileRe.MatchString(f) {
 					w.weights[f] = true
 					ps.weights[f] = true
+					mapsWeights = true
 				} else {
 					w.noteLarge(ps, f)
 				}
@@ -268,7 +282,60 @@ func (w *procWatcher) scan(root int) {
 				}
 			}
 		}
+		// how much of its weight mappings is resident: smaps is long for a large process, so it
+		// is read only for one that maps weights, and at most every smapsEvery
+		if mapsWeights && time.Since(ps.smapsAt) >= smapsEvery {
+			ps.smapsAt = time.Now()
+			if n := procMappedWeightRss(dir); n > ps.mappedMax {
+				ps.mappedMax = n
+			}
+		}
 	}
+}
+
+// smapsEvery: how often a process's smaps is read.
+const smapsEvery = 500 * time.Millisecond
+
+// procRChar: the bytes /proc/<pid>/io counts the process reading (rchar), 0 when unreadable.
+func procRChar(dir string) int64 {
+	b, err := os.ReadFile(filepath.Join(dir, "io"))
+	if err != nil {
+		return 0
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		if strings.HasPrefix(line, "rchar:") {
+			n, _ := strconv.ParseInt(strings.TrimSpace(strings.TrimPrefix(line, "rchar:")), 10, 64)
+			return n
+		}
+	}
+	return 0
+}
+
+// procMappedWeightRss: the resident bytes of the process's mappings of weight files, from
+// /proc/<pid>/smaps (each mapping's header line, then its "Rss: N kB").
+func procMappedWeightRss(dir string) int64 {
+	b, err := os.ReadFile(filepath.Join(dir, "smaps"))
+	if err != nil {
+		return 0
+	}
+	var total int64
+	inWeight := false
+	for _, line := range strings.Split(string(b), "\n") {
+		f := strings.Fields(line)
+		if len(f) == 0 {
+			continue
+		}
+		if !strings.HasSuffix(f[0], ":") { // a mapping's header: range perms offset dev inode [path]
+			i := strings.IndexByte(line, '/')
+			inWeight = i >= 0 && weightFileRe.MatchString(strings.TrimSuffix(line[i:], " (deleted)"))
+			continue
+		}
+		if inWeight && f[0] == "Rss:" && len(f) >= 2 {
+			kb, _ := strconv.ParseInt(f[1], 10, 64)
+			total += kb * 1024
+		}
+	}
+	return total
 }
 
 // procPPid reads the parent pid from /proc/<pid>/stat (the field after the ")" of the name).
@@ -307,7 +374,8 @@ func (w *procWatcher) trace() ProcTrace {
 			continue // listed before it ran, or gone before it was read
 		}
 		procs = append(procs, ProcSeen{PID: pid, Exe: p.exe, Weights: keys(p.weights), WorkspaceLibs: keys(p.libs),
-			Cmdline: truncStr(p.cmdline, 200), WorkspaceArgs: keys(p.wsArgs), Large: keys(p.large), First: p.first, Last: p.last})
+			Cmdline: truncStr(p.cmdline, 200), WorkspaceArgs: keys(p.wsArgs), Large: keys(p.large), First: p.first, Last: p.last,
+			ReadBytes: p.rchar, MappedWeightBytes: p.mappedMax})
 	}
 	sort.Slice(procs, func(i, j int) bool { return procs[i].PID < procs[j].PID })
 	return ProcTrace{Devices: keys(w.devices), Weights: keys(w.weights), Exes: keys(w.exes), Cmdlines: keys(w.cmdlines), Procs: len(w.seen), Processes: procs}
