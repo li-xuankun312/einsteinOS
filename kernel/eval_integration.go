@@ -173,7 +173,21 @@ func evalIntegration(pid int64, repo, sha, devRepo, unitID string, benches []Eva
 		log.Printf("eval: %s %s: running %s on the model at %s", repo, shortSHA(sha), devE2EScript(unitID), evalModel())
 		rec.E2E = evalRunE2E(ws, unitID)
 		log.Printf("eval: %s %s: %s exited %d in %s, %d metric(s)", repo, shortSHA(sha), devE2EScript(unitID), rec.E2E.Exit, time.Since(start).Round(time.Second), len(rec.E2E.Metrics))
-		if k, t := e2eGates(repo, sha, ws, unitID, rec.E2E, prev); k != "" {
+		// the run's direction, as its processes measured it (eval_direction.go)
+		var book *DirectionBook
+		if dir, err := evalStateDir(devRepo); err == nil {
+			book = loadDirections(dir, unitID)
+		}
+		key := directionKey(ws, rec.E2E)
+		k, t := e2eGates(repo, sha, ws, unitID, rec.E2E, prev)
+		if book != nil {
+			d := book.noteDirection(key, k, time.Now())
+			log.Printf(evalDirectionFmt, repo, shortSHA(sha), key, d.Verifications)
+			if err := storeDirections(devRepo, book); err != nil {
+				log.Printf("eval: %s %s: the directions were not stored: %v", repo, shortSHA(sha), err)
+			}
+		}
+		if k != "" {
 			log.Printf(evalE2EFirstFmt, repo, shortSHA(sha), devE2EScript(unitID), k)
 			// what the conversation is told, here too: the run's record is not stored, and the
 			// gate's name alone does not say which process or file it is about
@@ -206,6 +220,9 @@ func evalIntegration(pid int64, repo, sha, devRepo, unitID string, benches []Eva
 
 // %[1]s repo, %[2]s commit, %[3]s the script, %[4]s the gate
 const evalE2EFirstFmt = "eval: %[1]s %[2]s: %[3]s is not yet the port's run on the model (gate=%[4]q) — the reference is not built and nothing is searched"
+
+// %[1]s repo, %[2]s commit, %[3]s the direction, %[4]d its verifications
+const evalDirectionFmt = "eval: %[1]s %[2]s: the run's direction: %[3]s (verification %[4]d in it)"
 
 // %[1]s repo, %[2]s commit, %[3]s the gate's text
 const evalE2EGateTextFmt = "eval: %[1]s %[2]s: the gate's text, as sent to the conversation:\n%[3]s"
