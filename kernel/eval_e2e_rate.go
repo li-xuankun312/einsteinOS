@@ -20,26 +20,24 @@ const e2eMeasuredLabel = "end-to-end generated, measured by the kernel"
 
 const (
 	gateE2ERateUnmeasuredFmt = "integration_e2e_unmeasured: the kernel measured no rate of %[1]s: %[2]s; output: %[3]s"
-	e2eRateNoLoaderWhy       = "no process of the workspace loaded the model's weights"
+	e2eRateNoLoaderWhy       = "no process of the workspace ran ported kernels on the weights"
 	e2eRateNoTokensWhy       = "it printed no generated token ids (\"generated: …\")"
 	e2eRateNoTimeWhy         = "the port's loading process was not seen running for any time"
 )
 
-// e2eMeasureRate: the rate of the port's loading process — the generated tokens over the
-// longest time a port loader (E2ELoader.Port) was seen running — or why there is none.
-func e2eMeasureRate(br EvalBenchRun) (Metric, string) {
-	secs := -1.0
-	for _, l := range br.Loaders {
-		if l.Port && l.Seconds > secs {
-			secs = l.Seconds
-		}
-	}
+// e2eMeasureRate: the rate of the port's process that ran the model (e2eRunner: it read the
+// weights and launched, itself, a kernel of every unit of perUnit) — the generated tokens over
+// the time it was seen running — or why there is none.
+func e2eMeasureRate(br EvalBenchRun, perUnit map[string][]string) (Metric, string) {
+	r, ok := e2eRunner(br, perUnit)
 	switch {
-	case secs < 0:
+	case !ok:
 		return Metric{}, e2eRateNoLoaderWhy
 	case len(br.GeneratedIDs) == 0:
 		return Metric{}, e2eRateNoTokensWhy
-	case secs == 0:
+	}
+	secs := r.Seconds
+	if secs <= 0 {
 		secs = procWatchTick.Seconds() // seen once: it ran for less than one tick
 	}
 	return Metric{Label: e2eMeasuredLabel, Value: float64(len(br.GeneratedIDs)) / secs, Unit: "tok/s", Better: "higher"}, ""

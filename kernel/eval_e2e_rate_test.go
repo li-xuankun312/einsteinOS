@@ -12,16 +12,16 @@ func TestTheEndToEndRateIsTheKernelsMeasurement(t *testing.T) {
 	br := EvalBenchRun{Bench: EvalBench{File: "e2e.sh"}, GeneratedIDs: make([]int, 64),
 		Loaders: []E2ELoader{
 			{PID: 1, Exe: "/usr/local/bin/python3.10", Seconds: 1},
-			{PID: 2, Exe: "/ws/build/generate", Port: true, Seconds: 8},
+			{PID: 2, Exe: "/ws/build/generate", Port: true, Weights: 26, PortKernels: []string{"gdn_rec_kernel"}, Seconds: 8},
 		}}
-	m, why := e2eMeasureRate(br)
+	m, why := e2eMeasureRate(br, map[string][]string{"u1": {"gdn_rec_kernel"}})
 	if why != "" || m.Label != e2eMeasuredLabel || m.Value != 8 {
 		t.Fatalf("64 tokens over the port's 8 s: %+v %q", m, why)
 	}
-	if _, why := e2eMeasureRate(EvalBenchRun{GeneratedIDs: []int{1}, Loaders: []E2ELoader{{Exe: "python3"}}}); why != e2eRateNoLoaderWhy {
+	if _, why := e2eMeasureRate(EvalBenchRun{GeneratedIDs: []int{1}, Loaders: []E2ELoader{{Exe: "python3", Weights: 1}}}, nil); why != e2eRateNoLoaderWhy {
 		t.Fatalf("no port loader: %q", why)
 	}
-	if _, why := e2eMeasureRate(EvalBenchRun{Loaders: []E2ELoader{{Port: true, Seconds: 3}}}); why != e2eRateNoTokensWhy {
+	if _, why := e2eMeasureRate(EvalBenchRun{Loaders: []E2ELoader{{Port: true, Weights: 1, PortKernels: []string{"k"}, Seconds: 3}}}, nil); why != e2eRateNoTokensWhy {
 		t.Fatalf("no tokens: %q", why)
 	}
 	// a run that prints a formula's rates and has no port loader is unmeasured

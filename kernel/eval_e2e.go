@@ -73,10 +73,10 @@ func evalRunE2E(ws, unitID string) EvalBenchRun {
 			br.ProbeErr = "no process of the run loaded it"
 		}
 	}
-	br.Loaders = e2eLoaders(ws, tr.Processes, byPID)
+	br.Loaders = e2eLoaders(ws, tr.Processes, byPID, started)
 	// the rate is the kernel's: what the script printed is kept, not judged
 	br.Printed, br.Metrics = br.Metrics, nil
-	if m, why := e2eMeasureRate(br); why == "" {
+	if m, why := e2eMeasureRate(br, e2ePortKernels(ws, unitID)); why == "" {
 		br.Metrics = []Metric{m}
 	} else {
 		br.RateWhy = why

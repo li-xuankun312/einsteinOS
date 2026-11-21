@@ -63,6 +63,12 @@ type ProcSeen struct {
 	Exe           string   `json:"exe"`
 	Weights       []string `json:"weights,omitempty"`
 	WorkspaceLibs []string `json:"workspace_libs,omitempty"`
+	// Cmdline: its arguments; WorkspaceArgs: those that name a file of the run's directory (a
+	// script of the workspace an interpreter runs); Large: the other files of at least
+	// largeFileMin it opened or mapped (a pack of weights the port converted)
+	Cmdline       string   `json:"cmdline,omitempty"`
+	WorkspaceArgs []string `json:"workspace_args,omitempty"`
+	Large         []string `json:"large,omitempty"`
 	// First, Last: when the watcher first and last saw it running
 	First time.Time `json:"first"`
 	Last  time.Time `json:"last"`
@@ -78,9 +84,57 @@ type procWatcher struct {
 	seen     map[int]bool
 	root     string // the run's directory: its shared objects are recorded per process
 	procs    map[int]*procSeenSets
+	sizes    map[string]int64 // a file's size, read once
+}
+
+// largeFileMin: the size from which a file a process opens is recorded with it (ProcSeen.Large).
+const largeFileMin = 64 << 20
+
+// noteLarge records f with the process when it is a regular file of at least largeFileMin.
+func (w *procWatcher) noteLarge(p *procSeenSets, f string) {
+	if !strings.HasPrefix(f, "/") || strings.HasPrefix(f, "/dev/") || strings.HasPrefix(f, "/proc/") || strings.Contains(filepath.Base(f), ".so") {
+		return
+	}
+	n, ok := w.sizes[f]
+	if !ok {
+		n = -1
+		if st, err := os.Stat(f); err == nil && st.Mode().IsRegular() {
+			n = st.Size()
+		}
+		w.sizes[f] = n
+	}
+	if n >= largeFileMin {
+		p.large[f] = true
+	}
+}
+
+// noteArgs records the arguments of the process that name a file of the run's directory.
+func (w *procWatcher) noteArgs(p *procSeenSets, dir string, argv []string) {
+	if w.root == "" || len(argv) < 2 {
+		return
+	}
+	cwd, _ := os.Readlink(filepath.Join(dir, "cwd"))
+	for _, a := range argv[1:] {
+		f := a
+		if !filepath.IsAbs(f) {
+			if cwd == "" {
+				continue
+			}
+			f = filepath.Join(cwd, f)
+		}
+		if !strings.HasPrefix(f, w.root+"/") {
+			continue
+		}
+		if st, err := os.Stat(f); err == nil && st.Mode().IsRegular() {
+			p.wsArgs[f] = true
+		}
+	}
 }
 
 type procSeenSets struct {
+	cmdline string
+	wsArgs  map[string]bool
+	large   map[string]bool
 	first   time.Time
 	last    time.Time
 	exe     string
@@ -91,7 +145,7 @@ type procSeenSets struct {
 func (w *procWatcher) proc(pid int) *procSeenSets {
 	p := w.procs[pid]
 	if p == nil {
-		p = &procSeenSets{weights: map[string]bool{}, libs: map[string]bool{}, first: time.Now()}
+		p = &procSeenSets{weights: map[string]bool{}, libs: map[string]bool{}, wsArgs: map[string]bool{}, large: map[string]bool{}, first: time.Now()}
 		w.procs[pid] = p
 	}
 	p.last = time.Now()
@@ -110,7 +164,7 @@ func watchProcTreeIn(pidFile, root string) (stop func() ProcTrace) {
 		}
 	}
 	w := &procWatcher{devRe: gpuDeviceRe(), devices: map[string]bool{}, weights: map[string]bool{}, exes: map[string]bool{},
-		cmdlines: map[string]bool{}, seen: map[int]bool{}, root: root, procs: map[int]*procSeenSets{}}
+		cmdlines: map[string]bool{}, seen: map[int]bool{}, root: root, procs: map[int]*procSeenSets{}, sizes: map[string]int64{}}
 	done := make(chan struct{})
 	finished := make(chan struct{})
 	go func() {
@@ -164,15 +218,19 @@ func (w *procWatcher) scan(root int) {
 		queue = queue[1:]
 		queue = append(queue, children[pid]...)
 		dir := filepath.Join(procRoot, strconv.Itoa(pid))
-		w.proc(pid) // seen running now: its First and Last
-		if !w.seen[pid] {
-			if exe, err := os.Readlink(filepath.Join(dir, "exe")); err == nil {
-				w.seen[pid] = true
-				w.exes[strings.TrimSuffix(exe, " (deleted)")] = true
-				w.proc(pid).exe = strings.TrimSuffix(exe, " (deleted)")
-			}
-			if b, err := os.ReadFile(filepath.Join(dir, "cmdline")); err == nil && len(b) > 0 {
-				w.cmdlines[strings.TrimSpace(strings.ReplaceAll(string(b), "\x00", " "))] = true
+		ps := w.proc(pid) // seen running now: its First and Last
+		// read every time: a process that execs keeps its pid and changes what it runs
+		if exe, err := os.Readlink(filepath.Join(dir, "exe")); err == nil {
+			w.seen[pid] = true
+			w.exes[strings.TrimSuffix(exe, " (deleted)")] = true
+			ps.exe = strings.TrimSuffix(exe, " (deleted)")
+		}
+		if b, err := os.ReadFile(filepath.Join(dir, "cmdline")); err == nil && len(b) > 0 {
+			cl := strings.TrimSpace(strings.ReplaceAll(string(b), "\x00", " "))
+			w.cmdlines[cl] = true
+			if cl != ps.cmdline {
+				ps.cmdline = cl
+				w.noteArgs(ps, dir, strings.Split(strings.TrimRight(string(b), "\x00"), "\x00"))
 			}
 		}
 		fds, _ := os.ReadDir(filepath.Join(dir, "fd"))
@@ -186,7 +244,9 @@ func (w *procWatcher) scan(root int) {
 			}
 			if weightFileRe.MatchString(target) {
 				w.weights[target] = true
-				w.proc(pid).weights[target] = true
+				ps.weights[target] = true
+			} else {
+				w.noteLarge(ps, target)
 			}
 		}
 		// a loader that maps the weights can close their descriptors at once: the mappings stay
@@ -199,7 +259,9 @@ func (w *procWatcher) scan(root int) {
 				f := strings.TrimSuffix(line[i:], " (deleted)")
 				if weightFileRe.MatchString(f) {
 					w.weights[f] = true
-					w.proc(pid).weights[f] = true
+					ps.weights[f] = true
+				} else {
+					w.noteLarge(ps, f)
 				}
 				if w.root != "" && strings.HasPrefix(f, w.root+"/") && strings.Contains(filepath.Base(f), ".so") {
 					w.proc(pid).libs[f] = true
@@ -244,7 +306,8 @@ func (w *procWatcher) trace() ProcTrace {
 		if p.exe == "" && len(p.weights) == 0 {
 			continue // listed before it ran, or gone before it was read
 		}
-		procs = append(procs, ProcSeen{PID: pid, Exe: p.exe, Weights: keys(p.weights), WorkspaceLibs: keys(p.libs), First: p.first, Last: p.last})
+		procs = append(procs, ProcSeen{PID: pid, Exe: p.exe, Weights: keys(p.weights), WorkspaceLibs: keys(p.libs),
+			Cmdline: truncStr(p.cmdline, 200), WorkspaceArgs: keys(p.wsArgs), Large: keys(p.large), First: p.first, Last: p.last})
 	}
 	sort.Slice(procs, func(i, j int) bool { return procs[i].PID < procs[j].PID })
 	return ProcTrace{Devices: keys(w.devices), Weights: keys(w.weights), Exes: keys(w.exes), Cmdlines: keys(w.cmdlines), Procs: len(w.seen), Processes: procs}
