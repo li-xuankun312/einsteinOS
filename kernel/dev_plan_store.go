@@ -486,7 +486,9 @@ func (p *DevPlan) UnitPass(n DevPlanNode) bool {
 	if p.Reopened(n.ID) {
 		return false
 	}
-	if _, deferred := p.Deferred[n.ID]; deferred {
+	// a deferred unit is left to the integration unit; the integration unit is left to no
+	// one (a plan stored on 11/21 14:15 has it deferred)
+	if _, deferred := p.Deferred[n.ID]; deferred && !n.Integration {
 		return true
 	}
 	if len(n.Sources) > 0 || n.Integration {

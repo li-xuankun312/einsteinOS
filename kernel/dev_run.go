@@ -105,6 +105,7 @@ func nodeDesc(n DevPlanNode) string {
 
 // devRun carries what every unit of one dev_from_theorems call shares.
 type devRun struct {
+	halt                        error // a decision before a unit that stops the run (prepareUnit)
 	pid                         int64
 	repo, devRepo, branch, task string
 	hwInfo, gpuAll              string

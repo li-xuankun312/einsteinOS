@@ -107,6 +107,10 @@ func (r *devRun) schedule(theory string, staleRerun map[string]bool, attempt fun
 				}
 				turn++
 				if r.prepareUnit(unit, theory) {
+					if r.halt != nil {
+						stopErr = r.halt
+						break
+					}
 					prepared = true // the plan changed (a split, a deferral, a reopen): look again
 					break
 				}
@@ -175,6 +179,9 @@ func (r *devRun) schedule(theory string, staleRerun map[string]bool, attempt fun
 	}
 }
 
+// %[1]s repo, %[2]s unit, %[3]d attempts, %[4]s last gate, %[5]s its text
+const integrationExhaustedFmt = "%[1]s: the integration unit %[2]s used its %[3]d fix attempts (last: %[4]s: %[5]s) — the commit is not complete and the run stops here"
+
 // prepareUnit: what the run decides about a unit before it starts — a stored review failure
 // that is another unit's, a split, a deferral. True when it changed the plan instead.
 func (r *devRun) prepareUnit(unit DevPlanNode, theory string) bool {
@@ -200,6 +207,17 @@ func (r *devRun) prepareUnit(unit DevPlanNode, theory string) bool {
 	if need {
 		if kids := dev_split_node(r.pid, plan, unit.ID, repo, devRepo, branch, theory, why); kids != nil {
 			return true // the leaves changed; look again
+		}
+		if plan.FixAttempts[unit.ID] >= DevMaxFixAttempts && unit.Integration {
+			// the integration unit is what the deferred units' files are left to: it is never
+			// deferred, and a run whose integration used its attempts stops and says so —
+			// 11/21 14:15:45 uintegration01529aaa82b9 was "left to the integration unit"
+			// (itself), the commit was reported complete with all 44 units passing, and the
+			// pipeline went on to commit 1
+			lf := plan.LastFailure[unit.ID]
+			r.halt = fmt.Errorf(integrationExhaustedFmt, repo, unit.ID, plan.FixAttempts[unit.ID], lf.Kind, truncStr(lf.Text, 300))
+			log.Printf("dev_from_theorems: %v", r.halt)
+			return true
 		}
 		if plan.FixAttempts[unit.ID] >= DevMaxFixAttempts {
 			lf := deferredFailure(plan.LastFailure[unit.ID])
