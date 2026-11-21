@@ -180,7 +180,7 @@ func (r *devRun) schedule(theory string, staleRerun map[string]bool, attempt fun
 }
 
 // %[1]s repo, %[2]s unit, %[3]d attempts
-const integrationRunsOnFmt = "dev_from_theorems: %[1]s the integration unit %[2]s has had %[3]d attempt(s); it runs on — its directions are budgeted by what they measure, and the commit is complete when its rates are above the bars"
+const integrationRunsOnFmt = "dev_from_theorems: %[1]s the integration unit %[2]s has had %[3]d attempt(s); it runs on — its directions are budgeted by what they measure, and the commit is complete when its evaluation passes"
 
 // prepareUnit: what the run decides about a unit before it starts — a stored review failure
 // that is another unit's, a split, a deferral. True when it changed the plan instead.
@@ -219,8 +219,8 @@ func (r *devRun) prepareUnit(unit DevPlanNode, theory string) bool {
 		if unit.Integration {
 			// the integration unit is what the deferred units' files are left to: it is never
 			// deferred, and its fix attempts do not end it — its directions do the budgeting
-			// (eval_direction.go) and the run ends when its rates are measured above the bars
-			// (integrationBarsGate) — 11/21 14:15:45 uintegration01529aaa82b9 was "left to the
+			// (eval_direction.go) and it ends when its evaluation passes against what the
+			// evaluation itself found to compare with — 11/21 14:15:45 uintegration01529aaa82b9 was "left to the
 			// integration unit" (itself) and the commit reported complete
 			log.Printf(integrationRunsOnFmt, repo, unit.ID, plan.FixAttempts[unit.ID])
 			return false

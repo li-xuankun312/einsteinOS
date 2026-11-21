@@ -12,8 +12,7 @@ import (
 // counterpart in the workspace, and a slower port fails the integration — through the same
 // hook verification calls.
 func TestTheIntegrationIsJudgedAgainstTheReferenceRunHere(t *testing.T) {
-	t.Setenv("EINSTEINOS_TOKS_BARS", "google=1,anthropic=1,zhipu=1,deepseek=1") // eval_bars.go
-	bootKernel()                                                                // the evaluation forks its builds through the kernel's process table
+	bootKernel() // the evaluation forks its builds through the kernel's process table
 	work := t.TempDir()
 	ref := filepath.Join(work, "Strata")
 	os.MkdirAll(filepath.Join(ref, "bench"), 0o755)

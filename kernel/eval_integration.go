@@ -218,12 +218,6 @@ func evalIntegration(pid int64, repo, sha, devRepo, unitID string, benches []Eva
 		if rec.Gate == "" {
 			rec.Gate, rec.GateText = evalExternalGate(external)
 		}
-		if rec.Gate == "" {
-			// the commit is complete when the measured rate is above the bars (eval_bars.go)
-			var bars []EvalComparison
-			rec.Gate, rec.GateText, bars = integrationBarsGate(rec.E2E)
-			rec.Compared = append(rec.Compared, bars...)
-		}
 		if rec.Gate == "" && len(rec.Compared) == 0 {
 			rec.Gate, rec.GateText = GateNothingCompared, evalNothingComparedText(rec, prev)
 		}

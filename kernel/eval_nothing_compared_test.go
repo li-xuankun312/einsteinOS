@@ -14,7 +14,6 @@ import (
 // runnable benchmark, the searched repository failed its checkout, the planner found none of
 // 68 published numbers comparable.
 func TestNothingComparedIsNotAPass(t *testing.T) {
-	t.Setenv("EINSTEINOS_TOKS_BARS", "")
 	bootKernel() // the evaluation forks its builds through the kernel's process table
 	work := t.TempDir()
 	ref := filepath.Join(work, "Strata")
@@ -62,9 +61,7 @@ func TestNothingComparedIsNotAPass(t *testing.T) {
 	evalTeacherForcedFn = func(_, arch string, _, g []int) ([]int, string, string) { return g, arch, "" }
 	fn := evalIntegration(0, "Niko1221/Strata", sha, "o/nodev", "uint", nil, mask)
 	k, txt := fn(ws, nil)
-	// the bars are what a first commit is compared with (eval_bars.go): none given, it is not
-	// a pass, and the run stops as on nothing compared
-	if k != "integration_bars_unmeasured" || !strings.Contains(txt, "no tok/s is given") {
+	if k != GateNothingCompared || !strings.Contains(txt, "first integrated commit") || !strings.Contains(txt, "0 benchmark(s) run") {
 		t.Fatalf("nothing to compare with: %q %s", k, txt)
 	}
 	if !gateOutsideUnit(k) || gateIsMachine(k) || !preverifyMayEnd(false, k) {
