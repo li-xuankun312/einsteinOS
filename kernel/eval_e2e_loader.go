@@ -25,6 +25,7 @@ type E2ELoader struct {
 	Exe         string   `json:"exe"`
 	Port        bool     `json:"port"` // its executable or a library it mapped is the workspace's
 	Weights     int      `json:"weights"`
+	WeightFiles []string `json:"weight_files,omitempty"`
 	PortKernels []string `json:"port_kernels,omitempty"` // kernels it launched itself
 }
 
@@ -42,7 +43,7 @@ func e2eLoaders(ws string, procs []ProcSeen, launchedBy map[int][]string) []E2EL
 		if len(p.Weights) == 0 {
 			continue
 		}
-		l := E2ELoader{PID: p.PID, Exe: p.Exe, Weights: len(p.Weights)}
+		l := E2ELoader{PID: p.PID, Exe: p.Exe, Weights: len(p.Weights), WeightFiles: p.Weights}
 		l.Port = (root != "" && strings.HasPrefix(p.Exe, root+"/")) || len(p.WorkspaceLibs) > 0
 		seen := map[string]bool{}
 		for _, k := range launchedBy[p.PID] {
