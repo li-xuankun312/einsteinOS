@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -78,5 +79,32 @@ func TestADirectionsMeasures(t *testing.T) {
 	m := measureDirection(br, perUnit, 7)
 	if m.TookPermille != 940 || m.Units != 2 || m.UnitsOf != 3 || m.Tokens != 7 {
 		t.Fatalf("%+v", m)
+	}
+}
+
+// A direction that used its budget with no meaningful progress is closed, and says so with what
+// it measured; a direction still progressing, or a run that passed, is not.
+func TestADirectionWithoutProgressCloses(t *testing.T) {
+	t.Setenv("EINSTEINOS_DIRECTION_LENGTH", "2")
+	b := loadDirections(t.TempDir(), "u")
+	const key = "build/e2e_all_check [port] + python3.10 pytools/e2e_weights.py [port]"
+	b.noteDirection(key, "integration_e2e_partial_model", time.Now(), DirectionMeasure{Units: 9})
+	d, _ := b.noteDirection(key, "integration_e2e_partial_model", time.Now(), DirectionMeasure{Units: 9})
+	if !d.Closed() {
+		t.Fatalf("two runs without progress in a budget of two did not close it: %+v", d)
+	}
+	k, txt := directionClosedGate("e2e.sh", d)
+	if k != "integration_direction_closed" || !strings.Contains(txt, key) || !strings.Contains(txt, "kernels of at most 9 unit(s)") {
+		t.Fatalf("%q %s", k, txt)
+	}
+	b2 := loadDirections(t.TempDir(), "u")
+	b2.noteDirection(key, "integration_e2e_partial_model", time.Now(), DirectionMeasure{TookPermille: 100})
+	if d, _ := b2.noteDirection(key, "integration_e2e_partial_model", time.Now(), DirectionMeasure{TookPermille: 500}); d.Closed() || d.Budget != 4 {
+		t.Fatalf("a progressing direction closed: %+v", d)
+	}
+	b3 := loadDirections(t.TempDir(), "u")
+	b3.noteDirection(key, "", time.Now(), DirectionMeasure{})
+	if d, _ := b3.noteDirection(key, "", time.Now(), DirectionMeasure{}); d.Closed() {
+		t.Fatal("passing runs closed their direction")
 	}
 }

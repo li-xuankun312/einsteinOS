@@ -179,6 +179,13 @@ func evalIntegration(pid int64, repo, sha, devRepo, unitID string, benches []Eva
 			book = loadDirections(dir, unitID)
 		}
 		key := directionKey(ws, rec.E2E)
+		if book != nil && book.Dirs[key].Closed() {
+			// a closed direction is rejected as measured, its gates not run again
+			k, t := directionClosedGate(rec.E2E.Bench.File, book.Dirs[key])
+			log.Printf(evalE2EFirstFmt, repo, shortSHA(sha), devE2EScript(unitID), k)
+			log.Printf(evalE2EGateTextFmt, repo, shortSHA(sha), truncStr(t, evalE2EGateTextMax))
+			return k, t
+		}
 		evalTokensAgreed = 0
 		k, t := e2eGates(repo, sha, ws, unitID, rec.E2E, prev)
 		if book != nil {

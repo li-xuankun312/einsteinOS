@@ -37,6 +37,9 @@ type DirectionStat struct {
 	BestTookPermille int `json:"best_took_permille"`
 	BestUnits        int `json:"best_units"`
 	BestTokens       int `json:"best_tokens"`
+	// ClosedAt: when the direction used its budget with no meaningful progress; a run in a
+	// closed direction is not evaluated again
+	ClosedAt time.Time `json:"closed_at,omitempty"`
 }
 
 // DirectionMeasure: what one run measured of the three.
@@ -193,5 +196,19 @@ func (b *DirectionBook) noteDirection(key, gate string, at time.Time, m Directio
 	if progressed {
 		d.Budget += directionLength()
 	}
+	if gate != "" && !progressed && d.Verifications >= d.Budget {
+		d.ClosedAt = at
+	}
 	return d, progressed
+}
+
+// Closed: the direction used its budget with no meaningful progress.
+func (d *DirectionStat) Closed() bool { return d != nil && !d.ClosedAt.IsZero() }
+
+const gateDirectionClosedFmt = "integration_direction_closed: the processes of %[1]s are the direction %[2]s, closed at %[3]s after %[4]d verification(s) with no meaningful progress — at most %[5]d%% of the model taken in by its runner, kernels of at most %[6]d unit(s) launched by it, %[7]d token(s) agreeing; a run in it is not evaluated again"
+
+// directionClosedGate: a run in a closed direction, said with what the direction measured.
+func directionClosedGate(file string, d *DirectionStat) (string, string) {
+	return "integration_direction_closed", fmt.Sprintf(gateDirectionClosedFmt, file, d.Key, d.ClosedAt.UTC().Format("01/02 15:04"),
+		d.Verifications, d.BestTookPermille/10, d.BestUnits, d.BestTokens)
 }
