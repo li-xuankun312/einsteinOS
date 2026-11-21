@@ -407,7 +407,7 @@ func runWatched(command, dir string, timeout time.Duration) (int, string, ProcTr
 	f.Close()
 	os.Remove(pidFile)
 	defer os.Remove(pidFile)
-	stop := watchProcTree(pidFile)
+	stop := watchProcTreeIn(pidFile, dir)
 	code, out, rerr := devVerifyRunner(watchedCommand(pidFile, command), dir, timeout)
 	return code, out, stop(), rerr
 }

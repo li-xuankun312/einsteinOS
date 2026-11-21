@@ -64,8 +64,9 @@ func evalRunE2E(ws, unitID string) EvalBenchRun {
 	br.PromptIDs, br.GeneratedIDs = e2eTokens(out)
 	br.Weights = tr.Weights
 	if logPath != "" {
-		names, loaded := e2eLaunchesFn(logPath)
+		names, byPID, loaded := e2eLaunchesFn(logPath)
 		br.Kernels = names
+		br.Loaders = e2eLoaders(ws, tr.Processes, byPID)
 		if !loaded && br.ProbeErr == "" {
 			br.ProbeErr = "no process of the run loaded it"
 		}
@@ -77,14 +78,21 @@ var (
 	// e2eProbeLibFn builds (once) the launch probe; e2eLaunchesFn reads the kernels a probe
 	// log records and whether any process loaded the probe (variables for tests)
 	e2eProbeLibFn = launchProbeLib
-	e2eLaunchesFn = func(logPath string) ([]string, bool) {
+	e2eLaunchesFn = func(logPath string) ([]string, map[int][]string, bool) {
 		pl := readProbeLog(logPath)
+		ls := resolveLaunches(pl)
 		var names []string
-		for n := range launchedNames(resolveLaunches(pl)) {
+		for n := range launchedNames(ls) {
 			names = append(names, n)
 		}
 		sort.Strings(names)
-		return names, len(probeLoadedExes(pl)) > 0
+		byPID := map[int][]string{}
+		for _, l := range ls {
+			if l.Name != "" {
+				byPID[l.PID] = append(byPID[l.PID], l.Name)
+			}
+		}
+		return names, byPID, len(probeLoadedExes(pl)) > 0
 	}
 )
 

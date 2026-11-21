@@ -42,7 +42,7 @@ func TestTheEndToEndRunMustBeThePort(t *testing.T) {
 	defer func() { e2eProbeLibFn, e2eLaunchesFn = oldLib, oldLaunches }()
 	e2eProbeLibFn = func() (string, error) { return "/dev/null", nil }
 	launched := []string{"rms_kernel"}
-	e2eLaunchesFn = func(string) ([]string, bool) { return launched, true }
+	e2eLaunchesFn = func(string) ([]string, map[int][]string, bool) { return launched, nil, true }
 	run := func() (string, string) {
 		br := evalRunE2E(ws, "uintegration6801c77ff6f7")
 		if k, txt := e2eGate(br); k != "" {
@@ -61,7 +61,7 @@ func TestTheEndToEndRunMustBeThePort(t *testing.T) {
 	if k, txt := run(); k != "" {
 		t.Fatalf("every unit's kernels in the run: %q %s", k, txt)
 	}
-	e2eLaunchesFn = func(string) ([]string, bool) { return nil, false }
+	e2eLaunchesFn = func(string) ([]string, map[int][]string, bool) { return nil, nil, false }
 	if k, _ := run(); k != "integration_e2e_port_unmeasured" {
 		t.Fatalf("no process loaded the probe: %q", k)
 	}

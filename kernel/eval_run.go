@@ -37,6 +37,9 @@ type EvalBenchRun struct {
 	// Weights: the model weight files its processes opened or mapped (proc_watch.go)
 	Weights      []string `json:"weights,omitempty"`
 	GeneratedIDs []int    `json:"generated_ids,omitempty"`
+	// Loaders: the processes that opened or mapped weight files, each with whether it is the
+	// port's program and the ported kernels it launched itself (eval_e2e_loader.go)
+	Loaders []E2ELoader `json:"loaders,omitempty"`
 }
 
 // EvalRun is a repository at one commit, built and benchmarked here.

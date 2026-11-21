@@ -50,6 +50,19 @@ type ProcTrace struct {
 	Launches    []KernelLaunch
 	ProbeLoaded []string
 	ProbeErr    string
+	// Processes: each process of the tree with what it held — so that what one process did
+	// (loaded the weights) and what another did (launched kernels) are not one record
+	Processes []ProcSeen
+}
+
+// ProcSeen is one process of a watched tree: its executable, the weight files it opened or
+// mapped, and the shared objects of the run's own directory it mapped (a library the
+// workspace built).
+type ProcSeen struct {
+	PID           int      `json:"pid"`
+	Exe           string   `json:"exe"`
+	Weights       []string `json:"weights,omitempty"`
+	WorkspaceLibs []string `json:"workspace_libs,omitempty"`
 }
 
 type procWatcher struct {
@@ -60,12 +73,38 @@ type procWatcher struct {
 	exes     map[string]bool
 	cmdlines map[string]bool
 	seen     map[int]bool
+	root     string // the run's directory: its shared objects are recorded per process
+	procs    map[int]*procSeenSets
+}
+
+type procSeenSets struct {
+	exe     string
+	weights map[string]bool
+	libs    map[string]bool
+}
+
+func (w *procWatcher) proc(pid int) *procSeenSets {
+	p := w.procs[pid]
+	if p == nil {
+		p = &procSeenSets{weights: map[string]bool{}, libs: map[string]bool{}}
+		w.procs[pid] = p
+	}
+	return p
 }
 
 // watchProcTree watches the tree rooted at the pid written to pidFile until stop is called.
-func watchProcTree(pidFile string) (stop func() ProcTrace) {
+func watchProcTree(pidFile string) (stop func() ProcTrace) { return watchProcTreeIn(pidFile, "") }
+
+// watchProcTreeIn is watchProcTree with the run's directory, whose shared objects a process
+// maps are recorded with it (ProcSeen.WorkspaceLibs).
+func watchProcTreeIn(pidFile, root string) (stop func() ProcTrace) {
+	if root != "" {
+		if abs, err := filepath.Abs(root); err == nil {
+			root = abs
+		}
+	}
 	w := &procWatcher{devRe: gpuDeviceRe(), devices: map[string]bool{}, weights: map[string]bool{}, exes: map[string]bool{},
-		cmdlines: map[string]bool{}, seen: map[int]bool{}}
+		cmdlines: map[string]bool{}, seen: map[int]bool{}, root: root, procs: map[int]*procSeenSets{}}
 	done := make(chan struct{})
 	finished := make(chan struct{})
 	go func() {
@@ -123,6 +162,7 @@ func (w *procWatcher) scan(root int) {
 			if exe, err := os.Readlink(filepath.Join(dir, "exe")); err == nil {
 				w.seen[pid] = true
 				w.exes[strings.TrimSuffix(exe, " (deleted)")] = true
+				w.proc(pid).exe = strings.TrimSuffix(exe, " (deleted)")
 			}
 			if b, err := os.ReadFile(filepath.Join(dir, "cmdline")); err == nil && len(b) > 0 {
 				w.cmdlines[strings.TrimSpace(strings.ReplaceAll(string(b), "\x00", " "))] = true
@@ -139,13 +179,23 @@ func (w *procWatcher) scan(root int) {
 			}
 			if weightFileRe.MatchString(target) {
 				w.weights[target] = true
+				w.proc(pid).weights[target] = true
 			}
 		}
 		// a loader that maps the weights can close their descriptors at once: the mappings stay
 		if b, err := os.ReadFile(filepath.Join(dir, "maps")); err == nil {
 			for _, line := range strings.Split(string(b), "\n") {
-				if i := strings.IndexByte(line, '/'); i >= 0 && weightFileRe.MatchString(line[i:]) {
-					w.weights[strings.TrimSuffix(line[i:], " (deleted)")] = true
+				i := strings.IndexByte(line, '/')
+				if i < 0 {
+					continue
+				}
+				f := strings.TrimSuffix(line[i:], " (deleted)")
+				if weightFileRe.MatchString(f) {
+					w.weights[f] = true
+					w.proc(pid).weights[f] = true
+				}
+				if w.root != "" && strings.HasPrefix(f, w.root+"/") && strings.Contains(filepath.Base(f), ".so") {
+					w.proc(pid).libs[f] = true
 				}
 			}
 		}
@@ -182,7 +232,12 @@ func (w *procWatcher) trace() ProcTrace {
 		sort.Strings(out)
 		return out
 	}
-	return ProcTrace{Devices: keys(w.devices), Weights: keys(w.weights), Exes: keys(w.exes), Cmdlines: keys(w.cmdlines), Procs: len(w.seen)}
+	var procs []ProcSeen
+	for pid, p := range w.procs {
+		procs = append(procs, ProcSeen{PID: pid, Exe: p.exe, Weights: keys(p.weights), WorkspaceLibs: keys(p.libs)})
+	}
+	sort.Slice(procs, func(i, j int) bool { return procs[i].PID < procs[j].PID })
+	return ProcTrace{Devices: keys(w.devices), Weights: keys(w.weights), Exes: keys(w.exes), Cmdlines: keys(w.cmdlines), Procs: len(w.seen), Processes: procs}
 }
 
 // watchedCommand wraps a shell command so its process tree is the watched one: the shell

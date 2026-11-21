@@ -41,7 +41,14 @@ func TestNothingComparedIsNotAPass(t *testing.T) {
 
 	ws := t.TempDir()
 	os.MkdirAll(filepath.Join(ws, ".einsteinOS/verify/uint"), 0o755)
-	os.WriteFile(filepath.Join(ws, ".einsteinOS/verify/uint/e2e.sh"), []byte("exec 3< \"$MODEL_DIR/model-00001-of-00001.safetensors\"; sleep 0.3; echo 'prompt: 9707 11 1879'; echo 'generated: 220 248046 198'; echo 'prefill: 57.54 tok/s'; echo 'decode: 11.20 tok/s'\n"), 0o755)
+	// the weights are held by a program of the workspace (eval_e2e_loader.go)
+	if sb, err := exec.LookPath("sleep"); err == nil {
+		if b, err := os.ReadFile(sb); err == nil {
+			os.MkdirAll(filepath.Join(ws, "build"), 0o755)
+			os.WriteFile(filepath.Join(ws, "build", "port"), b, 0o755)
+		}
+	}
+	os.WriteFile(filepath.Join(ws, ".einsteinOS/verify/uint/e2e.sh"), []byte("build/port 0.3 3< \"$MODEL_DIR/model-00001-of-00001.safetensors\"; echo 'prompt: 9707 11 1879'; echo 'generated: 220 248046 198'; echo 'prefill: 57.54 tok/s'; echo 'decode: 11.20 tok/s'\n"), 0o755)
 	mask := newRefMask(refMaskIdent, "Niko1221/Strata").Replace
 	modelDir := t.TempDir()
 	os.WriteFile(filepath.Join(modelDir, "config.json"), []byte(`{"architectures":["Qwen3_5MoeForCausalLM"]}`), 0o644)

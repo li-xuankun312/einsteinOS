@@ -180,6 +180,8 @@ func evalIntegration(pid int64, repo, sha, devRepo, unitID string, benches []Eva
 			rec.Gate, rec.GateText = k, t
 		} else if k, t := e2ePortGate(rec.E2E, e2ePortKernels(ws, unitID)); k != "" {
 			rec.Gate, rec.GateText = k, t
+		} else if k, t := e2eLoaderGate(rec.E2E, e2ePortKernels(ws, unitID)); k != "" {
+			rec.Gate, rec.GateText = k, t
 		} else if k, t := e2eUnchangedSince(repo, sha, ws, rec.E2E, prev); k != "" {
 			rec.Gate, rec.GateText = k, t
 		} else if k, t := e2eTokensGate(rec.E2E); k != "" {

@@ -65,7 +65,14 @@ func TestTheIntegrationIsJudgedAgainstTheReferenceRunHere(t *testing.T) {
 	e2e := func(body string) {
 		os.WriteFile(filepath.Join(ws, ".einsteinOS/verify/uintegration/e2e.sh"), []byte(body), 0o755)
 	}
-	e2e("exec 3< \"$MODEL_DIR/model-00001-of-00001.safetensors\"; sleep 0.3\necho \"prompt: 9707 11 1879\"\necho \"generated: 220 248046 198\"\necho \"prefill   3562 tokens in 6611.2 ms  ->  538.75 tok/s\"\necho \"decode   256 tokens in 2706.4 ms  ->  94.59 tok/s\"\n")
+	// the weights are held by a program of the workspace (eval_e2e_loader.go): a copy of
+	// sleep stands in for the port's generate
+	sleepBin, _ := exec.LookPath("sleep")
+	if b, err := os.ReadFile(sleepBin); err == nil {
+		os.MkdirAll(filepath.Join(ws, "build"), 0o755)
+		os.WriteFile(filepath.Join(ws, "build", "port"), b, 0o755)
+	}
+	e2e("build/port 0.3 3< \"$MODEL_DIR/model-00001-of-00001.safetensors\"\necho \"prompt: 9707 11 1879\"\necho \"generated: 220 248046 198\"\necho \"prefill   3562 tokens in 6611.2 ms  ->  538.75 tok/s\"\necho \"decode   256 tokens in 2706.4 ms  ->  94.59 tok/s\"\n")
 	port("40")
 	if k, txt := integrationEval("uintegration")(ws, shown); k != "integration_below_reference" || !strings.Contains(txt, "50") {
 		t.Fatalf("slower than the reference: %q %s", k, txt)
