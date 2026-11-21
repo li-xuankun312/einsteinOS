@@ -108,3 +108,26 @@ func TestADirectionWithoutProgressCloses(t *testing.T) {
 		t.Fatal("passing runs closed their direction")
 	}
 }
+
+// What the conversation and the next attempt are given: every direction as measured, closed
+// ones with when — facts, no advice.
+func TestTheDirectionsAreToldAsMeasured(t *testing.T) {
+	t.Setenv("EINSTEINOS_DIRECTION_LENGTH", "1")
+	b := loadDirections(t.TempDir(), "u")
+	t0 := time.Date(2026, 11, 21, 10, 39, 0, 0, time.UTC)
+	b.noteDirection("python3.10 - [other]", "integration_e2e_loader_not_port", t0, DirectionMeasure{})
+	b.noteDirection("build/e2e_all_check [port] + python3.10 pytools/e2e_weights.py [port]", "integration_e2e_partial_model", t0.Add(time.Hour), DirectionMeasure{TookPermille: 1, Units: 9})
+	s := b.summary(66 << 30)
+	for _, want := range []string{
+		"the most of the model's 66.00 GiB its runner took in",
+		"\n  python3.10 - [other] — 1/1, 0%, 0 unit(s), 0 token(s), closed at 11/21 10:39",
+		"\n  build/e2e_all_check [port] + python3.10 pytools/e2e_weights.py [port] — 1/1, 0%, 9 unit(s), 0 token(s), closed at 11/21 11:39",
+	} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("no %q in\n%s", want, s)
+		}
+	}
+	if strings.Index(s, "python3.10 - [other]") > strings.Index(s, "build/e2e_all_check") {
+		t.Fatal("not oldest first")
+	}
+}

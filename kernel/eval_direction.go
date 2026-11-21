@@ -212,3 +212,31 @@ func directionClosedGate(file string, d *DirectionStat) (string, string) {
 	return "integration_direction_closed", fmt.Sprintf(gateDirectionClosedFmt, file, d.Key, d.ClosedAt.UTC().Format("01/02 15:04"),
 		d.Verifications, d.BestTookPermille/10, d.BestUnits, d.BestTokens)
 }
+
+const (
+	directionsHeadFmt = "\nthe directions this unit's end-to-end runs have taken (measured; each: verifications used of its budget, the most of the model's %[1]s its runner took in, units whose kernels that runner launched itself, tokens agreeing with the model's own implementation):"
+	directionLineFmt  = "\n  %[1]s — %[2]d/%[3]d, %[4]d%%, %[5]d unit(s), %[6]d token(s)%[7]s"
+	directionShutFmt  = ", closed at %[1]s"
+)
+
+// summary: the book's directions as measured, oldest first — facts only, inserted into the gate
+// text the conversation and the unit's next attempt are given.
+func (b *DirectionBook) summary(modelBytes int64) string {
+	if b == nil || len(b.Dirs) == 0 {
+		return ""
+	}
+	var ds []*DirectionStat
+	for _, d := range b.Dirs {
+		ds = append(ds, d)
+	}
+	sort.Slice(ds, func(i, j int) bool { return ds[i].FirstAt.Before(ds[j].FirstAt) })
+	out := fmt.Sprintf(directionsHeadFmt, gib(modelBytes))
+	for _, d := range ds {
+		shut := ""
+		if d.Closed() {
+			shut = fmt.Sprintf(directionShutFmt, d.ClosedAt.UTC().Format("01/02 15:04"))
+		}
+		out += fmt.Sprintf(directionLineFmt, d.Key, d.Verifications, d.Budget, d.BestTookPermille/10, d.BestUnits, d.BestTokens, shut)
+	}
+	return out
+}

@@ -182,6 +182,7 @@ func evalIntegration(pid int64, repo, sha, devRepo, unitID string, benches []Eva
 		if book != nil && book.Dirs[key].Closed() {
 			// a closed direction is rejected as measured, its gates not run again
 			k, t := directionClosedGate(rec.E2E.Bench.File, book.Dirs[key])
+			t += book.summary(rec.E2E.ModelBytes)
 			log.Printf(evalE2EFirstFmt, repo, shortSHA(sha), devE2EScript(unitID), k)
 			log.Printf(evalE2EGateTextFmt, repo, shortSHA(sha), truncStr(t, evalE2EGateTextMax))
 			return k, t
@@ -194,6 +195,9 @@ func evalIntegration(pid int64, repo, sha, devRepo, unitID string, benches []Eva
 			log.Printf(evalDirectionFmt, repo, shortSHA(sha), key, d.Verifications, d.Budget, m.TookPermille/10, m.Units, m.UnitsOf, m.Tokens, progressed)
 			if err := storeDirections(devRepo, book); err != nil {
 				log.Printf("eval: %s %s: the directions were not stored: %v", repo, shortSHA(sha), err)
+			}
+			if k != "" {
+				t += book.summary(rec.E2E.ModelBytes) // the conversation and the next attempt are told
 			}
 		}
 		if k != "" {
