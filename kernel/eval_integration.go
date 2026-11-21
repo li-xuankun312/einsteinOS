@@ -175,6 +175,9 @@ func evalIntegration(pid int64, repo, sha, devRepo, unitID string, benches []Eva
 		log.Printf("eval: %s %s: %s exited %d in %s, %d metric(s)", repo, shortSHA(sha), devE2EScript(unitID), rec.E2E.Exit, time.Since(start).Round(time.Second), len(rec.E2E.Metrics))
 		if k, t := e2eGates(repo, sha, ws, unitID, rec.E2E, prev); k != "" {
 			log.Printf(evalE2EFirstFmt, repo, shortSHA(sha), devE2EScript(unitID), k)
+			// what the conversation is told, here too: the run's record is not stored, and the
+			// gate's name alone does not say which process or file it is about
+			log.Printf(evalE2EGateTextFmt, repo, shortSHA(sha), truncStr(t, evalE2EGateTextMax))
 			return k, t
 		}
 		base := evalBaseFor(repo, sha, benches, stored)
@@ -203,6 +206,12 @@ func evalIntegration(pid int64, repo, sha, devRepo, unitID string, benches []Eva
 
 // %[1]s repo, %[2]s commit, %[3]s the script, %[4]s the gate
 const evalE2EFirstFmt = "eval: %[1]s %[2]s: %[3]s is not yet the port's run on the model (gate=%[4]q) — the reference is not built and nothing is searched"
+
+// %[1]s repo, %[2]s commit, %[3]s the gate's text
+const evalE2EGateTextFmt = "eval: %[1]s %[2]s: the gate's text, as sent to the conversation:\n%[3]s"
+
+// evalE2EGateTextMax: how much of the gate's text the log keeps.
+const evalE2EGateTextMax = 4000
 
 // e2eGates: the first gate the end-to-end run itself fails, in order — it ran, changed nothing
 // of the machine, loaded the model it was given, is the port (its kernels, its loading

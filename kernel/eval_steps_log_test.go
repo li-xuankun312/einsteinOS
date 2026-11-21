@@ -62,6 +62,11 @@ func TestEachStepOfTheEvaluationIsLogged(t *testing.T) {
 			t.Fatalf("no %q in\n%s", want, out)
 		}
 	}
+	// 11/21 11:27-11:53 three runs were integration_e2e_other_model and the log said no more:
+	// the gate's text is logged as the conversation is sent it
+	if !strings.Contains(out, "eval: o/Strata "+short+": the gate's text, as sent to the conversation:\nintegration_e2e_failed") {
+		t.Fatalf("the gate's text is not in the log:\n%s", out)
+	}
 	if strings.Contains(out, "building the reference") || strings.Contains(out, "searching for repositories") {
 		t.Fatalf("the reference was built or the search run for a failed end-to-end run:\n%s", out)
 	}
