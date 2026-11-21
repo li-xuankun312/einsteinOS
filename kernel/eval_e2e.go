@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 const (
@@ -54,7 +55,9 @@ func evalRunE2E(ws, unitID string) EvalBenchRun {
 		probeEnv = launchProbeEnv(lib, logPath)
 	}
 	cmd := probeEnv + fmt.Sprintf("MODEL_DIR=%q bash %q 2>&1", evalModel(), script)
+	started := time.Now()
 	code, out, tr, err := runWatched(cmd, ws, evalBuildTimeout)
+	br.MachineChanged = machineChangedSince(started)
 	br.Exit, br.Metrics, br.Tail, br.Devices = code, metricsIn(out), tailText(out, 1500), tr.Devices
 	if err != nil {
 		br.Tail = err.Error()
@@ -189,6 +192,16 @@ func e2ePortGate(br EvalBenchRun, perUnit map[string][]string) (kind, text strin
 		return "", ""
 	}
 	return "integration_e2e_not_port", fmt.Sprintf(gateE2ENotPortFmt, br.Bench.File, len(br.Kernels), strings.Join(br.Kernels, " "), strings.Join(unused, "\n"))
+}
+
+const gateE2EModifiesMachineFmt = "integration_e2e_modifies_machine: %[1]s changed %[2]d file(s) or director(ies) of this machine's Python packages, outside the workspace: %[3]s — the port runs on the machine as it is"
+
+// e2eMachineGate: the run changed nothing of this machine's Python packages (machine_changes.go).
+func e2eMachineGate(br EvalBenchRun) (kind, text string) {
+	if len(br.MachineChanged) == 0 {
+		return "", ""
+	}
+	return "integration_e2e_modifies_machine", fmt.Sprintf(gateE2EModifiesMachineFmt, br.Bench.File, len(br.MachineChanged), shownPaths(br.MachineChanged, 12))
 }
 
 // e2eGate: the first gate the end-to-end run fails, if any.

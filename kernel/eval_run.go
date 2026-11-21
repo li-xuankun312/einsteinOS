@@ -44,6 +44,9 @@ type EvalBenchRun struct {
 	// why the kernel measured no rate (eval_e2e_rate.go)
 	Printed []Metric `json:"printed,omitempty"`
 	RateWhy string   `json:"rate_why,omitempty"`
+	// MachineChanged: files and directories of this machine's Python package directories the
+	// run changed (machine_changes.go)
+	MachineChanged []string `json:"machine_changed,omitempty"`
 }
 
 // EvalRun is a repository at one commit, built and benchmarked here.

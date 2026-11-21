@@ -176,6 +176,8 @@ func evalIntegration(pid int64, repo, sha, devRepo, unitID string, benches []Eva
 		log.Printf("eval: %s %s: %s exited %d in %s, %d metric(s)", repo, shortSHA(sha), devE2EScript(unitID), rec.E2E.Exit, time.Since(start).Round(time.Second), len(rec.E2E.Metrics))
 		if k, t := e2eGate(rec.E2E); k != "" {
 			rec.Gate, rec.GateText = k, t
+		} else if k, t := e2eMachineGate(rec.E2E); k != "" {
+			rec.Gate, rec.GateText = k, t
 		} else if k, t := e2eModelGate(rec.E2E, evalModel()); k != "" {
 			rec.Gate, rec.GateText = k, t
 		} else if k, t := e2ePortGate(rec.E2E, e2ePortKernels(ws, unitID)); k != "" {

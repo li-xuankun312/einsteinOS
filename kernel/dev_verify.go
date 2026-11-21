@@ -514,6 +514,12 @@ func runUnitVerifyAlone(ws, unitID, gpuUsable string, req UnitRequirements, chan
 	}
 	res.Test = ttrace
 	res.TestExit, res.TestOut = code, tailText(out, 3000)
+	// what build.sh and test.sh changed of this machine's Python packages is logged; it is
+	// not judged here, since other units' conversations run their commands on this machine
+	// beside the verification and a change cannot be laid on the unit (machine_changes.go)
+	if mc := machineChangedSince(start); len(mc) > 0 {
+		log.Printf("dev_verify: unit %s: while build.sh and test.sh ran, %d file(s) or director(ies) of this machine's Python packages changed: %s", unitID, len(mc), shownPaths(mc, 12))
+	}
 	switch {
 	case err != nil:
 		res.Smoke, res.TestOut = "fail", "could not run test.sh: "+err.Error()
