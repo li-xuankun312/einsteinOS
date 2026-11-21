@@ -698,6 +698,9 @@ func promoteBranch(cloneDir, devRepo, from, to string) error {
 // git cannot hold refs/heads/a and refs/heads/a/b at once.
 func devWipBranch(branch, unitID string) string { return branch + "-wip-" + unitID }
 
+// devContBranch: where a fix attempt from the wip branch parks a tree it rejected (parkTarget).
+func devContBranch(branch, unitID string) string { return devWipBranch(branch, unitID) + "-cont" }
+
 // ---- the whole step ---------------------------------------------------------------------------
 
 // UnitVerifyOutcome is what dev_from_theorems needs back.
@@ -885,7 +888,7 @@ func devPushVerdict(cloneDir, mirror, devRepo, branch, baseRef, unitID string, c
 			}
 			// the wip branch is merged into the dev branch: it has nothing left to hold.
 			// 11/03 left einsteinOS/dev-…-wip-u89be81de0b and -wip-ueac0e4654d behind.
-			if baseRef == devWipBranch(branch, unitID) {
+			if baseRef == devWipBranch(branch, unitID) || baseRef == devContBranch(branch, unitID) {
 				if err := devGitDeleteBranch(cloneDir, devRepo, baseRef); err != nil {
 					log.Printf("dev_verify: unit %s: %s merged but not deleted: %v", unitID, baseRef, err)
 				} else {

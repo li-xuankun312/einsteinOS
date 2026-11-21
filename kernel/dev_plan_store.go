@@ -602,10 +602,9 @@ func (p *DevPlan) NoteInProgress(id string, f DevFailure) {
 // that attempt never ended, the branch its rejected tree was parked on.
 func (p *DevPlan) ResumeFrom(id string) DevFailure {
 	f := p.LastFailure[id]
-	if f.BaseRef != "" {
-		return f
-	}
-	if ip, ok := p.InProgress[id]; ok {
+	// an attempt that has not ended is later than the last one that did (an ended attempt
+	// clears it): its parked tree is where the unit continues
+	if ip, ok := p.InProgress[id]; ok && ip.BaseRef != "" {
 		f.BaseRef, f.BaseSHA = ip.BaseRef, ip.BaseSHA
 	}
 	return f

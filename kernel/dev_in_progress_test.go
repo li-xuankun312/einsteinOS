@@ -17,8 +17,19 @@ func TestARejectedTreeOfAFirstAttemptIsWhereARestartContinues(t *testing.T) {
 	if !parkRejectedTree(dev, dev, true) {
 		t.Fatal("a first attempt's rejected tree is not parked")
 	}
-	if parkRejectedTree(dev, devWipBranch(dev, unit), true) {
-		t.Fatal("a fix attempt's base is its wip branch, which a park would move under it")
+	// 11/21 08:44-10:05 a fix attempt's seven rejected trees were parked nowhere: it parks
+	// too, on a branch that is not its base
+	if !parkRejectedTree(dev, devWipBranch(dev, unit), true) {
+		t.Fatal("a fix attempt's rejected tree is not parked")
+	}
+	if got := parkTarget(dev, dev, unit); got != devWipBranch(dev, unit) {
+		t.Fatalf("a first attempt parks on %s", got)
+	}
+	if got := parkTarget(dev, devWipBranch(dev, unit), unit); got != devContBranch(dev, unit) {
+		t.Fatalf("a fix attempt from the wip branch parks on %s, its own base or elsewhere", got)
+	}
+	if got := parkTarget(dev, devContBranch(dev, unit), unit); got != devWipBranch(dev, unit) {
+		t.Fatalf("an attempt from the -cont branch parks on %s", got)
 	}
 	if parkRejectedTree(dev, dev, false) {
 		t.Fatal("a verification that did not run parks nothing")
@@ -35,7 +46,13 @@ func TestARejectedTreeOfAFirstAttemptIsWhereARestartContinues(t *testing.T) {
 	if f.BaseRef != devWipBranch(dev, unit) || f.BaseSHA != "abc123" {
 		t.Fatalf("a restart continues from %+v", f)
 	}
-	q.LastFailure = map[string]DevFailure{unit: {Kind: "compile_fail", BaseRef: "elsewhere"}}
+	// an attempt that has not ended is later than the last that did (which cleared it): a fix
+	// attempt stopped after parking continues from its park, not from the failure before it
+	q.LastFailure = map[string]DevFailure{unit: {Kind: "integration_correctness_unmeasured", BaseRef: "elsewhere"}}
+	if f := q.ResumeFrom(unit); f.BaseRef != devWipBranch(dev, unit) || f.Kind != "integration_correctness_unmeasured" {
+		t.Fatalf("a stopped fix attempt does not continue from its park: %+v", f)
+	}
+	delete(q.InProgress, unit)
 	if f := q.ResumeFrom(unit); f.BaseRef != "elsewhere" {
 		t.Fatalf("an attempt that ended is continued from its own failure, got %+v", f)
 	}
