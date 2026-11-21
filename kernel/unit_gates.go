@@ -137,7 +137,10 @@ const GateNothingCompared = "integration_nothing_compared"
 // gateOutsideUnit: a gate no conversation on the unit can change — the machine's, or the
 // integration having nothing outside the pipeline to be judged against. The conversation is
 // let end and the run stops (dev_run), as for a machine gate.
-func gateOutsideUnit(kind string) bool { return gateIsMachine(kind) || kind == GateNothingCompared }
+func gateOutsideUnit(kind string) bool {
+	// no bars given (EINSTEINOS_TOKS_BARS): nothing the unit writes can be compared with them
+	return gateIsMachine(kind) || kind == GateNothingCompared || kind == "integration_bars_unmeasured"
+}
 
 // preverifyMayEnd: whether a done line ends the conversation — the unit passed, or what failed
 // is the machine.
