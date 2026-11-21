@@ -142,3 +142,22 @@ func TestProcWatchRecordsWorkspaceScriptsAndLargeFiles(t *testing.T) {
 	}
 	t.Fatalf("the script was not recorded: %+v", tr.Processes)
 }
+
+// The port's conversion of the model written during the run (the reference's pytools write a
+// GGUF of it) is not "another model"; a weight file outside the model older than the run is.
+func TestAWeightFileWrittenDuringTheRunIsTheModelsConversion(t *testing.T) {
+	model := t.TempDir()
+	os.WriteFile(filepath.Join(model, "model-00001-of-00001.safetensors"), []byte("w"), 0o644)
+	conv := filepath.Join(t.TempDir(), "qwen36.gguf")
+	os.WriteFile(conv, []byte("converted"), 0o644)
+	br := EvalBenchRun{Bench: EvalBench{File: "e2e.sh"}, Started: time.Now().Add(-time.Minute),
+		Weights: []string{filepath.Join(model, "model-00001-of-00001.safetensors"), conv}}
+	if k, txt := e2eModelGate(br, model); k != "" {
+		t.Fatalf("the run's own conversion was another model: %s", txt)
+	}
+	old := time.Now().Add(-time.Hour)
+	os.Chtimes(conv, old, old)
+	if k, _ := e2eModelGate(br, model); k != "integration_e2e_other_model" {
+		t.Fatalf("a weight file older than the run passed: %q", k)
+	}
+}

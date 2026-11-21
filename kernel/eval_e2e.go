@@ -56,6 +56,7 @@ func evalRunE2E(ws, unitID string) EvalBenchRun {
 	}
 	cmd := probeEnv + fmt.Sprintf("MODEL_DIR=%q bash %q 2>&1", evalModel(), script)
 	started := time.Now()
+	br.Started = started
 	code, out, tr, err := runWatched(cmd, ws, evalBuildTimeout)
 	br.MachineChanged = machineChangedSince(started)
 	br.Exit, br.Metrics, br.Tail, br.Devices = code, metricsIn(out), tailText(out, 1500), tr.Devices
@@ -310,6 +311,9 @@ func e2eModelGate(br EvalBenchRun, modelDir string) (kind, text string) {
 		}
 		if rel, err := filepath.Rel(root, real); err == nil && !strings.HasPrefix(rel, "..") {
 			inside = append(inside, w)
+		} else if st, err := os.Stat(real); err == nil && !br.Started.IsZero() && st.ModTime().After(br.Started.Add(-machineClockSlack)) {
+			// written during the run: the port's conversion of the model, as the reference's
+			// pytools write a GGUF of it (tools/gguf_writer.py) — not another model
 		} else {
 			outside = append(outside, w)
 		}

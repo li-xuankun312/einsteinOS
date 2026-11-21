@@ -47,6 +47,9 @@ type EvalBenchRun struct {
 	// MachineChanged: files and directories of this machine's Python package directories the
 	// run changed (machine_changes.go)
 	MachineChanged []string `json:"machine_changed,omitempty"`
+	// Started: when the run started — a weight file written since is the run's own
+	// conversion of the model (e2eModelGate)
+	Started time.Time `json:"started,omitempty"`
 }
 
 // EvalRun is a repository at one commit, built and benchmarked here.

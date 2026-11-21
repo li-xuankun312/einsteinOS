@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The end-to-end run loads its weights from the model the kernel gave it and only from there.
@@ -16,6 +17,9 @@ func TestTheEndToEndRunLoadsTheModelItIsGiven(t *testing.T) {
 	for _, d := range []string{given, other} {
 		os.WriteFile(filepath.Join(d, "model-00001-of-00026.safetensors"), []byte("w"), 0o644)
 	}
+	// the other checkpoint was there before the run: not a conversion the run wrote
+	old := time.Now().Add(-time.Hour)
+	os.Chtimes(filepath.Join(other, "model-00001-of-00026.safetensors"), old, old)
 	ws := t.TempDir()
 	os.MkdirAll(filepath.Join(ws, ".einsteinOS/verify/u"), 0o755)
 	put := func(open string) {
