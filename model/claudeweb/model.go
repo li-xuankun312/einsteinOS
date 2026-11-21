@@ -411,6 +411,14 @@ func (m *Model) shadowExecute(convID, toolName, inputJSON string) string {
 }
 
 func (m *Model) shadowExecuteRaw(convID, toolName, inputJSON string) string {
+	// a conversation whose answer is text or the web's results has nothing run here — not a
+	// command, not a write, not the twin of a clone made with the kernel's credentials:
+	// 11/21 06:37:42 the evaluation's search a07300a2 had zeng-bin3123/baloon cloned into
+	// /tmp/baloon_src here with the kernel's credentials, and ran benchmarks here at 06:44-06:47
+	if r := convRole(convID); kernel.RoleAnswersInText(r) || kernel.RoleSearchesOnly(r) {
+		log.Printf(searchNotRunHereFmt, r)
+		return ""
+	}
 	noteConvTmp(convID, inputJSON)
 	// a conversation not told the reference does not read the kernel's clone of it here
 	// (kernel/ref_mask_local.go)
@@ -450,6 +458,9 @@ func (m *Model) shadowExecuteRaw(convID, toolName, inputJSON string) string {
 	}
 	return m.Shadow.Execute(toolName, inputJSON)
 }
+
+// searchNotRunHereFmt: %[1]s the role whose tool call is not run on this machine.
+const searchNotRunHereFmt = "[shadow] not run here: role=%[1]s answers with text or the web's results (the sandbox's result stands)"
 
 // convRoles: the role of each running conversation, by conversation id.
 var convRoles sync.Map
