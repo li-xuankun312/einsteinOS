@@ -198,6 +198,14 @@ func (r *devRun) prepareUnit(unit DevPlanNode, theory string) bool {
 		return true
 	}
 
+	// a reopened unit runs: its attempts start again from the reopen (TakeReopen, when the
+	// attempt starts), and judged by the attempts before it the unit was deferred again at
+	// every look and never run — 11/21 14:22 to 21:13 pf7b804cf95, reopened at 14:21:36 with
+	// three review failures stored, was deferred 320 times, a state push each time
+	if plan.Reopened(unit.ID) {
+		return false
+	}
+
 	// whether to split is the kernel's call, from numbers
 	need, why := dev_node_needs_split(plan, unit)
 	if need && !plan.VerifySeen[unit.ID] && plan.FixAttempts[unit.ID] < 2*DevMaxFixAttempts {
