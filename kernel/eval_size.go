@@ -46,12 +46,20 @@ var evalSizeFn = func(owner, name string) (int64, error) {
 	return r.Size, nil
 }
 
-// evalTooLarge: why owner/name is not cloned, or "" when it may be (a size that cannot be
-// read does not stop the clone).
+// evalTooLarge: why owner/name is not cloned, or "" when it may be. A size that cannot be read
+// is a measurement that did not happen, and the repository is not cloned on it: 11/21
+// 07:06:41 ggerganov/llama.cpp (487 MiB by GitHub's size on 11/14) was cloned and taken, its
+// size not having been read, and nothing said why.
 func evalTooLarge(owner, name string) string {
 	kib, err := evalSizeFn(owner, name)
-	if err != nil || kib <= evalMaxRepoKiB {
-		return ""
+	switch {
+	case err != nil:
+		return fmt.Sprintf(evalSizeUnreadFmt, err)
+	case kib > evalMaxRepoKiB:
+		return fmt.Sprintf("too large to clone here (GitHub size %d MiB, limit %d MiB)", kib/1024, evalMaxRepoKiB/1024)
 	}
-	return fmt.Sprintf("too large to clone here (GitHub size %d MiB, limit %d MiB)", kib/1024, evalMaxRepoKiB/1024)
+	return ""
 }
+
+// %[1]v why GitHub's size could not be read
+const evalSizeUnreadFmt = "its size could not be read from GitHub (%[1]v), so it is not cloned"

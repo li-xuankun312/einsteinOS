@@ -76,10 +76,12 @@ func TestALargeRepositoryIsNotCloned(t *testing.T) {
 	var cloned []string
 	evalCloneFn = func(owner, name, dir string) error { cloned = append(cloned, owner+"/"+name); return nil }
 	got, tr := evalDiscover("task", nil, func(string) (bool, string) { return true, "measured" })
-	if strings.Join(cloned, " ") != "triton-lang/triton someone/unknown" {
+	// a repository whose size cannot be read is not cloned either (eval_size.go)
+	if strings.Join(cloned, " ") != "triton-lang/triton" {
 		t.Fatalf("cloned: %v", cloned)
 	}
-	if len(got) != 2 || !strings.Contains(strings.Join(tr.NotTaken, " "), "llvm/llvm-project: too large to clone here (GitHub size 2636 MiB") {
+	if len(got) != 1 || !strings.Contains(strings.Join(tr.NotTaken, " "), "llvm/llvm-project: too large to clone here (GitHub size 2636 MiB") ||
+		!strings.Contains(strings.Join(tr.NotTaken, " "), "someone/unknown: its size could not be read") {
 		t.Fatalf("kept %v, not taken %v", got, tr.NotTaken)
 	}
 }
@@ -109,7 +111,7 @@ func TestARepositoryNotTakenIsNotMeasuredAgain(t *testing.T) {
 	evalNotTaken = map[string]string{}
 	evalNotTakenMu.Unlock()
 	evalAskFn = func(string) (string, error) { return "llvm/llvm-project\n", nil }
-	evalSizeFn = func(string, string) (int64, error) { return 0, errNotExist }
+	evalSizeFn = func(string, string) (int64, error) { return 1024, nil }
 	clones := 0
 	evalCloneFn = func(owner, name, dir string) error { clones++; return errNotExist }
 	for i := 0; i < 2; i++ {
