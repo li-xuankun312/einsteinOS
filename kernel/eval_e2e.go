@@ -19,9 +19,8 @@ import (
 )
 
 const (
-	gateE2EMissingFmt    = "integration_e2e_missing: %[1]s does not exist, so the port was never run on the model at %[2]s"
-	gateE2EFailedFmt     = "integration_e2e_failed: %[1]s exited %[2]d running the model at %[3]s; output: %[4]s"
-	gateE2EUnmeasuredFmt = "integration_e2e_unmeasured: %[1]s ran but printed no %[2]s rate in tok/s; output: %[3]s"
+	gateE2EMissingFmt = "integration_e2e_missing: %[1]s does not exist, so the port was never run on the model at %[2]s"
+	gateE2EFailedFmt  = "integration_e2e_failed: %[1]s exited %[2]d running the model at %[3]s; output: %[4]s"
 	// the run must be the port: the kernels the other units ported are what it launches
 	gateE2ENotPortFmt        = "integration_e2e_not_port: %[1]s launched %[2]d kernel(s) (%[3]s) and none of the kernels these units ported:\n%[4]s"
 	gateE2EPortUnmeasuredFmt = "integration_e2e_port_unmeasured: the launch probe was not in %[1]s's processes (%[2]s), so whether it ran the kernels the units ported is not known"
@@ -63,13 +62,21 @@ func evalRunE2E(ws, unitID string) EvalBenchRun {
 	br.Programs = workspacePrograms(ws, tr.Exes)
 	br.PromptIDs, br.GeneratedIDs = e2eTokens(out)
 	br.Weights = tr.Weights
+	var byPID map[int][]string
 	if logPath != "" {
-		names, byPID, loaded := e2eLaunchesFn(logPath)
-		br.Kernels = names
-		br.Loaders = e2eLoaders(ws, tr.Processes, byPID)
+		names, launchedBy, loaded := e2eLaunchesFn(logPath)
+		br.Kernels, byPID = names, launchedBy
 		if !loaded && br.ProbeErr == "" {
 			br.ProbeErr = "no process of the run loaded it"
 		}
+	}
+	br.Loaders = e2eLoaders(ws, tr.Processes, byPID)
+	// the rate is the kernel's: what the script printed is kept, not judged
+	br.Printed, br.Metrics = br.Metrics, nil
+	if m, why := e2eMeasureRate(br); why == "" {
+		br.Metrics = []Metric{m}
+	} else {
+		br.RateWhy = why
 	}
 	return br
 }
@@ -191,17 +198,6 @@ func e2eGate(br EvalBenchRun) (kind, text string) {
 		return "integration_e2e_missing", fmt.Sprintf(gateE2EMissingFmt, br.Bench.File, evalModel())
 	case br.Exit != 0:
 		return "integration_e2e_failed", fmt.Sprintf(gateE2EFailedFmt, br.Bench.File, br.Exit, evalModel(), br.Tail)
-	}
-	for _, want := range []string{"prefill", "decode"} {
-		found := false
-		for _, m := range br.Metrics {
-			if m.Unit == "tok/s" && strings.Contains(m.Label, want) {
-				found = true
-			}
-		}
-		if !found {
-			return "integration_e2e_unmeasured", fmt.Sprintf(gateE2EUnmeasuredFmt, br.Bench.File, want, br.Tail)
-		}
 	}
 	return "", ""
 }

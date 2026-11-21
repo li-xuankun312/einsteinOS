@@ -184,6 +184,8 @@ func evalIntegration(pid int64, repo, sha, devRepo, unitID string, benches []Eva
 			rec.Gate, rec.GateText = k, t
 		} else if k, t := e2eShardsGate(rec.E2E, evalModel()); k != "" {
 			rec.Gate, rec.GateText = k, t
+		} else if k, t := e2eRateGate(rec.E2E); k != "" {
+			rec.Gate, rec.GateText = k, t
 		} else if k, t := e2eUnchangedSince(repo, sha, ws, rec.E2E, prev); k != "" {
 			rec.Gate, rec.GateText = k, t
 		} else if k, t := e2eTokensGate(rec.E2E); k != "" {

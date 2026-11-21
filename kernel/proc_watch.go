@@ -63,6 +63,9 @@ type ProcSeen struct {
 	Exe           string   `json:"exe"`
 	Weights       []string `json:"weights,omitempty"`
 	WorkspaceLibs []string `json:"workspace_libs,omitempty"`
+	// First, Last: when the watcher first and last saw it running
+	First time.Time `json:"first"`
+	Last  time.Time `json:"last"`
 }
 
 type procWatcher struct {
@@ -78,6 +81,8 @@ type procWatcher struct {
 }
 
 type procSeenSets struct {
+	first   time.Time
+	last    time.Time
 	exe     string
 	weights map[string]bool
 	libs    map[string]bool
@@ -86,9 +91,10 @@ type procSeenSets struct {
 func (w *procWatcher) proc(pid int) *procSeenSets {
 	p := w.procs[pid]
 	if p == nil {
-		p = &procSeenSets{weights: map[string]bool{}, libs: map[string]bool{}}
+		p = &procSeenSets{weights: map[string]bool{}, libs: map[string]bool{}, first: time.Now()}
 		w.procs[pid] = p
 	}
+	p.last = time.Now()
 	return p
 }
 
@@ -158,6 +164,7 @@ func (w *procWatcher) scan(root int) {
 		queue = queue[1:]
 		queue = append(queue, children[pid]...)
 		dir := filepath.Join(procRoot, strconv.Itoa(pid))
+		w.proc(pid) // seen running now: its First and Last
 		if !w.seen[pid] {
 			if exe, err := os.Readlink(filepath.Join(dir, "exe")); err == nil {
 				w.seen[pid] = true
@@ -234,7 +241,10 @@ func (w *procWatcher) trace() ProcTrace {
 	}
 	var procs []ProcSeen
 	for pid, p := range w.procs {
-		procs = append(procs, ProcSeen{PID: pid, Exe: p.exe, Weights: keys(p.weights), WorkspaceLibs: keys(p.libs)})
+		if p.exe == "" && len(p.weights) == 0 {
+			continue // listed before it ran, or gone before it was read
+		}
+		procs = append(procs, ProcSeen{PID: pid, Exe: p.exe, Weights: keys(p.weights), WorkspaceLibs: keys(p.libs), First: p.first, Last: p.last})
 	}
 	sort.Slice(procs, func(i, j int) bool { return procs[i].PID < procs[j].PID })
 	return ProcTrace{Devices: keys(w.devices), Weights: keys(w.weights), Exes: keys(w.exes), Cmdlines: keys(w.cmdlines), Procs: len(w.seen), Processes: procs}

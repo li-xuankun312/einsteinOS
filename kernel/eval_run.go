@@ -40,6 +40,10 @@ type EvalBenchRun struct {
 	// Loaders: the processes that opened or mapped weight files, each with whether it is the
 	// port's program and the ported kernels it launched itself (eval_e2e_loader.go)
 	Loaders []E2ELoader `json:"loaders,omitempty"`
+	// Printed: the rates the end-to-end script printed, kept and judged by nothing; RateWhy:
+	// why the kernel measured no rate (eval_e2e_rate.go)
+	Printed []Metric `json:"printed,omitempty"`
+	RateWhy string   `json:"rate_why,omitempty"`
 }
 
 // EvalRun is a repository at one commit, built and benchmarked here.

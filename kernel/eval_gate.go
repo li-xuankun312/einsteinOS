@@ -72,6 +72,9 @@ func evalGateCompared(rec EvalRecord, prev *EvalRecord, mask func(string) string
 			e2e[evalKey(m.Label, m.Unit)] = m
 		}
 		for _, p := range prev.E2E.Metrics {
+			if p.Label != e2eMeasuredLabel {
+				continue // a rate an earlier run's script printed is judged by nothing (eval_e2e_rate.go)
+			}
 			d, ok := e2e[evalKey(p.Label, p.Unit)]
 			if ok {
 				compared(fmt.Sprintf(evalSourcePrevE2EFmt, shortSHA(prev.RefSHA)), d, p)

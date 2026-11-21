@@ -40,22 +40,28 @@ func TestEvalGate(t *testing.T) {
 // 6801c77f's (57.54, 11.20): only the port's benchmarks were, and it had none.
 func TestTheEndToEndRatesAreComparedWithThePreviousIntegration(t *testing.T) {
 	id := func(s string) string { return s }
-	e2e := func(prefill, decode float64) EvalBenchRun {
-		return EvalBenchRun{Metrics: []Metric{{"prefill", prefill, "tok/s", "higher"}, {"decode", decode, "tok/s", "higher"}}}
+	e2e := func(rate float64) EvalBenchRun {
+		return EvalBenchRun{Metrics: []Metric{{e2eMeasuredLabel, rate, "tok/s", "higher"}}}
 	}
-	prev := &EvalRecord{RefSHA: "6801c77ff6f7a1e0", E2E: e2e(57.54, 11.20)}
-	rec := EvalRecord{RefSHA: "e5509707730d31f9", E2E: e2e(57.50, 11.19)}
+	prev := &EvalRecord{RefSHA: "6801c77ff6f7a1e0", E2E: e2e(11.20)}
+	rec := EvalRecord{RefSHA: "e5509707730d31f9", E2E: e2e(11.19)}
 	k, txt := evalGate(rec, prev, id)
-	if k != "integration_regressed" || strings.Count(txt, "integration_regressed") != 2 || !strings.Contains(txt, "6801c77f") {
+	if k != "integration_regressed" || strings.Count(txt, "integration_regressed") != 1 || !strings.Contains(txt, "6801c77f") {
 		t.Fatalf("11/10's run against 11/09's: %q %s", k, txt)
 	}
-	rec.E2E = EvalBenchRun{Metrics: []Metric{{"prefill", 60, "tok/s", "higher"}}}
+	rec.E2E = EvalBenchRun{}
 	if k, txt := evalGate(rec, prev, id); k != "integration_metric_missing" || !strings.Contains(txt, "end-to-end") {
-		t.Fatalf("no decode rate: %q %s", k, txt)
+		t.Fatalf("no measured rate: %q %s", k, txt)
 	}
-	rec.E2E = e2e(60, 12)
+	rec.E2E = e2e(12)
 	if k, txt := evalGate(rec, prev, id); k != "" {
-		t.Fatalf("faster on both: %q %s", k, txt)
+		t.Fatalf("faster: %q %s", k, txt)
+	}
+	// rates an earlier run's script printed are judged by nothing (eval_e2e_rate.go)
+	printed := &EvalRecord{RefSHA: "6801c77ff6f7a1e0", E2E: EvalBenchRun{Metrics: []Metric{{"prefill", 57.54, "tok/s", "higher"}, {"decode", 11.20, "tok/s", "higher"}}}}
+	rec.E2E = e2e(1)
+	if k, txt := evalGate(rec, printed, id); k != "" {
+		t.Fatalf("a printed rate of an earlier run was judged: %q %s", k, txt)
 	}
 }
 
@@ -65,11 +71,11 @@ func TestTheRecordKeepsEveryComparison(t *testing.T) {
 	id := func(s string) string { return s }
 	rec := EvalRecord{RefSHA: "e5509707730d31f9", Reference: evalRunOf(Metric{"decode", 50, "tok/s", "higher"}),
 		Dev: evalRunOf(Metric{"decode", 55, "tok/s", "higher"}),
-		E2E: EvalBenchRun{Metrics: []Metric{{"prefill", 57.50, "tok/s", "higher"}, {"decode", 11.19, "tok/s", "higher"}}}}
-	prev := &EvalRecord{RefSHA: "6801c77ff6f7a1e0", E2E: EvalBenchRun{Metrics: []Metric{{"prefill", 57.54, "tok/s", "higher"}, {"decode", 11.20, "tok/s", "higher"}}}}
+		E2E: EvalBenchRun{Metrics: []Metric{{e2eMeasuredLabel, 11.19, "tok/s", "higher"}}}}
+	prev := &EvalRecord{RefSHA: "6801c77ff6f7a1e0", E2E: EvalBenchRun{Metrics: []Metric{{e2eMeasuredLabel, 57.54, "tok/s", "higher"}}}}
 	k, _, done := evalGateCompared(rec, prev, id)
-	if k != "integration_regressed" || len(done) != 3 {
-		t.Fatalf("the reference's decode and the previous run's two rates: %q %+v", k, done)
+	if k != "integration_regressed" || len(done) != 2 {
+		t.Fatalf("the reference's decode and the previous run's measured rate: %q %+v", k, done)
 	}
 	if done[0].Source != evalSourceReference || done[0].Other.Value != 50 || done[0].Worse {
 		t.Fatalf("against the reference: %+v", done[0])

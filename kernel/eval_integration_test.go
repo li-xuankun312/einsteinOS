@@ -103,7 +103,7 @@ func TestTheIntegrationRunsThePortOnTheModel(t *testing.T) {
 		t.Fatalf("failed: %q %s", k, txt)
 	}
 	put("echo \"prefill  100 tokens in 10.0 ms  ->  10000 tok/s\"\n")
-	if k, txt := e2eGate(evalRunE2E(ws, "u1")); k != "integration_e2e_unmeasured" || !strings.Contains(txt, "decode") {
+	if k, txt := e2eRateGate(evalRunE2E(ws, "u1")); k != "integration_e2e_unmeasured" || !strings.Contains(txt, "no process of the workspace") {
 		t.Fatalf("no decode: %q %s", k, txt)
 	}
 	put("echo \"prefill  100 tokens in 10.0 ms  ->  10000 tok/s\"\necho \"decode  10 tokens in 100.0 ms  ->  100 tok/s\"\n")
