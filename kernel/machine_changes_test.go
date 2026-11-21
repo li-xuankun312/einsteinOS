@@ -18,8 +18,9 @@ func TestAnEndToEndRunThatChangesTheMachinesPackagesDoesNotPass(t *testing.T) {
 	os.MkdirAll(filepath.Dir(reg), 0o755)
 	os.WriteFile(reg, []byte(`"Qwen3MoeForCausalLM": ("qwen3_moe", "Qwen3MoeForCausalLM"),`+"\n"), 0o644)
 	old := time.Now().Add(-time.Hour)
-	os.Chtimes(reg, old, old)
-	os.Chtimes(filepath.Dir(reg), old, old)
+	for p := reg; strings.HasPrefix(p, pkgs); p = filepath.Dir(p) {
+		os.Chtimes(p, old, old) // made before the run: the file and every directory to it
+	}
 	oldDirs := machinePackageDirs
 	machinePackageDirs = func() []string { return []string{pkgs} }
 	defer func() { machinePackageDirs = oldDirs }()

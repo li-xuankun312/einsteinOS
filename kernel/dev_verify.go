@@ -348,7 +348,7 @@ func (v VerifyResult) Passed() bool { return v.Compile == "pass" && v.Smoke == "
 // run is a real process on this machine (visible like any other pid). A variable
 // so the logic can be tested without a booted kernel.
 var devVerifyRunner = func(command, dir string, timeout time.Duration) (int, string, error) {
-	pid, err := ForkExec(command, dir)
+	pid, err := ForkExecVerify(command, dir)
 	if err != nil {
 		return -1, "", err
 	}
@@ -358,6 +358,11 @@ var devVerifyRunner = func(command, dir string, timeout time.Duration) (int, str
 	}
 	return code, GetResult(childPid) + GetStderr(childPid), nil
 }
+
+const (
+	gateVerifyModifiesMachineFmt = "verify_modifies_machine: %[1]s and %[2]s changed %[3]d file(s) or director(ies) of this machine's Python packages, outside the workspace, and no other command ran here meanwhile: %[4]s — the unit runs on the machine as it is"
+	verifyMachineBesideFmt       = "dev_verify: unit %[1]s: while build.sh and test.sh ran, %[2]d file(s) or director(ies) of this machine's Python packages changed: %[3]s — not judged: %[4]d command(s) of conversations ran here beside it"
+)
 
 // devVerifyScripts: where the unit's scripts live, relative to the repo root.
 func devVerifyScripts(unitID string) (build, test string) {
@@ -514,11 +519,16 @@ func runUnitVerifyAlone(ws, unitID, gpuUsable string, req UnitRequirements, chan
 	}
 	res.Test = ttrace
 	res.TestExit, res.TestOut = code, tailText(out, 3000)
-	// what build.sh and test.sh changed of this machine's Python packages is logged; it is
-	// not judged here, since other units' conversations run their commands on this machine
-	// beside the verification and a change cannot be laid on the unit (machine_changes.go)
+	// what build.sh and test.sh changed of this machine's Python packages: the unit's when no
+	// command but the verification's ran here meanwhile (fork_runs.go); when conversations'
+	// commands ran beside it, a change cannot be laid on the unit and is logged
+	machineGate, machineText := "", ""
 	if mc := machineChangedSince(start); len(mc) > 0 {
-		log.Printf("dev_verify: unit %s: while build.sh and test.sh ran, %d file(s) or director(ies) of this machine's Python packages changed: %s", unitID, len(mc), shownPaths(mc, 12))
+		if beside := forkRunsBeside(start.Add(-machineClockSlack), time.Now()); len(beside) > 0 {
+			log.Printf(verifyMachineBesideFmt, unitID, len(mc), shownPaths(mc, 12), len(beside))
+		} else {
+			machineGate, machineText = "verify_modifies_machine", fmt.Sprintf(gateVerifyModifiesMachineFmt, build, test, len(mc), shownPaths(mc, 12))
+		}
 	}
 	switch {
 	case err != nil:
@@ -527,6 +537,10 @@ func runUnitVerifyAlone(ws, unitID, gpuUsable string, req UnitRequirements, chan
 		res.Smoke = "fail"
 	default:
 		res.Smoke = "pass"
+		if machineGate != "" {
+			res.Gates, res.Gate, res.GateText = []string{machineGate}, machineGate, machineText
+			break
+		}
 		gi := unitGateInput(ws, unitID, req, changed, res.Build, res.Test, res.NoToolchain)
 		if kinds, texts := unitGatesAll(gi); len(kinds) > 0 {
 			res.Gates, res.Gate, res.GateText = kinds, kinds[0], strings.Join(texts, "\n")
@@ -559,6 +573,9 @@ func runUnitVerifyAlone(ws, unitID, gpuUsable string, req UnitRequirements, chan
 			log.Printf("dev_verify: unit %s: compile=%s smoke=%s, every gate passed — the integration's evaluation starts", unitID, res.Compile, res.Smoke)
 			res.Gate, res.GateText = fn(ws, req.Benches)
 		}
+	}
+	if machineGate != "" && res.Gate != machineGate {
+		log.Printf("dev_verify: unit %s: %s", unitID, machineText)
 	}
 	return finish()
 }

@@ -338,6 +338,16 @@ func ForkExec(command string, workDir string) (int64, error) {
 // ForkExecLabeled is ForkExec with a name for the live window (live_exec.go); an
 // empty label is derived from the command.
 func ForkExecLabeled(command string, workDir string, label string) (int64, error) {
+	return forkExecRun(command, workDir, label, false)
+}
+
+// ForkExecVerify is ForkExec for the kernel's own verification of a unit: its runs are told
+// apart from the commands conversations run here (fork_runs.go).
+func ForkExecVerify(command string, workDir string) (int64, error) {
+	return forkExecRun(command, workDir, "", true)
+}
+
+func forkExecRun(command string, workDir string, label string, verify bool) (int64, error) {
 	nr := FindEmptyProcess()
 	if nr < 0 {
 		return 0, fmt.Errorf("fork: %d tasks full", NR_TASKS)
@@ -384,6 +394,7 @@ func ForkExecLabeled(command string, workDir string, label string) (int64, error
 	if err == nil {
 		TrackProcessGroup(cmd.Process.Pid)
 	}
+	run := noteForkRunStart(command, verify)
 	if err != nil {
 		if live != nil {
 			live.finish(1)
@@ -397,6 +408,7 @@ func ForkExecLabeled(command string, workDir string, label string) (int64, error
 
 	go func() {
 		werr := cmd.Wait()
+		noteForkRunEnd(run)
 		noteReturned(cmd.Process.Pid, command)
 		exitCode := int32(0)
 		if werr != nil {

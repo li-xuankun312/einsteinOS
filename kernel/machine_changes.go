@@ -23,6 +23,9 @@ import (
 	"time"
 )
 
+// machineClockSlack: how far before a run's start a change still counts as the run's.
+const machineClockSlack = time.Second
+
 // machinePackageDirs: where this machine keeps Python packages, resolved and without
 // repeats (/usr/local/corex is a link to /usr/local/corex-3.2.3).
 var machinePackageDirs = func() []string {
@@ -55,6 +58,9 @@ var machinePackageDirs = func() []string {
 // machineChangedSince: the files and directories under the package directories whose
 // modification time is after start (a directory's changes when an entry is added or removed).
 func machineChangedSince(start time.Time) []string {
+	// a file's time comes from the system's coarse clock and can read a few ms before a
+	// time.Now() taken earlier: compared from a second before
+	start = start.Add(-machineClockSlack)
 	var out []string
 	for _, root := range machinePackageDirs() {
 		filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
