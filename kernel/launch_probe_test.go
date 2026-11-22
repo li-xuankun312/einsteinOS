@@ -146,3 +146,64 @@ func TestGPUUnitTestRunsUnderTheLaunchProbe(t *testing.T) {
 }
 
 func execCC(args ...string) ([]byte, error) { return exec.Command("cc", args...).CombinedOutput() }
+
+// TestTheProbeRecordsWhichProcessPrintedTokenLines: a C program printing through stdio, a
+// C++ one through std::cout and a python through print each have their "prompt:" and
+// "generated:" lines logged under their own pid, and what the run prints is unchanged.
+func TestTheProbeRecordsWhichProcessPrintedTokenLines(t *testing.T) {
+	withProbeDir(t)
+	dir := t.TempDir()
+	if _, err := exec.LookPath("cc"); err != nil {
+		t.Skip("no C compiler")
+	}
+	lib, err := launchProbeLib()
+	if err != nil {
+		t.Fatalf("launchProbeLib: %v", err)
+	}
+	c := filepath.Join(dir, "c.c")
+	os.WriteFile(c, []byte(`#include <stdio.h>
+int main(void){ printf("generated: %d %d\n", 11, 12); puts("prompt: 3 4"); printf("generated:"); for(int i=0;i<3;i++) printf(" %d", i+20); putchar('\n'); fprintf(stderr, "other line\n"); return 0; }`), 0o644)
+	cprog := filepath.Join(dir, "cprog")
+	if out, err := exec.Command("cc", "-O2", "-D_FORTIFY_SOURCE=2", "-o", cprog, c).CombinedOutput(); err != nil {
+		t.Fatalf("cc: %v\n%s", err, out)
+	}
+	script := shq(cprog) + `; bash -c "echo 'generated: 7'; echo 'not generated: 1'"`
+	if _, err := exec.LookPath("python3"); err == nil {
+		script += `; python3 -c 'print("hello"); print("generated: 1 2 3", end="")'`
+	}
+	logPath := filepath.Join(dir, "launch.log")
+	out, err := exec.Command("bash", "-c", launchProbeEnv(lib, logPath)+"( "+script+" ) 2>&1").CombinedOutput()
+	if err != nil {
+		t.Fatalf("run: %v\n%s", err, out)
+	}
+	for _, l := range []string{"generated: 11 12\nprompt: 3 4\ngenerated: 20 21 22\n", "other line\n", "generated: 7\nnot generated: 1\n"} {
+		if !strings.Contains(string(out), l) {
+			t.Fatalf("the run's output changed under the probe (no %q):\n%s", l, out)
+		}
+	}
+	pl := readProbeLog(logPath)
+	byExe := map[string][]string{}
+	for pid, lines := range pl.Out {
+		byExe[filepath.Base(pl.Loaded[pid])] = append(byExe[filepath.Base(pl.Loaded[pid])], lines...)
+	}
+	if got := strings.Join(byExe["cprog"], "|"); got != "generated: 11 12|prompt: 3 4|generated: 20 21 22" {
+		t.Fatalf("C program's token lines: %q (all: %v)", got, byExe)
+	}
+	if got := strings.Join(byExe["bash"], "|"); got != "generated: 7" {
+		t.Fatalf("bash's token lines: %q (all: %v)", got, byExe)
+	}
+	for exe, lines := range byExe {
+		if strings.HasPrefix(exe, "python3") && strings.Join(lines, "|") != "generated: 1 2 3" {
+			t.Fatalf("python's token lines: %q", lines)
+		}
+	}
+}
+
+func TestAnOutLineKeepsItsTabs(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "l")
+	os.WriteFile(p, []byte("out\t42\tgenerated:\t1\t2\nload\t42\t/x\n"), 0o644)
+	pl := readProbeLog(p)
+	if len(pl.Out[42]) != 1 || pl.Out[42][0] != "generated:\t1\t2" || pl.Loaded[42] != "/x" {
+		t.Fatalf("%+v", pl)
+	}
+}

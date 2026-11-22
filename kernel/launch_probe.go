@@ -100,11 +100,13 @@ type probeLog struct {
 	Loaded   map[int]string // pid → executable the probe was loaded into
 	Launches []probeLaunch
 	Devices  []string // device nodes processes held open right after a launch returned
+	// Out: the "prompt:" and "generated:" lines each process wrote to its stdout or stderr
+	Out map[int][]string
 }
 
 // readProbeLog parses the probe's log file; a missing file is an empty log.
 func readProbeLog(path string) probeLog {
-	pl := probeLog{Loaded: map[int]string{}}
+	pl := probeLog{Loaded: map[int]string{}, Out: map[int][]string{}}
 	f, err := os.Open(path)
 	if err != nil {
 		return pl
@@ -113,6 +115,12 @@ func readProbeLog(path string) probeLog {
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 64*1024), 1024*1024)
 	for sc.Scan() {
+		if o := strings.SplitN(sc.Text(), "\t", 3); len(o) == 3 && o[0] == "out" {
+			if pid, err := strconv.Atoi(o[1]); err == nil {
+				pl.Out[pid] = append(pl.Out[pid], o[2])
+			}
+			continue
+		}
 		parts := strings.Split(sc.Text(), "\t")
 		switch {
 		case len(parts) == 3 && parts[0] == "load":

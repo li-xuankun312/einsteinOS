@@ -6,6 +6,7 @@
 //   load    <pid> <exe>
 //   launch  <pid> <api> <addr> <object base> <object path> <symbol or ->
 //   device  <pid> <path>   (a /dev node the process holds open right after a launch returned)
+//   out     <pid> <line>   (a "prompt:" or "generated:" line the process wrote to its stdout or stderr)
 // A runtime-API launch passes the kernel's host stub, whose ELF symbol is the kernel's
 // mangled name; the kernel resolves it from the object's symbol table when dladdr cannot.
 // Each (api, function) is logged once per process.
@@ -14,11 +15,13 @@
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <stdarg.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 
 typedef int probe_err_t;
@@ -30,9 +33,10 @@ static pthread_mutex_t probe_mu = PTHREAD_MUTEX_INITIALIZER;
 static const void *probe_seen[PROBE_SEEN];
 static int probe_nseen;
 
+// the probe's own writes go to the kernel directly: write() below is the probe's
 static void probe_write(const char *s) {
   if (probe_fd >= 0) {
-    ssize_t r = write(probe_fd, s, strlen(s));
+    long r = syscall(SYS_write, probe_fd, s, strlen(s));
     (void)r;
   }
 }
@@ -167,4 +171,193 @@ int cuLaunchKernel(void *f, unsigned gx, unsigned gy, unsigned gz, unsigned bx, 
   probe_err_t probe_r = real_cuLaunchKernel ? real_cuLaunchKernel(f, gx, gy, gz, bx, by, bz, shm, st, params, extra) : 1;
   probe_devices();
   return probe_r;
+}
+
+// The token lines a process writes: which process printed the ids the run generated. 11/22
+// 05:11-12:48 the integration's e2e.sh printed "generated:" from whatever process got that far
+// (vllm in one, transformers in another, a python forward pass written into the script in the
+// last), and the kernel took every id in the run's output as the port's.
+#define PROBE_LINE 65536
+static char probe_line[3][PROBE_LINE];
+static size_t probe_line_n[3];
+static int probe_line_over[3];
+
+static int probe_token_line(const char *s, size_t n) {
+  size_t i = 0;
+  while (i < n && (s[i] == ' ' || s[i] == '\t')) i++;
+  size_t w = 0;
+  if (n - i >= 6 && memcmp(s + i, "prompt", 6) == 0) w = 6;
+  else if (n - i >= 9 && memcmp(s + i, "generated", 9) == 0) w = 9;
+  if (!w) return 0;
+  i += w;
+  while (i < n && (s[i] == ' ' || s[i] == '\t')) i++;
+  return i < n && s[i] == ':';
+}
+
+static void probe_out_line(const char *s, size_t n) {
+  if (n && s[n - 1] == '\r') n--;
+  if (!probe_token_line(s, n)) return;
+  char head[64];
+  int h = snprintf(head, sizeof head, "out\t%d\t", (int)getpid());
+  char *line = malloc((size_t)h + n + 2);
+  if (!line) return;
+  memcpy(line, head, (size_t)h);
+  memcpy(line + h, s, n);
+  line[h + n] = '\n';
+  line[h + n + 1] = 0;
+  probe_write(line);
+  free(line);
+}
+
+static void probe_scan(int fd, const char *buf, size_t n) {
+  pthread_mutex_lock(&probe_mu);
+  char *ln = probe_line[fd];
+  for (size_t i = 0; i < n; i++) {
+    if (buf[i] == '\n') {
+      if (!probe_line_over[fd]) probe_out_line(ln, probe_line_n[fd]);
+      probe_line_n[fd] = 0;
+      probe_line_over[fd] = 0;
+      continue;
+    }
+    if (probe_line_n[fd] < PROBE_LINE) ln[probe_line_n[fd]++] = buf[i];
+    else probe_line_over[fd] = 1;
+  }
+  pthread_mutex_unlock(&probe_mu);
+}
+
+typedef ssize_t (*write_fn)(int, const void *, size_t);
+ssize_t write(int fd, const void *buf, size_t n) {
+  PROBE_REAL(write, write_fn);
+  if (probe_fd >= 0 && (fd == 1 || fd == 2) && buf && n) probe_scan(fd, (const char *)buf, n);
+  if (!real_write) return (ssize_t)syscall(SYS_write, fd, buf, n);
+  return real_write(fd, buf, n);
+}
+
+// stdio: glibc writes a FILE's buffer with its own __write, not write() above, so what a C or
+// C++ program prints (printf, puts, std::cout through fwrite and putc) is read where it is
+// handed to stdio
+static int probe_std_fd(FILE *f) {
+  if (probe_fd < 0 || !f) return 0;
+  int fd = fileno(f);
+  return (fd == 1 || fd == 2) ? fd : 0;
+}
+
+static void probe_vscan(FILE *f, const char *fmt, va_list ap) {
+  int fd = probe_std_fd(f);
+  if (!fd || !fmt) return;
+  char small[4096];
+  va_list cp;
+  va_copy(cp, ap);
+  int n = vsnprintf(small, sizeof small, fmt, cp);
+  va_end(cp);
+  if (n < 0) return;
+  if ((size_t)n < sizeof small) {
+    probe_scan(fd, small, (size_t)n);
+    return;
+  }
+  char *big = malloc((size_t)n + 1);
+  if (!big) return;
+  va_copy(cp, ap);
+  vsnprintf(big, (size_t)n + 1, fmt, cp);
+  va_end(cp);
+  probe_scan(fd, big, (size_t)n);
+  free(big);
+}
+
+typedef size_t (*fwrite_fn)(const void *, size_t, size_t, FILE *);
+size_t fwrite(const void *p, size_t sz, size_t nm, FILE *f) {
+  PROBE_REAL(fwrite, fwrite_fn);
+  int fd = probe_std_fd(f);
+  if (fd) probe_scan(fd, (const char *)p, sz * nm);
+  return real_fwrite(p, sz, nm, f);
+}
+typedef int (*fputs_fn)(const char *, FILE *);
+int fputs(const char *s, FILE *f) {
+  PROBE_REAL(fputs, fputs_fn);
+  int fd = probe_std_fd(f);
+  if (fd) probe_scan(fd, s, strlen(s));
+  return real_fputs(s, f);
+}
+typedef int (*puts_fn)(const char *);
+int puts(const char *s) {
+  PROBE_REAL(puts, puts_fn);
+  if (probe_std_fd(stdout)) {
+    probe_scan(1, s, strlen(s));
+    probe_scan(1, "\n", 1);
+  }
+  return real_puts(s);
+}
+typedef int (*fputc_fn)(int, FILE *);
+#define PROBE_PUTC(name)                                  \
+  int name(int c, FILE *f) {                              \
+    PROBE_REAL(name, fputc_fn);                           \
+    int fd = probe_std_fd(f);                             \
+    if (fd) {                                             \
+      char ch = (char)c;                                  \
+      probe_scan(fd, &ch, 1);                             \
+    }                                                     \
+    return real_##name(c, f);                             \
+  }
+PROBE_PUTC(fputc)
+PROBE_PUTC(putc)
+PROBE_PUTC(_IO_putc)
+typedef int (*putchar_fn)(int);
+int putchar(int c) {
+  PROBE_REAL(putchar, putchar_fn);
+  if (probe_std_fd(stdout)) {
+    char ch = (char)c;
+    probe_scan(1, &ch, 1);
+  }
+  return real_putchar(c);
+}
+
+typedef int (*vfprintf_fn)(FILE *, const char *, va_list);
+int vfprintf(FILE *f, const char *fmt, va_list ap) {
+  PROBE_REAL(vfprintf, vfprintf_fn);
+  probe_vscan(f, fmt, ap);
+  return real_vfprintf(f, fmt, ap);
+}
+int vprintf(const char *fmt, va_list ap) { return vfprintf(stdout, fmt, ap); }
+int fprintf(FILE *f, const char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  int r = vfprintf(f, fmt, ap);
+  va_end(ap);
+  return r;
+}
+int printf(const char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  int r = vfprintf(stdout, fmt, ap);
+  va_end(ap);
+  return r;
+}
+// _FORTIFY_SOURCE builds call these instead
+typedef int (*vfprintf_chk_fn)(FILE *, int, const char *, va_list);
+int __vfprintf_chk(FILE *f, int flag, const char *fmt, va_list ap) {
+  PROBE_REAL(__vfprintf_chk, vfprintf_chk_fn);
+  probe_vscan(f, fmt, ap);
+  return real___vfprintf_chk(f, flag, fmt, ap);
+}
+int __vprintf_chk(int flag, const char *fmt, va_list ap) { return __vfprintf_chk(stdout, flag, fmt, ap); }
+int __fprintf_chk(FILE *f, int flag, const char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  int r = __vfprintf_chk(f, flag, fmt, ap);
+  va_end(ap);
+  return r;
+}
+int __printf_chk(int flag, const char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  int r = __vfprintf_chk(stdout, flag, fmt, ap);
+  va_end(ap);
+  return r;
+}
+
+// what a process still holds of a token line when it exits without a newline
+__attribute__((destructor)) static void probe_fini(void) {
+  if (probe_fd < 0) return;
+  for (int fd = 1; fd <= 2; fd++)
+    if (probe_line_n[fd] && !probe_line_over[fd]) probe_out_line(probe_line[fd], probe_line_n[fd]);
 }
