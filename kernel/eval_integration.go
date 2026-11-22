@@ -252,6 +252,7 @@ func e2eGates(repo, sha, ws, unitID string, br EvalBenchRun, prev *EvalRecord) (
 	for _, g := range []func() (string, string){
 		func() (string, string) { return e2eGate(br) },
 		func() (string, string) { return e2eMachineGate(br) },
+		func() (string, string) { return e2eOtherImplGate(br, e2eModelNames()) },
 		func() (string, string) { return e2eModelGate(br, evalModel()) },
 		func() (string, string) { return e2ePortGate(br, e2ePortKernels(ws, unitID)) },
 		func() (string, string) { return e2eLoaderGate(br, e2ePortKernels(ws, unitID)) },

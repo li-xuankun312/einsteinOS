@@ -160,3 +160,38 @@ func e2eWithOtherCode(ws string, loaders []E2ELoader, procs []ProcSeen, code map
 	}
 	return loaders
 }
+
+const (
+	// %[1]s the script, %[2]d processes, %[3]s the model's names, %[4]s one line per process
+	gateE2EOtherImplFmt = "integration_e2e_other_implementation: in %[1]s %[2]d process(es) ran another implementation of the model — code outside the workspace that names it (%[3]s, as its config.json does), which the launch probe saw each read:\n%[4]s"
+	// %[1]d pid, %[2]s executable, %[3]s command line, %[4]s the workspace files it was started on, %[5]s the code
+	e2eOtherImplLineFmt = "  pid %[1]d %[2]s (%[3]s): started on the workspace's %[4]s; read %[5]s"
+)
+
+// e2eOtherImplGate: no process of the run ran another implementation of the model. The
+// processes are named with the files of the branch they were started on: 11/22 every fix
+// attempt of the integration began on a wip branch whose e2e_infer.py ran vllm, and went on
+// repairing it.
+func e2eOtherImplGate(br EvalBenchRun, names []string) (kind, text string) {
+	var lines []string
+	for _, l := range br.Loaders {
+		if len(l.OtherCode) == 0 {
+			continue
+		}
+		scripts := strings.Join(l.Scripts, " ")
+		if scripts == "" {
+			scripts = "(no file)"
+		}
+		lines = append(lines, fmt.Sprintf(e2eOtherImplLineFmt, l.PID, l.Exe, l.Cmdline, scripts, strings.Join(l.OtherCode, " ")))
+	}
+	if len(lines) == 0 {
+		return "", ""
+	}
+	return "integration_e2e_other_implementation", fmt.Sprintf(gateE2EOtherImplFmt, br.Bench.File, len(lines), strings.Join(names, ", "), strings.Join(lines, "\n"))
+}
+
+// e2eModelNames: modelNames of the model on this machine.
+func e2eModelNames() []string {
+	ms, _ := modelShapeOf(evalModel())
+	return modelNames(ms.Config)
+}

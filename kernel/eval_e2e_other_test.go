@@ -59,3 +59,23 @@ func TestAProcessThatReadAnotherImplementationOfTheModelIsNotThePort(t *testing.
 		t.Fatalf("a weight reader running another implementation passed: %q", k)
 	}
 }
+
+func TestTheOtherImplementationGateNamesTheBranchFilesThatRanIt(t *testing.T) {
+	br := EvalBenchRun{Bench: EvalBench{File: ".einsteinOS/verify/uint/e2e.sh"}, Loaders: []E2ELoader{
+		{PID: 9, Exe: "/ws/build/runner", Port: true, Weights: 3},
+		{PID: 8, Exe: "/usr/bin/python3", Cmdline: "python3 pytools/e2e_infer.py", Scripts: []string{"pytools/e2e_infer.py"}, OtherCode: []string{"/site/vllm/x.py (x_moe)"}},
+	}}
+	k, txt := e2eOtherImplGate(br, []string{"XMoeForCausalLM", "x_moe"})
+	if k != "integration_e2e_other_implementation" {
+		t.Fatalf("passed: %q", k)
+	}
+	for _, w := range []string{"1 process(es)", "(XMoeForCausalLM, x_moe, as its config.json does)", "pid 8 /usr/bin/python3 (python3 pytools/e2e_infer.py): started on the workspace's pytools/e2e_infer.py; read /site/vllm/x.py (x_moe)"} {
+		if !strings.Contains(txt, w) {
+			t.Fatalf("missing %q in\n%s", w, txt)
+		}
+	}
+	br.Loaders = br.Loaders[:1]
+	if k, _ := e2eOtherImplGate(br, nil); k != "" {
+		t.Fatalf("a run of the port alone failed: %q", k)
+	}
+}

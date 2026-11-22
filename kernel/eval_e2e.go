@@ -79,8 +79,7 @@ func evalRunE2E(ws, unitID string) EvalBenchRun {
 	br.Loaders = e2eLoaders(ws, tr.Processes, byPID, started)
 	if logPath != "" {
 		// whose implementation of the model each process ran: the code it read
-		ms, _ := modelShapeOf(evalModel())
-		br.Loaders = e2eWithOtherCode(ws, br.Loaders, tr.Processes, e2eCodeFn(logPath), modelNames(ms.Config))
+		br.Loaders = e2eWithOtherCode(ws, br.Loaders, tr.Processes, e2eCodeFn(logPath), e2eModelNames())
 	}
 	perUnit := e2ePortKernels(ws, unitID)
 	// the token ids are the runner's: what another process printed is not the port's output
