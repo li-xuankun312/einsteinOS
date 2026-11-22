@@ -136,3 +136,41 @@ func TestTheAnswersCountsAreWhatWasTakenAndDropped(t *testing.T) {
 		t.Fatalf("%q", got)
 	}
 }
+
+// 11/22 the integration conversation started none of the planner's parts: the kernel starts
+// them under it, one work conversation each, as far as the spawn policy allows, once
+func TestTheKernelStartsThePartsUnderTheIntegrationConversation(t *testing.T) {
+	oldFork, oldID, oldWait, oldFinal := spawnForkFn, spawnConvID, spawnWaitFn, spawnFinal
+	defer func() { spawnForkFn, spawnConvID, spawnWaitFn, spawnFinal = oldFork, oldID, oldWait, oldFinal }()
+	var prompts []string
+	next := int64(9000)
+	spawnForkFn = func(role, prompt string) (int64, error) {
+		if role != "spawn_work" {
+			t.Fatalf("role %q", role)
+		}
+		prompts = append(prompts, prompt)
+		next++
+		return next, nil
+	}
+	spawnConvID = func(pid int64) string { return fmt.Sprintf("%08d-0000-0000-0000-000000000000", pid) }
+	spawnWaitFn = func(int64) {}
+	spawnFinal = func(int64) string { return "" }
+	parent := "aaaabbbb-0000-0000-0000-00000000000f"
+	RegisterConv(0, parent, "r", "dev_fix_5_uintegration_t", 44)
+	parts := []string{"loader: maps the shards", "gdn layers: linear attention", "moe layers: experts"}
+	got := startIntegrationParts("uintegration_t", parent, parts, "[MODEL — measured]\n")
+	if len(got) != 3 || len(prompts) != 3 {
+		t.Fatalf("started %d (%d prompts)", len(got), len(prompts))
+	}
+	for i, p := range prompts {
+		if !strings.Contains(p, "[SCOPE] "+parts[i]) || !strings.Contains(p, "[MODEL — measured]") {
+			t.Fatalf("part %d's prompt:\n%s", i, p)
+		}
+	}
+	if again := startIntegrationParts("uintegration_t", parent, parts, "[MODEL — measured]\n"); again != nil || len(prompts) != 3 {
+		t.Fatalf("the same parts were started again: %v", again)
+	}
+	if none := startIntegrationParts("uintegration_t", "", []string{"x: y"}, ""); none != nil {
+		t.Fatal("no parent, and parts started")
+	}
+}

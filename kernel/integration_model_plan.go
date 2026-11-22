@@ -23,6 +23,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 const (
@@ -336,4 +337,69 @@ func (p IntegrationModelPlan) opKernels(perUnit map[string][]string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// The parts of the program that runs the model are started by the kernel as work
+// conversations under the integration unit's conversation, one per part, on the same tree:
+// 11/22 05:01-12:52 and 14:10-15:15 the integration conversation was given the spawn
+// commands, and the parts at 14:10, and started none. Each is given its part as its scope and
+// what the integration unit is given of the model; the kernel waits for the tree before it
+// judges the unit (dev_run.go, WaitConvTree).
+var (
+	integrationPartsMu      sync.Mutex
+	integrationPartsStarted = map[string]bool{} // unit|parts -> started in this process
+)
+
+// %[1]s unit, %[2]d started, %[3]d parts, %[4]s parent, %[5]s the addresses or why not
+const integrationPartsLogFmt = "dev_from_theorems: integration unit %[1]s: %[2]d of the planner's %[3]d part(s) started as work conversations under %[4]s: %[5]s"
+
+// startIntegrationParts starts, under parent, a work conversation for each part the spawn
+// policy allows, once per unit and set of parts in this process; body is what each is given
+// beside its part.
+func startIntegrationParts(unitID, parent string, parts []string, body string) []SpawnResult {
+	if parent == "" || len(parts) == 0 {
+		return nil
+	}
+	key := unitID + "|" + strings.Join(parts, "\n")
+	integrationPartsMu.Lock()
+	if integrationPartsStarted[key] {
+		integrationPartsMu.Unlock()
+		return nil
+	}
+	integrationPartsStarted[key] = true
+	integrationPartsMu.Unlock()
+	var out []SpawnResult
+	var said []string
+	for _, part := range parts {
+		res, err := SpawnConv(parent, "work", spawnPrompt(parent, "work", part, body))
+		if err != nil {
+			said = append(said, fmt.Sprintf("%q: %v", part, err))
+			break
+		}
+		out = append(out, res)
+		said = append(said, shortID(res.Addr)+" "+part)
+	}
+	log.Printf(integrationPartsLogFmt, unitID, len(out), len(parts), shortID(parent), strings.Join(said, "; "))
+	return out
+}
+
+// startIntegrationPartsOf waits for the forked conversation child to report its address and
+// starts the parts under it (in the background: the unit waits on the conversation).
+func startIntegrationPartsOf(unitID string, child int64, parts []string, body string) {
+	if len(parts) == 0 {
+		return
+	}
+	go func() {
+		var parent string
+		for deadline := time.Now().Add(spawnPollTo); time.Now().Before(deadline); time.Sleep(spawnPollIn) {
+			if parent = spawnConvID(child); parent != "" {
+				break
+			}
+		}
+		if parent == "" {
+			log.Printf(integrationPartsLogFmt, unitID, 0, len(parts), "-", "the conversation did not report its address")
+			return
+		}
+		startIntegrationParts(unitID, parent, parts, body)
+	}()
 }
