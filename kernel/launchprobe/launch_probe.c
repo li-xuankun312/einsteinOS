@@ -8,10 +8,14 @@
 //   device  <pid> <path>   (a /dev node the process holds open right after a launch returned)
 //   out     <pid> <line>   (a "prompt:" or "generated:" line the process wrote to its stdout or stderr)
 //   code    <pid> <path>   (a code file the process opened to read: .py, .pyc, a shared object)
+//   rd      <pid> <path>   (with EINSTEINOS_PROBE_FILES=1: a file the process opened to read)
+//   wr      <pid> <path>   (with EINSTEINOS_PROBE_FILES=1: a file the process opened to write)
+//   dir     <pid> <path>   (with EINSTEINOS_PROBE_FILES=1: a directory the process listed)
 // A runtime-API launch passes the kernel's host stub, whose ELF symbol is the kernel's
 // mangled name; the kernel resolves it from the object's symbol table when dladdr cannot.
 // Each (api, function) is logged once per process.
 #define _GNU_SOURCE
+#include <dirent.h>
 #include <dirent.h>
 #include <dlfcn.h>
 #include <link.h>
@@ -375,7 +379,44 @@ static int probe_code_path(const char *p) {
   return strstr(p, ".so") != NULL;
 }
 
+// what a build read and wrote: the kernel reuses a build whose inputs did not change
+// (verify_build_memo.go)
+static int probe_files = -1;
+static int probe_files_on(void) {
+  if (probe_files < 0) {
+    const char *v = getenv("EINSTEINOS_PROBE_FILES");
+    probe_files = v && v[0] == '1';
+  }
+  return probe_files;
+}
+
+static void probe_path_line(const char *kind, const char *path) {
+  if (probe_fd < 0 || !path) return;
+  char abs[4096];
+  const char *p = path;
+  if (path[0] != '/') {
+    char cwd[2048];
+    if (getcwd(cwd, sizeof cwd)) {
+      snprintf(abs, sizeof abs, "%s/%s", cwd, path);
+      p = abs;
+    }
+  }
+  size_t n = strlen(p) + 64;
+  char *line = malloc(n);
+  if (!line) return;
+  snprintf(line, n, "%s\t%d\t%s\n", kind, (int)getpid(), p);
+  probe_write(line);
+  free(line);
+}
+
+static void probe_file(const char *path, int flags) {
+  if (!probe_files_on()) return;
+  if ((flags & O_ACCMODE) == O_RDONLY && !(flags & O_CREAT)) probe_path_line("rd", path);
+  else probe_path_line("wr", path);
+}
+
 static void probe_code(const char *path, int flags) {
+  probe_file(path, flags);
   if (probe_fd < 0 || (flags & O_ACCMODE) != O_RDONLY || !probe_code_path(path)) return;
   char abs[4096];
   const char *p = path;
@@ -437,4 +478,43 @@ void *dlopen(const char *path, int mode) {
   if (h && path && dlinfo(h, RTLD_DI_LINKMAP, &lm) == 0 && lm && lm->l_name && lm->l_name[0] == '/')
     probe_code(lm->l_name, O_RDONLY);
   return h;
+}
+
+// fopen: glibc opens the file with its own __open, not open() above (sed, awk read so)
+static int probe_fopen_flags(const char *mode) {
+  if (!mode) return O_RDONLY;
+  if (mode[0] == 'r' && !strchr(mode, '+')) return O_RDONLY;
+  return O_WRONLY | O_CREAT;
+}
+typedef FILE *(*fopen_fn)(const char *, const char *);
+#define PROBE_FOPEN(name)                                   \
+  FILE *name(const char *path, const char *mode) {          \
+    PROBE_REAL(name, fopen_fn);                             \
+    FILE *f = real_##name(path, mode);                      \
+    if (f) probe_file(path, probe_fopen_flags(mode));       \
+    return f;                                               \
+  }
+PROBE_FOPEN(fopen)
+PROBE_FOPEN(fopen64)
+typedef FILE *(*freopen_fn)(const char *, const char *, FILE *);
+FILE *freopen(const char *path, const char *mode, FILE *s) {
+  PROBE_REAL(freopen, freopen_fn);
+  FILE *f = real_freopen(path, mode, s);
+  if (f && path) probe_file(path, probe_fopen_flags(mode));
+  return f;
+}
+typedef int (*creat_fn)(const char *, mode_t);
+int creat(const char *path, mode_t mode) {
+  PROBE_REAL(creat, creat_fn);
+  int fd = real_creat(path, mode);
+  if (fd >= 0) probe_file(path, O_WRONLY | O_CREAT);
+  return fd;
+}
+// a glob or ls lists a directory: a file added to it changes what the build does
+typedef DIR *(*opendir_fn)(const char *);
+DIR *opendir(const char *path) {
+  PROBE_REAL(opendir, opendir_fn);
+  DIR *d = real_opendir(path);
+  if (d && probe_files_on()) probe_path_line("dir", path);
+  return d;
 }

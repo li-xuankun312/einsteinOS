@@ -104,11 +104,14 @@ type probeLog struct {
 	Out map[int][]string
 	// Code: the code files (.py, .pyc, shared objects) each process opened to read
 	Code map[int][]string
+	// Read, Wrote, Listed: with EINSTEINOS_PROBE_FILES=1, the files the processes opened to
+	// read and to write and the directories they listed (verify_build_memo.go)
+	Read, Wrote, Listed map[string]bool
 }
 
 // readProbeLog parses the probe's log file; a missing file is an empty log.
 func readProbeLog(path string) probeLog {
-	pl := probeLog{Loaded: map[int]string{}, Out: map[int][]string{}, Code: map[int][]string{}}
+	pl := probeLog{Loaded: map[int]string{}, Out: map[int][]string{}, Code: map[int][]string{}, Read: map[string]bool{}, Wrote: map[string]bool{}, Listed: map[string]bool{}}
 	f, err := os.Open(path)
 	if err != nil {
 		return pl
@@ -117,6 +120,18 @@ func readProbeLog(path string) probeLog {
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 64*1024), 1024*1024)
 	for sc.Scan() {
+		if o := strings.SplitN(sc.Text(), "\t", 3); len(o) == 3 && (o[0] == "rd" || o[0] == "wr" || o[0] == "dir") {
+			p := filepath.Clean(o[2])
+			switch o[0] {
+			case "rd":
+				pl.Read[p] = true
+			case "wr":
+				pl.Wrote[p] = true
+			default:
+				pl.Listed[p] = true
+			}
+			continue
+		}
 		if o := strings.SplitN(sc.Text(), "\t", 3); len(o) == 3 && (o[0] == "out" || o[0] == "code") {
 			if pid, err := strconv.Atoi(o[1]); err == nil {
 				if o[0] == "out" {
