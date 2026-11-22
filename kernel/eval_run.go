@@ -37,6 +37,10 @@ type EvalBenchRun struct {
 	// Weights: the model weight files its processes opened or mapped (proc_watch.go)
 	Weights      []string `json:"weights,omitempty"`
 	GeneratedIDs []int    `json:"generated_ids,omitempty"`
+	// TokensBy: per process, the "prompt:" and "generated:" lines it printed (the launch
+	// probe's out lines); PromptIDs and GeneratedIDs are those of the process that ran the
+	// port on the model (eval_e2e_rate.go, e2eRunnerTokens)
+	TokensBy map[int][]string `json:"tokens_by,omitempty"`
 	// Loaders: the processes that opened or mapped weight files, each with whether it is the
 	// port's program and the ported kernels it launched itself (eval_e2e_loader.go)
 	Loaders []E2ELoader `json:"loaders,omitempty"`

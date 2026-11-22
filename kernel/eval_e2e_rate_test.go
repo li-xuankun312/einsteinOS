@@ -35,3 +35,41 @@ func TestTheEndToEndRateIsTheKernelsMeasurement(t *testing.T) {
 		t.Fatalf("a measured rate failed: %s", txt)
 	}
 }
+
+// 11/22 05:11-12:48: the port's runner (e2e_weights.py, which read the weights and launched
+// ported kernels) printed no ids; vllm, transformers or a forward pass written in python were
+// the processes that would have. Only the runner's printed ids are the port's output.
+func TestOnlyTheRunnersPrintedIDsAreThePortsOutput(t *testing.T) {
+	perUnit := map[string][]string{"u1": {"gdn_rec_kernel"}}
+	br := EvalBenchRun{Bench: EvalBench{File: "e2e.sh"}, ModelBytes: 100,
+		Loaders: []E2ELoader{
+			{PID: 7, Exe: "/usr/local/bin/python3.10", Cmdline: "python3 pytools/e2e_sub.py", Port: true, Weights: 26, TookBytes: 100, Seconds: 30},
+			{PID: 9, Exe: "/usr/local/bin/python3.10", Cmdline: "python3 pytools/e2e_weights.py", Port: true, Weights: 26, TookBytes: 100, PortKernels: []string{"gdn_rec_kernel"}, Seconds: 8},
+		},
+		TokensBy: map[int][]string{7: {"prompt: 1 2", "generated: 5 6 7"}}}
+	br.PromptIDs, br.GeneratedIDs = e2eRunnerTokens(br, perUnit)
+	if br.PromptIDs != nil || br.GeneratedIDs != nil {
+		t.Fatalf("another process's ids were taken: %v %v", br.PromptIDs, br.GeneratedIDs)
+	}
+	_, why := e2eMeasureRate(br, perUnit)
+	for _, w := range []string{"pid 9, python3 pytools/e2e_weights.py", "pid 7 /usr/local/bin/python3.10 (python3 pytools/e2e_sub.py): prompt: generated:"} {
+		if !strings.Contains(why, w) {
+			t.Fatalf("missing %q in %q", w, why)
+		}
+	}
+	br.TokensBy[9] = []string{"prompt: 1 2", "generated: 3 4 5 6"}
+	br.PromptIDs, br.GeneratedIDs = e2eRunnerTokens(br, perUnit)
+	if len(br.PromptIDs) != 2 || len(br.GeneratedIDs) != 4 || br.GeneratedIDs[0] != 3 {
+		t.Fatalf("the runner's ids: %v %v", br.PromptIDs, br.GeneratedIDs)
+	}
+	if m, why := e2eMeasureRate(br, perUnit); why != "" || m.Value != 0.5 {
+		t.Fatalf("4 ids over the runner's 8 s: %+v %q", m, why)
+	}
+}
+
+func TestWithoutTheProbesLinesTheOutputIsRead(t *testing.T) {
+	br := EvalBenchRun{PromptIDs: []int{1}, GeneratedIDs: []int{2}}
+	if p, g := e2eRunnerTokens(br, nil); len(p) != 1 || len(g) != 1 {
+		t.Fatalf("%v %v", p, g)
+	}
+}

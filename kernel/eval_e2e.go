@@ -73,12 +73,16 @@ func evalRunE2E(ws, unitID string) EvalBenchRun {
 		if !loaded && br.ProbeErr == "" {
 			br.ProbeErr = "no process of the run loaded it"
 		}
+		br.TokensBy = e2eOutFn(logPath)
 	}
 	br.ModelBytes = modelBytes(evalModel())
 	br.Loaders = e2eLoaders(ws, tr.Processes, byPID, started)
+	perUnit := e2ePortKernels(ws, unitID)
+	// the token ids are the runner's: what another process printed is not the port's output
+	br.PromptIDs, br.GeneratedIDs = e2eRunnerTokens(br, perUnit)
 	// the rate is the kernel's: what the script printed is kept, not judged
 	br.Printed, br.Metrics = br.Metrics, nil
-	if m, why := e2eMeasureRate(br, e2ePortKernels(ws, unitID)); why == "" {
+	if m, why := e2eMeasureRate(br, perUnit); why == "" {
 		br.Metrics = []Metric{m}
 	} else {
 		br.RateWhy = why
@@ -106,6 +110,8 @@ var (
 		}
 		return names, byPID, len(probeLoadedExes(pl)) > 0
 	}
+	// e2eOutFn reads, per process, the token lines a probe log records (a variable for tests)
+	e2eOutFn = func(logPath string) map[int][]string { return readProbeLog(logPath).Out }
 )
 
 // e2ePortKernels: per unit other than the integration unit, the kernels its port map gives as

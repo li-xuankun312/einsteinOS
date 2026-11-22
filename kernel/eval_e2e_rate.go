@@ -12,6 +12,7 @@ package kernel
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -23,7 +24,49 @@ const (
 	e2eRateNoLoaderWhy       = "no process of the workspace ran ported kernels on the weights"
 	e2eRateNoTokensWhy       = "it printed no generated token ids (\"generated: …\")"
 	e2eRateNoTimeWhy         = "the port's loading process was not seen running for any time"
+	// %[1]d the runner's pid, %[2]s its command line, %[3]s the processes that printed ids
+	e2eRateOthersTokensWhy = "the process that ran the port on the model (pid %[1]d, %[2]s) printed no generated token ids (\"generated: …\"); the ids in the output were printed by: %[3]s"
+	// %[1]d pid, %[2]s its executable, %[3]s its command line, %[4]s the lines' kinds
+	e2eTokensByFmt = "pid %[1]d %[2]s (%[3]s): %[4]s"
 )
+
+// e2eRunnerTokens: the prompt and generated ids the runner printed (the probe's out lines of
+// its pid). Without the probe's lines (an older probe log, a test) the run's output is read.
+func e2eRunnerTokens(br EvalBenchRun, perUnit map[string][]string) (prompt, generated []int) {
+	if br.TokensBy == nil {
+		return br.PromptIDs, br.GeneratedIDs
+	}
+	r, ok := e2eRunner(br, perUnit)
+	if !ok {
+		return nil, nil
+	}
+	return e2eTokens(strings.Join(br.TokensBy[r.PID], "\n"))
+}
+
+// e2eTokenPrinters: the processes that printed token lines, one entry each.
+func e2eTokenPrinters(br EvalBenchRun) string {
+	var pids []int
+	for pid := range br.TokensBy {
+		pids = append(pids, pid)
+	}
+	sort.Ints(pids)
+	exe := map[int]E2ELoader{}
+	for _, l := range br.Loaders {
+		exe[l.PID] = l
+	}
+	var out []string
+	for _, pid := range pids {
+		var kinds []string
+		for _, l := range br.TokensBy[pid] {
+			kinds = append(kinds, strings.TrimSpace(strings.SplitN(l, ":", 2)[0])+":")
+		}
+		out = append(out, fmt.Sprintf(e2eTokensByFmt, pid, exe[pid].Exe, exe[pid].Cmdline, strings.Join(kinds, " ")))
+	}
+	if len(out) == 0 {
+		return "no process"
+	}
+	return strings.Join(out, "; ")
+}
 
 // e2eMeasureRate: the rate of the port's process that ran the model (e2eRunner: it read the
 // weights and launched, itself, a kernel of every unit of perUnit) — the generated tokens over
@@ -33,6 +76,8 @@ func e2eMeasureRate(br EvalBenchRun, perUnit map[string][]string) (Metric, strin
 	switch {
 	case !ok:
 		return Metric{}, e2eRateNoLoaderWhy
+	case len(br.GeneratedIDs) == 0 && len(br.TokensBy) > 0:
+		return Metric{}, fmt.Sprintf(e2eRateOthersTokensWhy, r.PID, r.Cmdline, e2eTokenPrinters(br))
 	case len(br.GeneratedIDs) == 0:
 		return Metric{}, e2eRateNoTokensWhy
 	}
