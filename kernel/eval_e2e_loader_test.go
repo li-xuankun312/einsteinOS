@@ -62,11 +62,17 @@ func TestThePortsProcessesRunTheModel(t *testing.T) {
 	if k, _ := gate(faithful); k != "integration_e2e_loader_not_port" {
 		t.Fatalf("a pack older than the run counted: %q", k)
 	}
-	// a unit's kernels left to another process
+	// a unit's kernels left to its own test, beside the runner: the integration verifies its
+	// sub-units in many processes (whether every unit ran is e2ePortGate's question)
 	delete(launched, 400)
 	launched[400] = []string{"gdn_rec_kernel"}
-	if k, txt := gate([]ProcSeen{{PID: 400, Exe: ws + "/build/generate", Weights: shards}}); k == "" || !strings.Contains(txt, "uebd9b81357") {
-		t.Fatalf("a unit whose kernels the runner did not launch passed: %q %s", k, txt)
+	if k, txt := gate([]ProcSeen{{PID: 400, Exe: ws + "/build/generate", Weights: shards}, {PID: 302, Exe: ws + "/build/kv_q8_parity"}}); k != "" {
+		t.Fatalf("a runner beside a unit's test failed: %s", txt)
+	}
+	// a process that took the model but launched no ported kernel is not running the port
+	delete(launched, 400)
+	if k, _ := gate([]ProcSeen{{PID: 400, Exe: ws + "/build/generate", Weights: shards}}); k != "integration_e2e_loader_not_port" {
+		t.Fatalf("a runner that launched no ported kernel passed: %q", k)
 	}
 }
 

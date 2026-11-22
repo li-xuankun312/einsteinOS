@@ -47,9 +47,9 @@ type E2ELoader struct {
 
 const (
 	gateE2EReaderNotPortFmt = "integration_e2e_loader_not_port: in %[1]s a process that is not the port's read the model's weights — the weights are read by the port's own programs (an executable of the workspace, a process mapping a library it built, or an interpreter running a file of it); the processes that read weights or launched ported kernels:\n%[2]s"
-	gateE2ENoRunnerFmt      = "integration_e2e_loader_not_port: in %[1]s no process of the port both launched, itself, a ported kernel of every unit and took in the weights — the model's files, at least %[4]d%% of their bytes (what /proc/<pid>/io counts it reading, plus the most of its weight-file mappings /proc/<pid>/smaps shows resident, sampled every 50 ms), or a large file written during the run from them; the processes that read weights or launched ported kernels:\n%[2]s%[3]s"
+	gateE2ENoRunnerFmt      = "integration_e2e_loader_not_port: in %[1]s no process of the port both launched, itself, a ported kernel and took in the weights — the model's files, at least %[4]d%% of their bytes (what /proc/<pid>/io counts it reading, plus the most of its weight-file mappings /proc/<pid>/smaps shows resident, sampled every 50 ms), or a large file written during the run from them; the processes that read weights or launched ported kernels:\n%[2]s%[3]s"
 	e2eLoaderLineFmt        = "  pid %[1]d %[2]s (%[3]s): the port's: %[4]v; model weight files %[5]d; took in %[8]s of the model's %[9]s; large files written during the run %[6]d; kernels it launched itself: %[7]s"
-	e2eLoaderMissingFmt     = "\n  units none of whose kernels the port's process closest to it launched:\n%[1]s"
+	e2eLoaderMissingFmt     = "\n  units none of whose kernels the port's process that took in the most of the model launched (the run's other processes may launch them):\n%[1]s"
 )
 
 // e2eLoaders: the processes of the run that read weights, launched ported kernels or opened a
@@ -128,7 +128,10 @@ func e2eRunner(br EvalBenchRun, perUnit map[string][]string) (E2ELoader, bool) {
 	var best E2ELoader
 	found := false
 	for _, l := range br.Loaders {
-		if l.Port && (tookTheModel(l, br.ModelBytes) || len(l.Derived) > 0) && len(missingUnits(l, units, perUnit)) == 0 && (!found || l.Seconds > best.Seconds) {
+		// the runner launches ported kernels itself (when units ported any); that every unit's kernels ran is asked of the
+		// whole run (e2ePortGate) — the units' own tests, many processes, verify them beside it —
+		// and how many the runner covers is its direction's measure (eval_direction.go)
+		if l.Port && (tookTheModel(l, br.ModelBytes) || len(l.Derived) > 0) && (len(units) == 0 || len(missingUnits(l, units, perUnit)) < len(units)) && (!found || l.Seconds > best.Seconds) {
 			best, found = l, true
 		}
 	}
