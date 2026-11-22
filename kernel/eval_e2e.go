@@ -12,6 +12,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -75,6 +76,7 @@ func evalRunE2E(ws, unitID string) EvalBenchRun {
 		}
 		br.TokensBy = e2eOutFn(logPath)
 	}
+	log.Printf(e2eProcTimesFmt, script, time.Since(started).Round(time.Second), e2eProcTimes(tr.Processes, e2eProcTimesMin))
 	br.ModelBytes = modelBytes(evalModel())
 	br.Loaders = e2eLoaders(ws, tr.Processes, byPID, started)
 	if logPath != "" {
@@ -338,4 +340,37 @@ func e2eModelGate(br EvalBenchRun, modelDir string) (kind, text string) {
 		return "integration_e2e_other_model", fmt.Sprintf(gateE2EOtherModelFmt, br.Bench.File, modelDir, "opened none of its weight files")
 	}
 	return "", ""
+}
+
+const (
+	// %[1]s the script, %[2]s how long it ran, %[3]s its processes
+	e2eProcTimesFmt = "eval: %[1]s ran %[2]s; its processes seen running at least 1s, longest first: %[3]s"
+	// %[1]d pid, %[2]s executable, %[3]s command line, %[4]s how long the watcher saw it
+	e2eProcTimeFmt  = "pid %[1]d %[2]s (%[3]s) %[4]s"
+	e2eProcTimesMin = time.Second
+)
+
+// e2eProcTimes: the processes of the run the watcher saw running at least min, longest first —
+// 11/22 14:40 and 15:02 e2e.sh ran about 4 minutes where it had run 28 s, and which process
+// took them was not in the log.
+func e2eProcTimes(procs []ProcSeen, min time.Duration) string {
+	var ps []ProcSeen
+	for _, p := range procs {
+		if p.Last.Sub(p.First) >= min {
+			ps = append(ps, p)
+		}
+	}
+	sort.Slice(ps, func(i, j int) bool { return ps[i].Last.Sub(ps[i].First) > ps[j].Last.Sub(ps[j].First) })
+	var out []string
+	for _, p := range ps {
+		cmd := p.Cmdline
+		if len(cmd) > 160 {
+			cmd = cmd[:160] + "…"
+		}
+		out = append(out, fmt.Sprintf(e2eProcTimeFmt, p.PID, p.Exe, cmd, p.Last.Sub(p.First).Round(100*time.Millisecond)))
+	}
+	if len(out) == 0 {
+		return "none"
+	}
+	return strings.Join(out, "; ")
 }

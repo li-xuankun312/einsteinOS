@@ -79,3 +79,15 @@ func TestTheOtherImplementationGateNamesTheBranchFilesThatRanIt(t *testing.T) {
 		t.Fatalf("a run of the port alone failed: %q", k)
 	}
 }
+
+func TestTheRunsProcessesAreLoggedLongestFirst(t *testing.T) {
+	now := time.Now()
+	got := e2eProcTimes([]ProcSeen{
+		{PID: 1, Exe: "/bin/bash", Cmdline: "bash e2e.sh", First: now, Last: now.Add(240 * time.Second)},
+		{PID: 2, Exe: "/usr/bin/python3", Cmdline: "python3 pytools/e2e_infer.py", First: now, Last: now.Add(200 * time.Second)},
+		{PID: 3, Exe: "/usr/bin/cat", First: now, Last: now.Add(10 * time.Millisecond)},
+	}, time.Second)
+	if got != "pid 1 /bin/bash (bash e2e.sh) 4m0s; pid 2 /usr/bin/python3 (python3 pytools/e2e_infer.py) 3m20s" {
+		t.Fatalf("%q", got)
+	}
+}
