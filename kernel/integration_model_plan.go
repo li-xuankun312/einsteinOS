@@ -171,6 +171,9 @@ type IntegrationOp struct {
 // IntegrationModelPlan is the planner's answer, each line checked against what was measured.
 type IntegrationModelPlan struct {
 	Ops []IntegrationOp
+	// Unused: units none of whose kernels the model's forward needs — never a unit an op line
+	// uses, and never every unit
+	Unused []string
 }
 
 // parseIntegrationModel reads the planner's lines; a line naming a group, unit or kernel the
@@ -197,9 +200,42 @@ func parseIntegrationModel(out string, ms ModelShape, perUnit map[string][]strin
 				continue
 			}
 			p.Ops = append(p.Ops, IntegrationOp{Group: f[0], What: strings.TrimSpace(f[1])})
+		case strings.HasPrefix(l, "unused:"):
+			if u := strings.TrimSpace(strings.TrimPrefix(l, "unused:")); perUnit[u] != nil && !hasString(p.Unused, u) {
+				p.Unused = append(p.Unused, u)
+			}
 		}
 	}
+	// a unit an op line uses is used; and a model the port runs uses some unit's kernels
+	var keep []string
+	for _, u := range p.Unused {
+		used := false
+		for _, o := range p.Ops {
+			used = used || o.Unit == u
+		}
+		if !used {
+			keep = append(keep, u)
+		}
+	}
+	sort.Strings(keep)
+	if len(keep) >= len(perUnit) {
+		keep = nil
+	}
+	p.Unused = keep
 	return p
+}
+
+// e2eUsedPortKernels: e2ePortKernels without the units the planner found the model's forward
+// does not need (integrationAnswerOf). 11/22 every unit's kernels were asked of the end-to-end
+// run, the hyper-connection, per-layer-embedding and sparse-attention units' among them, which
+// a run of this model has no use for: e2e.sh ran each unit's parity binary on made-up data
+// (build/e2e_all_check) beside it to have them launched.
+func e2eUsedPortKernels(ws, unitID string) map[string][]string {
+	perUnit := e2ePortKernels(ws, unitID)
+	for _, u := range integrationAnswerOf(unitID).Unused {
+		delete(perUnit, u)
+	}
+	return perUnit
 }
 
 func hasString(l []string, s string) bool {
@@ -218,11 +254,13 @@ const (
 	integrationOpLineFmt = "  %[1]s: %[2]s %[3]s\n"
 	// %[1]s group, %[2]s what the model computes with it
 	integrationMissingLineFmt = "  %[1]s: no unit — %[2]s\n"
+	// %[1]d units, %[2]s their ids
+	integrationUnusedFmt = "%[1]d unit(s) whose kernels this model's forward does not need, so the end-to-end run is not asked to launch them: %[2]s\n"
 )
 
 // Block: the answer as the integration unit is given it.
 func (p IntegrationModelPlan) Block() string {
-	if len(p.Ops) == 0 {
+	if len(p.Ops) == 0 && len(p.Unused) == 0 {
 		return ""
 	}
 	var b strings.Builder
@@ -241,6 +279,9 @@ func (p IntegrationModelPlan) Block() string {
 		} else {
 			b.WriteString(fmt.Sprintf(integrationMissingLineFmt, o.Group, o.What))
 		}
+	}
+	if len(p.Unused) > 0 {
+		b.WriteString(fmt.Sprintf(integrationUnusedFmt, len(p.Unused), strings.Join(p.Unused, " ")))
 	}
 	return b.String()
 }

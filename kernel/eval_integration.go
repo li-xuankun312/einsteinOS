@@ -190,7 +190,7 @@ func evalIntegration(pid int64, repo, sha, devRepo, unitID string, benches []Eva
 		evalTokensAgreed = 0
 		k, t := e2eGates(repo, sha, ws, unitID, rec.E2E, prev)
 		if book != nil {
-			m := measureDirection(rec.E2E, e2ePortKernels(ws, unitID), evalTokensAgreed)
+			m := measureDirection(rec.E2E, e2eUsedPortKernels(ws, unitID), evalTokensAgreed)
 			d, progressed := book.noteDirection(key, k, time.Now(), m)
 			log.Printf(evalDirectionFmt, repo, shortSHA(sha), key, d.Verifications, d.Budget, m.TookPermille/10, m.Units, m.UnitsOf, m.Tokens, progressed)
 			if err := storeDirections(devRepo, book); err != nil {
@@ -254,8 +254,8 @@ func e2eGates(repo, sha, ws, unitID string, br EvalBenchRun, prev *EvalRecord) (
 		func() (string, string) { return e2eMachineGate(br) },
 		func() (string, string) { return e2eOtherImplGate(br, e2eModelNames()) },
 		func() (string, string) { return e2eModelGate(br, evalModel()) },
-		func() (string, string) { return e2ePortGate(br, e2ePortKernels(ws, unitID)) },
-		func() (string, string) { return e2eLoaderGate(br, e2ePortKernels(ws, unitID)) },
+		func() (string, string) { return e2ePortGate(br, e2eUsedPortKernels(ws, unitID)) },
+		func() (string, string) { return e2eLoaderGate(br, e2eUsedPortKernels(ws, unitID)) },
 		func() (string, string) { return e2eShardsGate(br, evalModel()) },
 		func() (string, string) { return e2eModelTakenGate(br, evalModel()) },
 		func() (string, string) { return e2eRateGate(br) },
