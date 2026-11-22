@@ -7,12 +7,14 @@
 //   launch  <pid> <api> <addr> <object base> <object path> <symbol or ->
 //   device  <pid> <path>   (a /dev node the process holds open right after a launch returned)
 //   out     <pid> <line>   (a "prompt:" or "generated:" line the process wrote to its stdout or stderr)
+//   code    <pid> <path>   (a code file the process opened to read: .py, .pyc, a shared object)
 // A runtime-API launch passes the kernel's host stub, whose ELF symbol is the kernel's
 // mangled name; the kernel resolves it from the object's symbol table when dladdr cannot.
 // Each (api, function) is logged once per process.
 #define _GNU_SOURCE
 #include <dirent.h>
 #include <dlfcn.h>
+#include <link.h>
 #include <fcntl.h>
 #include <pthread.h>
 #include <stdarg.h>
@@ -360,4 +362,79 @@ __attribute__((destructor)) static void probe_fini(void) {
   if (probe_fd < 0) return;
   for (int fd = 1; fd <= 2; fd++)
     if (probe_line_n[fd] && !probe_line_over[fd]) probe_out_line(probe_line[fd], probe_line_n[fd]);
+}
+
+// The code a process reads: whose implementation of the model it runs. 11/22 05:11-12:48 the
+// integration's e2e.sh imported vllm's and transformers' model code into processes the kernel
+// counted as the port's because the script they ran was a file of the workspace.
+static int probe_code_path(const char *p) {
+  if (!p) return 0;
+  size_t n = strlen(p);
+  if (n >= 3 && strcmp(p + n - 3, ".py") == 0) return 1;
+  if (n >= 4 && strcmp(p + n - 4, ".pyc") == 0) return 1;
+  return strstr(p, ".so") != NULL;
+}
+
+static void probe_code(const char *path, int flags) {
+  if (probe_fd < 0 || (flags & O_ACCMODE) != O_RDONLY || !probe_code_path(path)) return;
+  char abs[4096];
+  const char *p = path;
+  if (path[0] != '/') {
+    char cwd[2048];
+    if (getcwd(cwd, sizeof cwd)) {
+      snprintf(abs, sizeof abs, "%s/%s", cwd, path);
+      p = abs;
+    }
+  }
+  size_t n = strlen(p) + 64;
+  char *line = malloc(n);
+  if (!line) return;
+  snprintf(line, n, "code\t%d\t%s\n", (int)getpid(), p);
+  probe_write(line);
+  free(line);
+}
+
+typedef int (*open_fn)(const char *, int, ...);
+#define PROBE_OPEN(name)                                              \
+  int name(const char *path, int flags, ...) {                        \
+    PROBE_REAL(name, open_fn);                                        \
+    mode_t mode = 0;                                                  \
+    if (flags & (O_CREAT | O_TMPFILE)) {                              \
+      va_list ap;                                                     \
+      va_start(ap, flags);                                            \
+      mode = va_arg(ap, mode_t);                                      \
+      va_end(ap);                                                     \
+    }                                                                 \
+    int fd = real_##name(path, flags, mode);                          \
+    if (fd >= 0) probe_code(path, flags);                             \
+    return fd;                                                        \
+  }
+PROBE_OPEN(open)
+PROBE_OPEN(open64)
+typedef int (*openat_fn)(int, const char *, int, ...);
+#define PROBE_OPENAT(name)                                            \
+  int name(int dirfd, const char *path, int flags, ...) {             \
+    PROBE_REAL(name, openat_fn);                                      \
+    mode_t mode = 0;                                                  \
+    if (flags & (O_CREAT | O_TMPFILE)) {                              \
+      va_list ap;                                                     \
+      va_start(ap, flags);                                            \
+      mode = va_arg(ap, mode_t);                                      \
+      va_end(ap);                                                     \
+    }                                                                 \
+    int fd = real_##name(dirfd, path, flags, mode);                   \
+    if (fd >= 0 && (dirfd == AT_FDCWD || path[0] == '/')) probe_code(path, flags); \
+    return fd;                                                        \
+  }
+PROBE_OPENAT(openat)
+PROBE_OPENAT(openat64)
+typedef void *(*dlopen_fn)(const char *, int);
+void *dlopen(const char *path, int mode) {
+  PROBE_REAL(dlopen, dlopen_fn);
+  void *h = real_dlopen(path, mode);
+  struct link_map *lm = NULL;
+  // the library's own path: a bare name ("libm.so.6") is found on the search path
+  if (h && path && dlinfo(h, RTLD_DI_LINKMAP, &lm) == 0 && lm && lm->l_name && lm->l_name[0] == '/')
+    probe_code(lm->l_name, O_RDONLY);
+  return h;
 }

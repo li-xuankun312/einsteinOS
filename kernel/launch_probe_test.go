@@ -207,3 +207,44 @@ func TestAnOutLineKeepsItsTabs(t *testing.T) {
 		t.Fatalf("%+v", pl)
 	}
 }
+
+// TestTheProbeRecordsTheCodeAProcessReads: a python's imports (sources or their cached
+// bytecode), a library it loads by its bare name (by the library's own path) and a source a C
+// program opens are logged under the process that read them; a file written is not.
+func TestTheProbeRecordsTheCodeAProcessReads(t *testing.T) {
+	withProbeDir(t)
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("no python3")
+	}
+	dir := t.TempDir()
+	lib, err := launchProbeLib()
+	if err != nil {
+		t.Fatalf("launchProbeLib: %v", err)
+	}
+	os.MkdirAll(filepath.Join(dir, "pkg"), 0o755)
+	os.WriteFile(filepath.Join(dir, "pkg", "__init__.py"), []byte("X = 1\n"), 0o644)
+	logPath := filepath.Join(dir, "launch.log")
+	py := `import sys, ctypes; sys.path.insert(0, "` + dir + `"); import pkg; ctypes.CDLL("libc.so.6"); open("` + dir + `/written.py", "w").write("")`
+	if out, err := exec.Command("bash", "-c", launchProbeEnv(lib, logPath)+"python3 -B -c "+shq(py)).CombinedOutput(); err != nil {
+		t.Fatalf("run: %v\n%s", err, out)
+	}
+	pl := readProbeLog(logPath)
+	var all []string
+	for _, c := range pl.Code {
+		all = append(all, c...)
+	}
+	joined := strings.Join(all, "\n")
+	if !strings.Contains(joined, filepath.Join(dir, "pkg", "__init__.py")) {
+		t.Fatalf("the imported package's source is not recorded:\n%s", joined)
+	}
+	if strings.Contains(joined, "written.py") {
+		t.Fatalf("a file opened for writing is recorded:\n%s", joined)
+	}
+	libc := false
+	for _, c := range all {
+		libc = libc || (strings.HasPrefix(c, "/") && strings.Contains(filepath.Base(c), "libc.so.6"))
+	}
+	if !libc {
+		t.Fatalf("a library loaded by its bare name is not recorded by its path:\n%s", joined)
+	}
+}
