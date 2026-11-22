@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -86,5 +87,57 @@ func TestTheShapeIsReadOncePerFileSet(t *testing.T) {
 	}
 	if len(a.Tensors) != 3 || len(b.Tensors) != 2 {
 		t.Fatalf("a changed file set was not read again: %d then %d", len(a.Tensors), len(b.Tensors))
+	}
+}
+
+func TestTensorsDifferingOnlyByLayerFoldIntoOneLine(t *testing.T) {
+	ms := ModelShape{Tensors: []ModelTensor{
+		{Name: "model.layers.0.mlp.gate.weight", Dtype: "BF16", Shape: []int64{256, 2048}},
+		{Name: "model.layers.1.mlp.gate.weight", Dtype: "BF16", Shape: []int64{256, 2048}},
+		{Name: "model.layers.2.mlp.gate.weight", Dtype: "BF16", Shape: []int64{256, 2048}},
+		{Name: "model.layers.5.mlp.gate.weight", Dtype: "BF16", Shape: []int64{256, 2048}},
+		{Name: "model.layers.3.self_attn.q_proj.weight", Dtype: "BF16", Shape: []int64{8192, 2048}},
+		{Name: "model.norm.weight", Dtype: "BF16", Shape: []int64{2048}},
+	}}
+	got := ms.TensorLines()
+	want := "  model.layers.{i}.mlp.gate.weight BF16 [256,2048] ×4 {i}=0-2,5\n" +
+		"  model.layers.{i}.self_attn.q_proj.weight BF16 [8192,2048] ×1 {i}=3\n" +
+		"  model.norm.weight BF16 [2048] ×1 \n"
+	if got != want {
+		t.Fatalf("got\n%s\nwant\n%s", got, want)
+	}
+}
+
+func TestExpertsOfLayersAreGroupedWithTheirCount(t *testing.T) {
+	var ts []ModelTensor
+	for l := 0; l < 2; l++ {
+		for e := 0; e < 3; e++ {
+			ts = append(ts, ModelTensor{Name: "m.layers." + string(rune('0'+l)) + ".experts." + string(rune('0'+e)) + ".w", Dtype: "BF16", Shape: []int64{512, 2048}})
+		}
+	}
+	g := ModelShape{Tensors: ts}.TensorGroups()
+	if len(g) != 1 || g[0].Pattern != "m.layers.{i}.experts.{i}.w" || len(g[0].Indices) != 6 {
+		t.Fatalf("%+v", g)
+	}
+	if !strings.Contains(ModelShape{Tensors: ts}.TensorLines(), "×6 {i}=6") {
+		t.Fatalf("two-index groups should be counted: %s", ModelShape{Tensors: ts}.TensorLines())
+	}
+}
+
+func TestConfigIsFlattenedAndLongListsRunLength(t *testing.T) {
+	var lt []any
+	for i := 0; i < 40; i++ {
+		if i%4 == 3 {
+			lt = append(lt, "full_attention")
+		} else {
+			lt = append(lt, "linear_attention")
+		}
+	}
+	ms := ModelShape{Config: map[string]any{"model_type": "x", "text_config": map[string]any{"hidden_size": 2048.0, "layer_types": lt}, "architectures": []any{"A"}}}
+	got := ms.ConfigLines()
+	for _, w := range []string{"  architectures=[\"A\"]\n", "  model_type=\"x\"\n", "  text_config.hidden_size=2048\n", "  text_config.layer_types=[40: linear_attention×3,full_attention×1,"} {
+		if !strings.Contains(got, w) {
+			t.Fatalf("missing %q in\n%s", w, got)
+		}
 	}
 }

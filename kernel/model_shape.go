@@ -17,7 +17,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 )
 
@@ -135,4 +138,152 @@ func modelShapeOf(dir string) (ModelShape, error) {
 	modelShapeCache[key] = ms
 	modelShapeMu.Unlock()
 	return ms, nil
+}
+
+// modelIndexRe: a path segment of a tensor name that is a number (a layer's, an expert's).
+var modelIndexRe = regexp.MustCompile(`(^|\.)(\d+)(\.|$)`)
+
+// ModelTensorGroup: the tensors whose names differ only in their numeric segments, with one
+// dtype and shape.
+type ModelTensorGroup struct {
+	Pattern string  // the name, each numeric segment replaced by {i}
+	Dtype   string  // dtype
+	Shape   []int64 // shape
+	Indices []string
+}
+
+// TensorGroups folds the tensors into groups (sorted by pattern, then dtype and shape).
+func (ms ModelShape) TensorGroups() []ModelTensorGroup {
+	type key struct{ p, d, s string }
+	idx := map[key]*ModelTensorGroup{}
+	var keys []key
+	for _, t := range ms.Tensors {
+		var nums []string
+		p := t.Name
+		for {
+			loc := modelIndexRe.FindStringSubmatchIndex(p)
+			if loc == nil {
+				break
+			}
+			nums = append(nums, p[loc[4]:loc[5]])
+			p = p[:loc[4]] + "{i}" + p[loc[5]:]
+		}
+		k := key{p, t.Dtype, fmt.Sprint(t.Shape)}
+		g, ok := idx[k]
+		if !ok {
+			g = &ModelTensorGroup{Pattern: p, Dtype: t.Dtype, Shape: t.Shape}
+			idx[k] = g
+			keys = append(keys, k)
+		}
+		g.Indices = append(g.Indices, strings.Join(nums, ","))
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].p != keys[j].p {
+			return keys[i].p < keys[j].p
+		}
+		if keys[i].d != keys[j].d {
+			return keys[i].d < keys[j].d
+		}
+		return keys[i].s < keys[j].s
+	})
+	out := make([]ModelTensorGroup, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, *idx[k])
+	}
+	return out
+}
+
+// indexRanges writes single numeric indices as ranges ("0-3,5,7-9"); indices of more than one
+// segment are counted.
+func indexRanges(ix []string) string {
+	var ns []int
+	for _, s := range ix {
+		n, err := strconv.Atoi(s)
+		if err != nil {
+			return fmt.Sprintf("%d", len(ix))
+		}
+		ns = append(ns, n)
+	}
+	if len(ns) == 0 {
+		return ""
+	}
+	sort.Ints(ns)
+	var parts []string
+	for i := 0; i < len(ns); {
+		j := i
+		for j+1 < len(ns) && ns[j+1] == ns[j]+1 {
+			j++
+		}
+		if j == i {
+			parts = append(parts, strconv.Itoa(ns[i]))
+		} else {
+			parts = append(parts, fmt.Sprintf("%d-%d", ns[i], ns[j]))
+		}
+		i = j + 1
+	}
+	return strings.Join(parts, ",")
+}
+
+// %[1]s pattern, %[2]s dtype, %[3]s shape, %[4]d count, %[5]s the indices
+const modelTensorGroupFmt = "  %[1]s %[2]s %[3]s ×%[4]d %[5]s\n"
+
+// TensorLines: one line per group.
+func (ms ModelShape) TensorLines() string {
+	var b strings.Builder
+	for _, g := range ms.TensorGroups() {
+		ix := ""
+		if strings.Contains(g.Pattern, "{i}") {
+			ix = "{i}=" + indexRanges(g.Indices)
+		}
+		b.WriteString(fmt.Sprintf(modelTensorGroupFmt, g.Pattern, g.Dtype, strings.ReplaceAll(fmt.Sprint(g.Shape), " ", ","), len(g.Indices), ix))
+	}
+	return b.String()
+}
+
+// modelConfigListMax: a list in config.json longer than this is written run-length encoded.
+const modelConfigListMax = 16
+
+// ConfigLines: config.json flattened to key=value lines (nested objects by dotted keys,
+// sorted); a long list is written as runs ("full_attention×1,linear_attention×3,…").
+func (ms ModelShape) ConfigLines() string {
+	var lines []string
+	var walk func(prefix string, v any)
+	walk = func(prefix string, v any) {
+		switch x := v.(type) {
+		case map[string]any:
+			for k, vv := range x {
+				p := k
+				if prefix != "" {
+					p = prefix + "." + k
+				}
+				walk(p, vv)
+			}
+		case []any:
+			if len(x) <= modelConfigListMax {
+				b, _ := json.Marshal(x)
+				lines = append(lines, prefix+"="+string(b))
+				return
+			}
+			var runs []string
+			for i := 0; i < len(x); {
+				j := i
+				for j+1 < len(x) && fmt.Sprint(x[j+1]) == fmt.Sprint(x[i]) {
+					j++
+				}
+				runs = append(runs, fmt.Sprintf("%v×%d", x[i], j-i+1))
+				i = j + 1
+			}
+			lines = append(lines, fmt.Sprintf("%s=[%d: %s]", prefix, len(x), strings.Join(runs, ",")))
+		default:
+			b, _ := json.Marshal(x)
+			lines = append(lines, prefix+"="+string(b))
+		}
+	}
+	walk("", ms.Config)
+	sort.Strings(lines)
+	var b strings.Builder
+	for _, l := range lines {
+		b.WriteString("  " + l + "\n")
+	}
+	return b.String()
 }
