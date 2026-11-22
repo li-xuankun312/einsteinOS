@@ -26,3 +26,15 @@ func TestTheEndToEndRunPrintsItsTokens(t *testing.T) {
 		t.Fatalf("both lines: %v %v %q", p, g, k)
 	}
 }
+
+// 11/20 the unmeasured gate said the ids "could not be checked against an implementation from
+// outside the pipeline", and vllm entered e2e.sh as its correctness inference: the gate says
+// the kernel's judge runs the model's own implementation itself.
+func TestTheUnmeasuredCorrectnessSaysTheJudgeRunsTheModelItself(t *testing.T) {
+	k, txt := e2eTokensGate(EvalBenchRun{Bench: EvalBench{File: "e2e.sh"}, PromptIDs: []int{1}})
+	if k != "integration_correctness_unmeasured" || strings.Contains(txt, "outside the pipeline") ||
+		!strings.Contains(txt, "the process of e2e.sh that ran the port on the model printed no \"generated:\" line") ||
+		!strings.Contains(txt, "the kernel's judge runs the model's own implementation itself") {
+		t.Fatalf("%q %s", k, txt)
+	}
+}

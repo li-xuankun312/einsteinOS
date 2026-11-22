@@ -1,9 +1,11 @@
 package kernel
 
 // eval_tokens.go — the token ids the integration's end-to-end run printed: the prompt it was
-// given and the tokens it generated. They are what its output is checked against an
-// implementation from outside the pipeline with (eval_correct.go); a run that does not print
-// them has its correctness unmeasured.
+// given and the tokens it generated. The kernel checks them itself: its judge runs the model's
+// own implementation on that prompt in an environment of its own (eval_correct.go,
+// eval_judge.go); a run that does not print them has its correctness unmeasured. 11/20 the
+// gate said they "could not be checked against an implementation from outside the pipeline",
+// and 23:07 vllm entered e2e.sh as its "correctness inference" (cb0950d).
 
 import (
 	"fmt"
@@ -12,7 +14,8 @@ import (
 	"strings"
 )
 
-const gateCorrectnessUnmeasuredFmt = "integration_correctness_unmeasured: %[1]s printed no %[2]q line of token ids, so what it generated could not be checked against an implementation from outside the pipeline on the same prompt; output: %[3]s"
+// %[1]s the script, %[2]s the line, %[3]s the output
+const gateCorrectnessUnmeasuredFmt = "integration_correctness_unmeasured: the process of %[1]s that ran the port on the model printed no %[2]q line of token ids; the kernel's judge runs the model's own implementation itself, in an environment of its own, on the prompt that line gives and compares the ids; output: %[3]s"
 
 // e2eTokenLineRe: "<what>: <id> <id> …" on a line of its own (11/09: "generated: 220 248046 198 …")
 var e2eTokenLineRe = regexp.MustCompile(`(?m)^\s*(prompt|generated)\s*:\s*((?:\d+[\s,]*)+)$`)
