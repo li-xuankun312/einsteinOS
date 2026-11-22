@@ -238,3 +238,12 @@ func TestAFileTheJudgeCannotFetchIsReadFromItsWheelDirectory(t *testing.T) {
 		t.Fatalf("the file put there was not read: %q %v", b, err)
 	}
 }
+
+// 11/22 the judge's fetch said only why the proxy failed; the direct route had failed first
+func TestAFetchThatFailsSaysWhyOnEveryRoute(t *testing.T) {
+	t.Setenv("ALL_PROXY", "socks5://127.0.0.1:1")
+	_, err := judgeFetch("http://127.0.0.1:1/x.whl")
+	if err == nil || !strings.Contains(err.Error(), "directly: ") || !strings.Contains(err.Error(), "through socks5h://127.0.0.1:1: ") {
+		t.Fatalf("%v", err)
+	}
+}

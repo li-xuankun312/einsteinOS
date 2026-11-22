@@ -15,6 +15,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -95,7 +96,7 @@ func judgeGet(u string) ([]byte, error) {
 
 // judgeFetch: GET u directly, then through the machine's proxy.
 func judgeFetch(u string) ([]byte, error) {
-	var lastErr error
+	var errs []string
 	for _, proxy := range refFetchRoutes() {
 		tr := &http.Transport{}
 		if proxy != "" {
@@ -112,19 +113,21 @@ func judgeFetch(u string) ([]byte, error) {
 		resp, err := (&http.Client{Transport: tr}).Do(req)
 		if err != nil {
 			cancel()
-			lastErr = fmt.Errorf("%s: %v", refRouteName(proxy), err)
+			errs = append(errs, fmt.Sprintf("%s: %v", refRouteName(proxy), err))
 			continue
 		}
 		b, err := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		cancel()
 		if err != nil || resp.StatusCode != http.StatusOK {
-			lastErr = fmt.Errorf("%s: %s: HTTP %d %v", refRouteName(proxy), u, resp.StatusCode, err)
+			errs = append(errs, fmt.Sprintf("%s: %s: HTTP %d %v", refRouteName(proxy), u, resp.StatusCode, err))
 			continue
 		}
 		return b, nil
 	}
-	return nil, lastErr
+	// every route's failure: 11/22 16:58 and 19:14 only the proxy's was given, and the direct
+	// route — which curl took in 2 s at 22:3x — failed unseen
+	return nil, errors.New(strings.Join(errs, "; "))
 }
 
 type judgeRelease struct {
