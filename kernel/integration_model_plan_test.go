@@ -1,6 +1,7 @@
 package kernel
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -109,5 +110,20 @@ func TestUnitsTheModelDoesNotUseAreNotAskedOfTheEndToEndRun(t *testing.T) {
 	}
 	if k, txt := e2ePortGate(br, used); k != "" {
 		t.Fatalf("the used units' kernels ran: %q %s", k, txt)
+	}
+}
+
+func TestThePartsOfTheProgramAreGivenWithTheSpawnLimits(t *testing.T) {
+	p := parseIntegrationModel("part: loader: maps the safetensors shards and uploads each tensor\npart: : nothing\npart: gdn layers: linear attention with the gdn kernels\n", ModelShape{}, nil)
+	if len(p.Parts) != 2 {
+		t.Fatalf("%v", p.Parts)
+	}
+	pol := DefaultSpawnPolicy()
+	blk := p.Block()
+	for _, w := range []string{fmt.Sprintf("in the planner's 2 part(s) (the conversation commands start at most %d work conversations from this one, %d in its tree)", pol.MaxChildren, pol.MaxTree),
+		"  loader: maps the safetensors shards and uploads each tensor\n", "  gdn layers: linear attention with the gdn kernels\n"} {
+		if !strings.Contains(blk, w) {
+			t.Fatalf("missing %q in\n%s", w, blk)
+		}
 	}
 }

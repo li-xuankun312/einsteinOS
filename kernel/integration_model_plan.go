@@ -174,6 +174,8 @@ type IntegrationModelPlan struct {
 	// Unused: units none of whose kernels the model's forward needs — never a unit an op line
 	// uses, and never every unit
 	Unused []string
+	// Parts: how the program that runs the model divides, "<name>: <what it does>"
+	Parts []string
 }
 
 // parseIntegrationModel reads the planner's lines; a line naming a group, unit or kernel the
@@ -200,6 +202,10 @@ func parseIntegrationModel(out string, ms ModelShape, perUnit map[string][]strin
 				continue
 			}
 			p.Ops = append(p.Ops, IntegrationOp{Group: f[0], What: strings.TrimSpace(f[1])})
+		case strings.HasPrefix(l, "part:"):
+			if f := strings.SplitN(strings.TrimSpace(strings.TrimPrefix(l, "part:")), ":", 2); len(f) == 2 && strings.TrimSpace(f[0]) != "" && strings.TrimSpace(f[1]) != "" {
+				p.Parts = append(p.Parts, strings.TrimSpace(f[0])+": "+strings.TrimSpace(f[1]))
+			}
 		case strings.HasPrefix(l, "unused:"):
 			if u := strings.TrimSpace(strings.TrimPrefix(l, "unused:")); perUnit[u] != nil && !hasString(p.Unused, u) {
 				p.Unused = append(p.Unused, u)
@@ -256,11 +262,13 @@ const (
 	integrationMissingLineFmt = "  %[1]s: no unit — %[2]s\n"
 	// %[1]d units, %[2]s their ids
 	integrationUnusedFmt = "%[1]d unit(s) whose kernels this model's forward does not need, so the end-to-end run is not asked to launch them: %[2]s\n"
+	// %[1]d parts, %[2]d the spawn policy's children, %[3]d its tree
+	integrationPartsFmt = "the program that runs the model, in the planner's %[1]d part(s) (the conversation commands start at most %[2]d work conversations from this one, %[3]d in its tree):\n"
 )
 
 // Block: the answer as the integration unit is given it.
 func (p IntegrationModelPlan) Block() string {
-	if len(p.Ops) == 0 && len(p.Unused) == 0 {
+	if len(p.Ops) == 0 && len(p.Unused) == 0 && len(p.Parts) == 0 {
 		return ""
 	}
 	var b strings.Builder
@@ -282,6 +290,13 @@ func (p IntegrationModelPlan) Block() string {
 	}
 	if len(p.Unused) > 0 {
 		b.WriteString(fmt.Sprintf(integrationUnusedFmt, len(p.Unused), strings.Join(p.Unused, " ")))
+	}
+	if len(p.Parts) > 0 {
+		pol := DefaultSpawnPolicy()
+		b.WriteString(fmt.Sprintf(integrationPartsFmt, len(p.Parts), pol.MaxChildren, pol.MaxTree))
+		for _, s := range p.Parts {
+			b.WriteString("  " + s + "\n")
+		}
 	}
 	return b.String()
 }
