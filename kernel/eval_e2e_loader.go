@@ -43,6 +43,11 @@ type E2ELoader struct {
 	// TookBytes: what it took in — the bytes it read plus the most of its weight mappings
 	// resident at once (ProcSeen.ReadBytes + MappedWeightBytes)
 	TookBytes int64 `json:"took_bytes,omitempty"`
+	// OtherCode: the code files outside the workspace it read that name the model (another
+	// implementation of it, eval_e2e_other.go) — a process that has any is not the port's;
+	// Scripts: the files of the workspace it was started on
+	OtherCode []string `json:"other_code,omitempty"`
+	Scripts   []string `json:"scripts,omitempty"`
 }
 
 const (
@@ -65,6 +70,7 @@ func e2eLoaders(ws string, procs []ProcSeen, launchedBy map[int][]string, since 
 		l := E2ELoader{PID: p.PID, Exe: p.Exe, Cmdline: p.Cmdline, Weights: len(p.Weights), WeightFiles: p.Weights,
 			Seconds: p.Last.Sub(p.First).Seconds(), TookBytes: p.ReadBytes + p.MappedWeightBytes}
 		l.Port = (root != "" && strings.HasPrefix(p.Exe, root+"/")) || len(p.WorkspaceLibs) > 0 || len(p.WorkspaceArgs) > 0
+		l.Scripts = p.WorkspaceArgs
 		for _, f := range p.Large {
 			if st, err := os.Stat(f); err == nil && st.ModTime().After(since.Add(-machineClockSlack)) {
 				l.Derived = append(l.Derived, f)
