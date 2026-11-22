@@ -114,3 +114,29 @@ func TestWithThePlannersAnswerTheRunnerLaunchesEveryUsedUnit(t *testing.T) {
 		t.Fatal("every used unit launched, and no runner")
 	}
 }
+
+// the op lines name the kernel each tensor group is computed with: a runner that launched one
+// kernel of each unit and computed the rest in python is not the runner
+func TestTheRunnerLaunchesEveryKernelTheOpLinesName(t *testing.T) {
+	perUnit := map[string][]string{"u_gdn": {"gdn_step", "gdn_conv"}, "u_moe": {"moe_k"}}
+	a := IntegrationModelPlan{Ops: []IntegrationOp{{Group: "a", Unit: "u_gdn", Kernel: "gdn_step"}, {Group: "b", Unit: "u_gdn", Kernel: "gdn_conv"},
+		{Group: "c", Unit: "u_moe", Kernel: "moe_k"}, {Group: "d", Unit: "u_gone", Kernel: "x"}, {Group: "e", What: "q norm"}}}
+	ks := a.opKernels(perUnit)
+	if strings.Join(ks, " ") != "gdn_conv gdn_step moe_k" {
+		t.Fatalf("%v", ks)
+	}
+	br := EvalBenchRun{ModelBytes: 100, RunnerAllUnits: true, RunnerKernels: ks, Loaders: []E2ELoader{
+		{PID: 9, Port: true, Weights: 26, TookBytes: 100, PortKernels: []string{"gdn_step", "moe_k"}, Seconds: 8},
+	}}
+	if _, ok := e2eRunner(br, perUnit); ok {
+		t.Fatal("a process that did not launch gdn_conv is the runner")
+	}
+	k, txt := e2eLoaderGate(br, perUnit)
+	if k != "integration_e2e_loader_not_port" || !strings.Contains(txt, "of the 3 kernels the planner's op lines name for the model's tensor groups, 1 the port's process that took in the most of the model did not launch itself: gdn_conv") {
+		t.Fatalf("%q %s", k, txt)
+	}
+	br.Loaders[0].PortKernels = append(br.Loaders[0].PortKernels, "gdn_conv")
+	if _, ok := e2eRunner(br, perUnit); !ok {
+		t.Fatal("every named kernel launched, and no runner")
+	}
+}

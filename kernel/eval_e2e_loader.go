@@ -54,7 +54,9 @@ const (
 	gateE2EReaderNotPortFmt = "integration_e2e_loader_not_port: in %[1]s a process that is not the port's read the model's weights — the weights are read by the port's own programs (an executable of the workspace, a process mapping a library it built, or an interpreter running a file of it); the processes that read weights or launched ported kernels:\n%[2]s"
 	gateE2ENoRunnerFmt      = "integration_e2e_loader_not_port: in %[1]s no process of the port both launched, itself, a ported kernel and took in the weights — the model's files, at least %[4]d%% of their bytes (what /proc/<pid>/io counts it reading, plus the most of its weight-file mappings /proc/<pid>/smaps shows resident, sampled every 50 ms), or a large file written during the run from them; the processes that read weights or launched ported kernels:\n%[2]s%[3]s"
 	e2eLoaderLineFmt        = "  pid %[1]d %[2]s (%[3]s): the port's: %[4]v; model weight files %[5]d; took in %[8]s of the model's %[9]s; large files written during the run %[6]d; kernels it launched itself: %[7]s"
-	e2eLoaderMissingFmt     = "\n  units none of whose kernels the port's process that took in the most of the model launched (the run's other processes may launch them):\n%[1]s"
+	// %[1]d kernels not launched, %[2]d named, %[3]s them
+	e2eLoaderMissingKernelsFmt = "\n  of the %[2]d kernels the planner's op lines name for the model's tensor groups, %[1]d the port's process that took in the most of the model did not launch itself: %[3]s"
+	e2eLoaderMissingFmt        = "\n  units none of whose kernels the port's process that took in the most of the model launched (the run's other processes may launch them):\n%[1]s"
 )
 
 // e2eLoaders: the processes of the run that read weights, launched ported kernels or opened a
@@ -123,6 +125,17 @@ func missingUnits(l E2ELoader, units []string, perUnit map[string][]string) []st
 	return missing
 }
 
+// missingKernels: of ks, the kernels l did not launch.
+func missingKernels(l E2ELoader, ks []string) []string {
+	var out []string
+	for _, k := range ks {
+		if !hasString(l.PortKernels, k) {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
 // e2eRunner: the port's process that launched a kernel of every unit and read the weights
 // (the longest seen running, when more than one did). Without the planner's answer it is one
 // that launched a kernel of some unit; with it, of every unit the model uses: 11/22 15:07
@@ -143,8 +156,9 @@ func e2eRunner(br EvalBenchRun, perUnit map[string][]string) (E2ELoader, bool) {
 		covers := len(units) == 0 || len(missingUnits(l, units, perUnit)) < len(units)
 		if br.RunnerAllUnits {
 			// the planner answered which units this model's forward uses (integration_model_plan.go):
-			// the process that runs it launches a kernel of each of them itself
-			covers = len(missingUnits(l, units, perUnit)) == 0
+			// the process that runs it launches a kernel of each of them itself, and every kernel
+			// its op lines name for a tensor group of the model
+			covers = len(missingUnits(l, units, perUnit)) == 0 && len(missingKernels(l, br.RunnerKernels)) == 0
 		}
 		if l.Port && (tookTheModel(l, br.ModelBytes) || len(l.Derived) > 0) && covers && (!found || l.Seconds > best.Seconds) {
 			best, found = l, true
@@ -176,6 +190,19 @@ func e2eLoaderGate(br EvalBenchRun, perUnit map[string][]string) (kind, text str
 		}
 	}
 	miss := ""
+	if br.RunnerAllUnits && len(br.RunnerKernels) > 0 {
+		// the kernels the planner's op lines name that the port's process taking in the most
+		// of the model did not launch
+		var top E2ELoader
+		for _, l := range br.Loaders {
+			if l.Port && l.TookBytes >= top.TookBytes {
+				top = l
+			}
+		}
+		if mk := missingKernels(top, br.RunnerKernels); len(mk) > 0 {
+			miss += fmt.Sprintf(e2eLoaderMissingKernelsFmt, len(mk), len(br.RunnerKernels), strings.Join(mk, " "))
+		}
+	}
 	if len(best) > 0 {
 		var ml []string
 		for _, u := range best {

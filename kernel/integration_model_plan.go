@@ -325,3 +325,15 @@ func (p IntegrationModelPlan) counts() string {
 	}
 	return fmt.Sprintf("op %d, missing %d, unused %d (%s), part %d, dropped %d", op, missing, len(p.Unused), strings.Join(p.Unused, " "), len(p.Parts), p.Dropped)
 }
+
+// opKernels: the distinct kernels the op lines name, of the units in perUnit, sorted.
+func (p IntegrationModelPlan) opKernels(perUnit map[string][]string) []string {
+	var out []string
+	for _, o := range p.Ops {
+		if o.Unit != "" && perUnit[o.Unit] != nil && !hasString(out, o.Kernel) {
+			out = append(out, o.Kernel)
+		}
+	}
+	sort.Strings(out)
+	return out
+}

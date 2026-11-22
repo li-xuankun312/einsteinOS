@@ -86,6 +86,7 @@ func evalRunE2E(ws, unitID string) EvalBenchRun {
 	perUnit := e2eUsedPortKernels(ws, unitID)
 	if a := integrationAnswerOf(unitID); len(a.Ops) > 0 {
 		br.RunnerAllUnits = true
+		br.RunnerKernels = a.opKernels(perUnit)
 	}
 	// the token ids are the runner's: what another process printed is not the port's output
 	br.PromptIDs, br.GeneratedIDs = e2eRunnerTokens(br, perUnit)
