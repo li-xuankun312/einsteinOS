@@ -113,10 +113,10 @@ func askIntegrationModel(pid int64, repo string, plan *DevPlan, data, theory str
 // gates, which run in the same process after the unit's prompt).
 var (
 	integrationAnswersMu sync.Mutex
-	integrationAnswers   = map[string]string{}
+	integrationAnswers   = map[string]IntegrationModelPlan{}
 )
 
-func integrationAnswerOf(unitID string) string {
+func integrationAnswerOf(unitID string) IntegrationModelPlan {
 	integrationAnswersMu.Lock()
 	defer integrationAnswersMu.Unlock()
 	return integrationAnswers[unitID]
@@ -125,24 +125,24 @@ func integrationAnswerOf(unitID string) string {
 // integrationModelAnswer asks (or reads back) the planner's answer for the integration unit:
 // the model as measured, the kernels each unit ported on the dev branch and the reference
 // files they came from, and the theory stored there.
-func (r *devRun) integrationModelAnswer(unit DevPlanNode) string {
+func (r *devRun) integrationModelAnswer(unit DevPlanNode) IntegrationModelPlan {
 	ms, err := modelShapeOf(evalModel())
 	if err != nil {
-		return ""
+		return IntegrationModelPlan{}
 	}
 	dir, err := devRepoLocalDir(r.devRepo)
 	if err != nil {
-		return ""
+		return IntegrationModelPlan{}
 	}
 	tree, err := branchTree(dir, r.branch)
 	if err != nil {
 		log.Printf("dev_from_theorems: %s: the branch could not be read for the planner's question on the model (%v)", r.repo, err)
-		return ""
+		return IntegrationModelPlan{}
 	}
 	defer os.RemoveAll(tree)
 	perUnit := e2ePortKernels(tree, unit.ID)
 	if len(perUnit) == 0 {
-		return ""
+		return IntegrationModelPlan{}
 	}
 	sources := map[string][]string{}
 	for _, l := range r.plan.Leaves() {
@@ -155,8 +155,92 @@ func (r *devRun) integrationModelAnswer(unit DevPlanNode) string {
 	if fresh && out != "" {
 		devPlanSave(r.repo, r.devRepo, r.branch, r.plan, "plan: the planner's answer on how the port runs the model")
 	}
+	p := parseIntegrationModel(out, ms, perUnit)
 	integrationAnswersMu.Lock()
-	integrationAnswers[unit.ID] = out
+	integrationAnswers[unit.ID] = p
 	integrationAnswersMu.Unlock()
-	return out
+	return p
+}
+
+// IntegrationOp: a tensor group of the model and the unit kernel the planner found computing
+// with it; Unit is empty for a group no unit's kernel computes with (What says what).
+type IntegrationOp struct {
+	Group, Unit, Kernel, What string
+}
+
+// IntegrationModelPlan is the planner's answer, each line checked against what was measured.
+type IntegrationModelPlan struct {
+	Ops []IntegrationOp
+}
+
+// parseIntegrationModel reads the planner's lines; a line naming a group, unit or kernel the
+// data does not have is dropped.
+func parseIntegrationModel(out string, ms ModelShape, perUnit map[string][]string) IntegrationModelPlan {
+	groups := map[string]bool{}
+	for _, g := range ms.TensorGroups() {
+		groups[g.Pattern] = true
+	}
+	var p IntegrationModelPlan
+	for _, raw := range strings.Split(out, "\n") {
+		l := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(raw), "- "))
+		l = strings.TrimSpace(strings.Trim(l, "`"))
+		switch {
+		case strings.HasPrefix(l, "op:"):
+			f := strings.Fields(strings.TrimPrefix(l, "op:"))
+			if len(f) != 3 || !groups[f[0]] || !hasString(perUnit[f[1]], f[2]) {
+				continue
+			}
+			p.Ops = append(p.Ops, IntegrationOp{Group: f[0], Unit: f[1], Kernel: f[2]})
+		case strings.HasPrefix(l, "missing:"):
+			f := strings.SplitN(strings.TrimSpace(strings.TrimPrefix(l, "missing:")), " ", 2)
+			if len(f) != 2 || !groups[f[0]] {
+				continue
+			}
+			p.Ops = append(p.Ops, IntegrationOp{Group: f[0], What: strings.TrimSpace(f[1])})
+		}
+	}
+	return p
+}
+
+func hasString(l []string, s string) bool {
+	for _, x := range l {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}
+
+const (
+	// %[1]d groups with a unit kernel, %[2]d groups no unit's kernel computes with
+	integrationOpsHeadFmt = "[THE MODEL ON THE PORT — a planner's answer to the kernel's question, given the model and the units' kernels as measured: %[1]d tensor-group use(s) by a unit's kernel, %[2]d by none, which this unit writes]\n"
+	// %[1]s group, %[2]s unit, %[3]s kernel
+	integrationOpLineFmt = "  %[1]s: %[2]s %[3]s\n"
+	// %[1]s group, %[2]s what the model computes with it
+	integrationMissingLineFmt = "  %[1]s: no unit — %[2]s\n"
+)
+
+// Block: the answer as the integration unit is given it.
+func (p IntegrationModelPlan) Block() string {
+	if len(p.Ops) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	have, none := 0, 0
+	for _, o := range p.Ops {
+		if o.Unit != "" {
+			have++
+		} else {
+			none++
+		}
+	}
+	b.WriteString(fmt.Sprintf(integrationOpsHeadFmt, have, none))
+	for _, o := range p.Ops {
+		if o.Unit != "" {
+			b.WriteString(fmt.Sprintf(integrationOpLineFmt, o.Group, o.Unit, o.Kernel))
+		} else {
+			b.WriteString(fmt.Sprintf(integrationMissingLineFmt, o.Group, o.What))
+		}
+	}
+	return b.String()
 }
