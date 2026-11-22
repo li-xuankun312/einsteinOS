@@ -141,3 +141,17 @@ func TestConfigIsFlattenedAndLongListsRunLength(t *testing.T) {
 		}
 	}
 }
+
+func TestTheIntegrationUnitIsToldTheModelAsMeasured(t *testing.T) {
+	dir := writeModelDir(t)
+	got := integrationModelBlock(dir)
+	for _, w := range []string{"config.json and the headers of its 2 safetensors file(s), 3 tensor(s)", "  model_type=\"x_moe\"\n", "  text_config.hidden_size=2048\n",
+		"  model.layers.{i}.mlp.gate.weight BF16 [256,2048] ×2 {i}=0-1\n", "  model.embed_tokens.weight BF16 [248320,2048] ×1"} {
+		if !strings.Contains(got, w) {
+			t.Fatalf("missing %q in\n%s", w, got)
+		}
+	}
+	if got := integrationModelBlock(t.TempDir()); !strings.Contains(got, "could not be measured") {
+		t.Fatalf("an unmeasured model should say so: %s", got)
+	}
+}

@@ -250,7 +250,28 @@ func (u UnitRequirements) IntegrationBlock(repo, sha, unitID string) string {
 	}
 	name, _, _, _ := readModelConditions(evalModel())
 	b.WriteString(fmt.Sprintf(integrationE2ELine, devE2EScript(unitID), evalModel(), name))
+	b.WriteString(integrationModelBlock(evalModel()))
 	return b.String()
+}
+
+const (
+	// %[1]s the model directory, %[2]d safetensors files, %[3]d tensors, %[4]s config.json's
+	// lines, %[5]s the tensor groups
+	integrationModelFmt = "[MODEL — measured from %[1]s: config.json and the headers of its %[2]d safetensors file(s), %[3]d tensor(s)]\nconfig.json:\n%[4]stensors (name, dtype, shape, count, the numeric segments' values):\n%[5]s"
+	// %[1]s the model directory, %[2]s why it was not measured
+	integrationModelUnmeasuredFmt = "[MODEL — %[1]s could not be measured: %[2]s]\n"
+)
+
+// integrationModelShapeFn measures the model (a variable for tests)
+var integrationModelShapeFn = modelShapeOf
+
+// integrationModelBlock: what the model on this machine is, measured from its own files.
+func integrationModelBlock(dir string) string {
+	ms, err := integrationModelShapeFn(dir)
+	if err != nil {
+		return fmt.Sprintf(integrationModelUnmeasuredFmt, dir, err)
+	}
+	return fmt.Sprintf(integrationModelFmt, dir, len(ms.Files), len(ms.Tensors), ms.ConfigLines(), ms.TensorLines())
 }
 
 // integrationTestSymbols: the code files the required tests are built from (vendored ones
