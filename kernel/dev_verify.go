@@ -769,17 +769,28 @@ func devVerifyOnly(cloneDir, mirror, branch, baseRef, unitID, gpuUsable string, 
 		log.Printf("dev_verify: unit %s: %d file(s) of its delta changed on %s since its mirror was primed (%s) — not verified over them", unitID, len(moved), baseRef, strings.Join(moved, " "))
 		return out
 	}
-	ws, err := assembleWorkspace(cloneDir, mirror, changed, removed)
+	ws, seeded, done, err := assembleWorkspaceKept(unitID, cloneDir, mirror, changed, removed)
 	if err != nil {
 		out.Err = fmt.Errorf("assemble workspace: %w", err)
 		return out
 	}
-	defer os.RemoveAll(ws)
-
-	log.Printf("dev_verify: unit %s: %d file(s) changed%s, %d removed; verifying %s on the real machine",
-		unitID, len(changed), changedFilesText(changed), len(removed), ws)
+	files := unitFiles(changed, removed, devUnitPriorFiles(cloneDir, baseRef, unitID))
+	log.Printf("dev_verify: unit %s: %d file(s) changed%s, %d removed; verifying %s on the real machine%s",
+		unitID, len(changed), changedFilesText(changed), len(removed), ws, map[bool]string{true: " (on the build directory of its last verification)", false: ""}[seeded])
 	// the gates judge the unit's code, not this attempt's edit of it (unitFiles)
-	out.Result = runUnitVerifyWith(ws, unitID, gpuUsable, req, unitFiles(changed, removed, devUnitPriorFiles(cloneDir, baseRef, unitID)), 60*time.Minute, 60*time.Minute)
+	out.Result = runUnitVerifyWith(ws, unitID, gpuUsable, req, files, 60*time.Minute, 60*time.Minute)
+	done()
+	if seeded && out.Result.Passed() {
+		// a pass on the last build's directory counts once it passes from nothing
+		log.Printf("dev_verify: unit %s passed on the build directory of its last verification — verified again from nothing before it counts", unitID)
+		fresh, ferr := assembleWorkspace(cloneDir, mirror, changed, removed)
+		if ferr != nil {
+			out.Err = fmt.Errorf("assemble workspace: %w", ferr)
+			return out
+		}
+		defer os.RemoveAll(fresh)
+		out.Result = runUnitVerifyWith(fresh, unitID, gpuUsable, req, files, 60*time.Minute, 60*time.Minute)
+	}
 	out.Status = out.Result.Status()
 	log.Printf("dev_verify: unit %s: compile=%s (exit %d) smoke=%s (exit %d) in %s; %s; devices opened %v; kernels launched: %s",
 		unitID, out.Result.Compile, out.Result.BuildExit, out.Result.Smoke, out.Result.TestExit, out.Result.Elapsed.Round(time.Second),
