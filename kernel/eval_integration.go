@@ -178,7 +178,7 @@ func evalIntegration(pid int64, repo, sha, devRepo, unitID string, benches []Eva
 		if dir, err := evalStateDir(devRepo); err == nil {
 			book = loadDirections(dir, unitID)
 		}
-		key := directionKey(ws, rec.E2E)
+		key := directionKey(ws, rec.E2E, e2eUsedPortKernels(ws, unitID))
 		if book != nil && book.Dirs[key].Closed() {
 			// a closed direction is rejected as measured, its gates not run again
 			k, t := directionClosedGate(rec.E2E.Bench.File, book.Dirs[key])

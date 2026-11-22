@@ -153,30 +153,47 @@ func directionProgram(ws string, l E2ELoader) string {
 	return name + " [" + kind + "]"
 }
 
-// directionKey: the run's direction — its processes that read the model (its weight files, or
-// a conversion of them written during the run), named by directionProgram, sorted, without
-// repeats. A process that only launched ported kernels — a unit's parity binary, a test of a
-// sub-unit — verifies the units and is not the direction: the integration runs many of them,
-// and with them in the key, adding or dropping one test made a new direction of the same
-// way of running the model.
-func directionKey(ws string, br EvalBenchRun) string {
-	seen := map[string]bool{}
-	var progs []string
+// directionKey: the run's direction — the program of the process that runs the model: the
+// runner (e2eRunner), else the process that took in the most of the model (a port's first, then
+// the one that launched the most ported kernels, then the longest seen), named by
+// directionProgram. 11/22 18:42 one more script that opened the weight files
+// (pytools/e2e_port_check.py, 2.7 s) beside pytools/e2e_infer.py, whose direction had closed at
+// 18:11, was a new direction with a new budget: the processes that read the model were the key.
+// A unit's parity binary, a helper reading the files, a script renamed around the same runner
+// are the same direction.
+func directionKey(ws string, br EvalBenchRun, perUnit map[string][]string) string {
+	if r, ok := e2eRunner(br, perUnit); ok {
+		return directionProgram(ws, r)
+	}
+	var best E2ELoader
+	found := false
+	better := func(a, b E2ELoader) bool {
+		if a.TookBytes != b.TookBytes {
+			return a.TookBytes > b.TookBytes
+		}
+		if a.Port != b.Port {
+			return a.Port
+		}
+		if len(a.PortKernels) != len(b.PortKernels) {
+			return len(a.PortKernels) > len(b.PortKernels)
+		}
+		if a.Seconds != b.Seconds {
+			return a.Seconds > b.Seconds
+		}
+		return directionProgram(ws, a) < directionProgram(ws, b)
+	}
 	for _, l := range br.Loaders {
 		if l.Weights == 0 && len(l.Derived) == 0 {
 			continue
 		}
-		p := directionProgram(ws, l)
-		if !seen[p] {
-			seen[p] = true
-			progs = append(progs, p)
+		if !found || better(l, best) {
+			best, found = l, true
 		}
 	}
-	sort.Strings(progs)
-	if len(progs) == 0 {
+	if !found {
 		return "(no process read the model)"
 	}
-	return strings.Join(progs, " + ")
+	return directionProgram(ws, best)
 }
 
 // noteDirection counts one verification of the run in direction key and returns its record

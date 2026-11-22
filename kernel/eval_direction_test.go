@@ -20,19 +20,19 @@ func TestADirectionIsTheRunsProcesses(t *testing.T) {
 			{Exe: "/usr/bin/cat", Cmdline: "cat x"}, // neither read the model nor launched a ported kernel
 		}}
 	}
-	k1, k2 := directionKey(ws1, stubs(ws1)), directionKey(ws2, stubs(ws2))
-	if k1 != k2 || k1 != "build/e2e_all_check [port] + python3.10 pytools/e2e_weights.py [port]" {
+	k1, k2 := directionKey(ws1, stubs(ws1), nil), directionKey(ws2, stubs(ws2), nil)
+	if k1 != k2 || k1 != "python3.10 pytools/e2e_weights.py [port]" {
 		t.Fatalf("%q / %q", k1, k2)
 	}
 	// the units' tests run beside the model are verification, not the direction: one more or
 	// one fewer is the same direction
 	more := stubs(ws1)
 	more.Loaders = append(more.Loaders, E2ELoader{Exe: ws1 + "/build/gr_parity", Cmdline: ws1 + "/build/gr_parity --selftest", Port: true, PortKernels: []string{"gr_norm_kernel"}})
-	if k := directionKey(ws1, more); k != k1 {
+	if k := directionKey(ws1, more, nil); k != k1 {
 		t.Fatalf("a unit's test changed the direction: %q", k)
 	}
 	vllm := EvalBenchRun{Loaders: []E2ELoader{{Exe: "/usr/local/bin/python3.10", Cmdline: "python3 -", Weights: 2}}}
-	if k := directionKey(ws1, vllm); k != "python3.10 - [other]" || k == k1 {
+	if k := directionKey(ws1, vllm, nil); k != "python3.10 - [other]" || k == k1 {
 		t.Fatalf("the heredoc's direction: %q", k)
 	}
 
@@ -40,7 +40,7 @@ func TestADirectionIsTheRunsProcesses(t *testing.T) {
 	b := loadDirections(dir, "uintegration01529aaa82b9")
 	b.noteDirection(k1, "integration_e2e_partial_model", time.Now(), DirectionMeasure{})
 	b.noteDirection(k1, "integration_e2e_partial_model", time.Now(), DirectionMeasure{})
-	b.noteDirection(directionKey(ws1, vllm), "integration_e2e_loader_not_port", time.Now(), DirectionMeasure{})
+	b.noteDirection(directionKey(ws1, vllm, nil), "integration_e2e_loader_not_port", time.Now(), DirectionMeasure{})
 	if err := writeDirections(dir, b); err != nil {
 		t.Fatal(err)
 	}
@@ -136,5 +136,31 @@ func TestTheDirectionsAreToldAsMeasured(t *testing.T) {
 	}
 	if strings.Index(s, "python3.10 - [other]") > strings.Index(s, "build/e2e_all_check") {
 		t.Fatal("not oldest first")
+	}
+}
+
+// 11/22 18:42 pytools/e2e_port_check.py, which opened the weight files for 2.7 s beside
+// pytools/e2e_infer.py, made a new direction of a closed one: the direction is the runner's
+func TestAHelperBesideTheRunnerIsTheSameDirection(t *testing.T) {
+	ws := "/tmp/einsteinos_verify_uint"
+	perUnit := map[string][]string{"u1": {"k"}}
+	run := EvalBenchRun{ModelBytes: 100, Loaders: []E2ELoader{
+		{Exe: "/usr/local/bin/python3.10", Cmdline: "python3 " + ws + "/pytools/e2e_infer.py /m", Port: true, Weights: 26, TookBytes: 100, PortKernels: []string{"k"}, Seconds: 118},
+	}}
+	k1 := directionKey(ws, run, perUnit)
+	if k1 != "python3.10 pytools/e2e_infer.py [port]" {
+		t.Fatalf("%q", k1)
+	}
+	run.Loaders = append(run.Loaders, E2ELoader{Exe: "/usr/local/bin/python3.10", Cmdline: "python3 " + ws + "/pytools/e2e_port_check.py /m", Port: true, Weights: 26, TookBytes: 3, Seconds: 2.7})
+	if k := directionKey(ws, run, perUnit); k != k1 {
+		t.Fatalf("a helper reading the files made a new direction: %q", k)
+	}
+	// without a runner, the process that took in the most of the model names it
+	norunner := EvalBenchRun{ModelBytes: 100, Loaders: []E2ELoader{
+		{Exe: "/usr/local/bin/python3.10", Cmdline: "python3 " + ws + "/pytools/a.py", Port: true, Weights: 3, TookBytes: 10},
+		{Exe: "/usr/local/bin/python3.10", Cmdline: "python3 " + ws + "/pytools/b.py", Port: true, Weights: 3, TookBytes: 60},
+	}}
+	if k := directionKey(ws, norunner, perUnit); k != "python3.10 pytools/b.py [port]" {
+		t.Fatalf("%q", k)
 	}
 }
