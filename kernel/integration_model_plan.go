@@ -147,7 +147,7 @@ func (r *devRun) integrationModelAnswer(unit DevPlanNode) IntegrationModelPlan {
 	sources := map[string][]string{}
 	for _, l := range r.plan.Leaves() {
 		if _, ok := perUnit[l.ID]; ok {
-			sources[l.ID] = r.requirements(l).Sources
+			sources[l.ID] = r.shown(l).Sources
 		}
 	}
 	theory, _ := os.ReadFile(filepath.Join(tree, ".einsteinOS", "theory.md"))
