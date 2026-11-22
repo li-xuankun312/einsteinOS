@@ -21,6 +21,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -60,8 +61,40 @@ func modelType(modelDir string) string {
 	return c.ModelType
 }
 
-// judgeGet: GET u directly, then through the machine's proxy (ref_proxy.go).
+// judgeWheelDir: where a file the judge fetches (a transformers wheel, PyPI's transformers
+// index) may be put by hand when this machine cannot fetch it — read instead of the network,
+// and given to pip as --find-links. 11/22 16:58:29 transformers-4.57.6's wheel ended in EOF
+// through the proxy, and the judge had no other way to it.
+func judgeWheelDir() string { return filepath.Join(judgeHome(), "wheels") }
+
+// judgeLocalName: the name a fetched URL is kept under in judgeWheelDir.
+func judgeLocalName(u string) string {
+	p := strings.TrimSuffix(u, "/")
+	if base := path.Base(p); base != "json" {
+		return base
+	}
+	return path.Base(path.Dir(p)) + ".json"
+}
+
+// %[1]v the error, %[2]s where the file may be put
+const judgeGetFailedFmt = "%[1]v — the file put at %[2]s is read instead"
+
+// judgeGet: u from judgeWheelDir when it is there, else GET u directly, then through the
+// machine's proxy (ref_proxy.go).
 func judgeGet(u string) ([]byte, error) {
+	local := filepath.Join(judgeWheelDir(), judgeLocalName(u))
+	if b, err := os.ReadFile(local); err == nil {
+		return b, nil
+	}
+	b, err := judgeFetch(u)
+	if err != nil {
+		return nil, fmt.Errorf(judgeGetFailedFmt, err, local)
+	}
+	return b, nil
+}
+
+// judgeFetch: GET u directly, then through the machine's proxy.
+func judgeFetch(u string) ([]byte, error) {
 	var lastErr error
 	for _, proxy := range refFetchRoutes() {
 		tr := &http.Transport{}
@@ -380,13 +413,21 @@ func buildJudgeEnv(spec judgeSpec, arch string) (python, versions string, err er
 		torch = "torch>=" + spec.Torch
 	}
 	// pysocks: pip reaches a socks proxy (the machine's is socks5, setup_proxy.sh) only with it
-	if err := judgeStep(python, "-m", "pip", "install", "-q", "--upgrade", "pip", "pysocks"); err != nil {
+	// what was put in judgeWheelDir by hand is found there first
+	links := []string{}
+	if ents, err := os.ReadDir(judgeWheelDir()); err == nil && len(ents) > 0 {
+		links = []string{"--find-links", judgeWheelDir()}
+	}
+	pip := func(args ...string) error {
+		return judgeStep(python, append(append([]string{"-m", "pip", "install", "-q"}, links...), args...)...)
+	}
+	if err := pip("--upgrade", "pip", "pysocks"); err != nil {
 		return "", "", err
 	}
-	if err := judgeStep(python, "-m", "pip", "install", "-q", "--index-url", judgeTorchIndex, torch); err != nil {
+	if err := pip("--index-url", judgeTorchIndex, torch); err != nil {
 		return "", "", err
 	}
-	if err := judgeStep(python, "-m", "pip", "install", "-q", "transformers=="+spec.Transformers, "safetensors", "accelerate"); err != nil {
+	if err := pip("transformers=="+spec.Transformers, "safetensors", "accelerate"); err != nil {
 		return "", "", err
 	}
 	v, err := check()

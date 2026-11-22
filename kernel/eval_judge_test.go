@@ -215,3 +215,26 @@ func TestAJudgeEnvironmentThatFailedIsNotTriedAgainForAWhile(t *testing.T) {
 		t.Fatal("still held after judgeFailHold")
 	}
 }
+
+func TestAFileTheJudgeCannotFetchIsReadFromItsWheelDirectory(t *testing.T) {
+	home := t.TempDir()
+	old := judgeHome
+	judgeHome = func() string { return home }
+	defer func() { judgeHome = old }()
+	if n := judgeLocalName("https://files.pythonhosted.org/packages/03/b8/x/transformers-4.57.6-py3-none-any.whl"); n != "transformers-4.57.6-py3-none-any.whl" {
+		t.Fatal(n)
+	}
+	if n := judgeLocalName("https://pypi.org/pypi/transformers/json"); n != "transformers.json" {
+		t.Fatal(n)
+	}
+	u := "http://127.0.0.1:1/packages/transformers-9.9.9-py3-none-any.whl"
+	_, err := judgeGet(u)
+	if err == nil || !strings.Contains(err.Error(), "the file put at "+filepath.Join(home, "wheels", "transformers-9.9.9-py3-none-any.whl")+" is read instead") {
+		t.Fatalf("the failure does not say where the file may be put: %v", err)
+	}
+	os.MkdirAll(filepath.Join(home, "wheels"), 0o755)
+	os.WriteFile(filepath.Join(home, "wheels", "transformers-9.9.9-py3-none-any.whl"), []byte("PK"), 0o644)
+	if b, err := judgeGet(u); err != nil || string(b) != "PK" {
+		t.Fatalf("the file put there was not read: %q %v", b, err)
+	}
+}
