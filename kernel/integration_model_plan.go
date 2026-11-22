@@ -73,13 +73,23 @@ var (
 // askIntegrationModel returns the planner's answer for data and theory: from the plan's store
 // or this process's memory when the same question was asked, else from a planner conversation,
 // stored in both.
-func askIntegrationModel(pid int64, repo string, plan *DevPlan, data, theory string, groups, units int, wait func(func())) (string, bool) {
+// takes says whether the kernel reads anything of an answer: one it reads nothing of is not
+// kept in plan.json — nor read back from it — and is not asked again in this run.
+func askIntegrationModel(pid int64, repo string, plan *DevPlan, data, theory string, groups, units int, wait func(func()), takes func(string) bool) (string, bool) {
 	key := integrationModelKey(data, theory)
 	integrationModelMu.Lock()
 	out, ok := integrationModelMem[key]
 	integrationModelMu.Unlock()
 	if !ok && plan != nil && plan.IntegrationModel != nil {
-		out, ok = plan.IntegrationModel[key]
+		if stored, has := plan.IntegrationModel[key]; has {
+			if takes(stored) {
+				out, ok = stored, true
+			} else {
+				// 11/22 14:09:43 the planner declined and its text was kept as the answer
+				delete(plan.IntegrationModel, key)
+				log.Printf(integrationModelDroppedFmt, repo, firstSentence(stored))
+			}
+		}
 	}
 	if ok {
 		return out, false
@@ -101,6 +111,10 @@ func askIntegrationModel(pid int64, repo string, plan *DevPlan, data, theory str
 	integrationModelMu.Lock()
 	integrationModelMem[key] = out
 	integrationModelMu.Unlock()
+	if !takes(out) {
+		log.Printf(integrationModelUntakenFmt, repo, firstSentence(out))
+		return out, false
+	}
 	if plan != nil {
 		if plan.IntegrationModel == nil {
 			plan.IntegrationModel = map[string]string{}
@@ -108,6 +122,23 @@ func askIntegrationModel(pid int64, repo string, plan *DevPlan, data, theory str
 		plan.IntegrationModel[key] = out
 	}
 	return out, true
+}
+
+const (
+	// %[1]s repo, %[2]s the answer's first sentence
+	integrationModelUntakenFmt = "dev_from_theorems: %[1]s the planner's answer has no line the kernel reads (it begins: %[2]q) — not kept in plan.json, and not asked again in this run"
+	integrationModelDroppedFmt = "dev_from_theorems: %[1]s plan.json held a planner's answer with no line the kernel reads (it begins: %[2]q) — dropped"
+)
+
+// firstSentence: s up to its first sentence's end, at most 200 bytes.
+func firstSentence(s string) string {
+	s = strings.TrimSpace(s)
+	for i, r := range s {
+		if (r == '.' || r == '。' || r == '\n') && i > 0 {
+			return truncStr(s[:i], 200)
+		}
+	}
+	return truncStr(s, 200)
 }
 
 // integrationAnswers: per integration unit, the planner's last answer (read by the end-to-end
@@ -152,7 +183,12 @@ func (r *devRun) integrationModelAnswer(unit DevPlanNode) IntegrationModelPlan {
 		}
 	}
 	theory, _ := os.ReadFile(filepath.Join(tree, ".einsteinOS", "theory.md"))
-	out, fresh := askIntegrationModel(r.pid, r.repo, r.plan, integrationModelData(ms, perUnit, sources), string(theory), len(ms.TensorGroups()), len(perUnit), r.whileWaiting)
+	takes := func(a string) bool { return parseIntegrationModel(a, ms, perUnit).taken() > 0 }
+	planHad := len(r.plan.IntegrationModel)
+	out, fresh := askIntegrationModel(r.pid, r.repo, r.plan, integrationModelData(ms, perUnit, sources), string(theory), len(ms.TensorGroups()), len(perUnit), r.whileWaiting, takes)
+	if len(r.plan.IntegrationModel) < planHad {
+		devPlanSave(r.repo, r.devRepo, r.branch, r.plan, "plan: a planner's answer with nothing the kernel reads dropped")
+	}
 	if fresh && out != "" {
 		devPlanSave(r.repo, r.devRepo, r.branch, r.plan, "plan: the planner's answer on how the port runs the model")
 	}
@@ -403,3 +439,6 @@ func startIntegrationPartsOf(unitID string, child int64, parts []string, body st
 		startIntegrationParts(unitID, parent, parts, body)
 	}()
 }
+
+// taken: how many of the answer's lines the kernel took.
+func (p IntegrationModelPlan) taken() int { return len(p.Ops) + len(p.Unused) + len(p.Parts) }

@@ -21,7 +21,7 @@ func TestThePlannerIsAskedOnceForWhatItIsGiven(t *testing.T) {
 	}
 	plan := &DevPlan{}
 	direct := func(f func()) { f() }
-	out, fresh := askIntegrationModel(0, "r", plan, data, "theory", 1, 1, direct)
+	out, fresh := askIntegrationModel(0, "r", plan, data, "theory", 1, 1, direct, func(string) bool { return true })
 	if out != "op: a u1 k\n" || !fresh || asked != 1 || len(plan.IntegrationModel) != 1 {
 		t.Fatalf("first ask: %q %v %d %v", out, fresh, asked, plan.IntegrationModel)
 	}
@@ -34,10 +34,10 @@ func TestThePlannerIsAskedOnceForWhatItIsGiven(t *testing.T) {
 	integrationModelMu.Lock()
 	integrationModelMem = map[string]string{}
 	integrationModelMu.Unlock()
-	if out, fresh := askIntegrationModel(0, "r", plan, data, "theory", 1, 1, direct); out != "op: a u1 k\n" || fresh || asked != 1 {
+	if out, fresh := askIntegrationModel(0, "r", plan, data, "theory", 1, 1, direct, func(string) bool { return true }); out != "op: a u1 k\n" || fresh || asked != 1 {
 		t.Fatalf("asked again: %q %v %d", out, fresh, asked)
 	}
-	if _, _ = askIntegrationModel(0, "r", plan, data+"x", "theory", 1, 1, direct); asked != 2 {
+	if _, _ = askIntegrationModel(0, "r", plan, data+"x", "theory", 1, 1, direct, func(string) bool { return true }); asked != 2 {
 		t.Fatalf("other data was not asked: %d", asked)
 	}
 }
@@ -172,5 +172,40 @@ func TestTheKernelStartsThePartsUnderTheIntegrationConversation(t *testing.T) {
 	}
 	if none := startIntegrationParts("uintegration_t", "", []string{"x: y"}, ""); none != nil {
 		t.Fatal("no parent, and parts started")
+	}
+}
+
+// 11/22 14:09:43 the planner declined to answer in the kernel's lines, and its text was kept in
+// plan.json as the answer and given back on every start
+func TestAnAnswerTheKernelReadsNothingOfIsNotKept(t *testing.T) {
+	old := devPlannerRunner
+	defer func() { devPlannerRunner = old }()
+	asked := 0
+	refusal := "I can see what's happening here, and I want to be straightforward about it. I won't."
+	devPlannerRunner = func(int64, string, string) string { asked++; return refusal }
+	direct := func(f func()) { f() }
+	takes := func(a string) bool { return strings.Contains(a, "op:") }
+	plan := &DevPlan{}
+	out, fresh := askIntegrationModel(0, "r", plan, "data-untaken", "t", 1, 1, direct, takes)
+	if out != refusal || fresh || len(plan.IntegrationModel) != 0 || asked != 1 {
+		t.Fatalf("%q fresh=%v plan=%v asked=%d", out, fresh, plan.IntegrationModel, asked)
+	}
+	// not asked again in this run
+	if _, _ = askIntegrationModel(0, "r", plan, "data-untaken", "t", 1, 1, direct, takes); asked != 1 {
+		t.Fatalf("asked again after a declined answer: %d", asked)
+	}
+	// one kept in plan.json before is dropped when read
+	integrationModelMu.Lock()
+	integrationModelMem = map[string]string{}
+	integrationModelMu.Unlock()
+	key := integrationModelKey("data-untaken", "t")
+	plan.IntegrationModel = map[string]string{key: refusal}
+	devPlannerRunner = func(int64, string, string) string { asked++; return "op: a u k\n" }
+	out, fresh = askIntegrationModel(0, "r", plan, "data-untaken", "t", 1, 1, direct, takes)
+	if out != "op: a u k\n" || !fresh || asked != 2 || plan.IntegrationModel[key] != "op: a u k\n" {
+		t.Fatalf("the stored refusal was used: %q fresh=%v asked=%d plan=%v", out, fresh, asked, plan.IntegrationModel)
+	}
+	if got := firstSentence(refusal); got != "I can see what's happening here, and I want to be straightforward about it" {
+		t.Fatalf("%q", got)
 	}
 }
