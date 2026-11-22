@@ -153,13 +153,17 @@ func directionProgram(ws string, l E2ELoader) string {
 	return name + " [" + kind + "]"
 }
 
-// directionKey: the run's direction — its processes that read the model's weights or launched
-// ported kernels, named by directionProgram, sorted, without repeats.
+// directionKey: the run's direction — its processes that read the model (its weight files, or
+// a conversion of them written during the run), named by directionProgram, sorted, without
+// repeats. A process that only launched ported kernels — a unit's parity binary, a test of a
+// sub-unit — verifies the units and is not the direction: the integration runs many of them,
+// and with them in the key, adding or dropping one test made a new direction of the same
+// way of running the model.
 func directionKey(ws string, br EvalBenchRun) string {
 	seen := map[string]bool{}
 	var progs []string
 	for _, l := range br.Loaders {
-		if l.Weights == 0 && len(l.PortKernels) == 0 {
+		if l.Weights == 0 && len(l.Derived) == 0 {
 			continue
 		}
 		p := directionProgram(ws, l)
@@ -170,7 +174,7 @@ func directionKey(ws string, br EvalBenchRun) string {
 	}
 	sort.Strings(progs)
 	if len(progs) == 0 {
-		return "(no process read the model or launched a ported kernel)"
+		return "(no process read the model)"
 	}
 	return strings.Join(progs, " + ")
 }

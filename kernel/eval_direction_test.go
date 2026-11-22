@@ -21,8 +21,15 @@ func TestADirectionIsTheRunsProcesses(t *testing.T) {
 		}}
 	}
 	k1, k2 := directionKey(ws1, stubs(ws1)), directionKey(ws2, stubs(ws2))
-	if k1 != k2 || k1 != "build/e2e_all_check [port] + build/kv_q8_parity [port] + python3.10 pytools/e2e_weights.py [port]" {
+	if k1 != k2 || k1 != "build/e2e_all_check [port] + python3.10 pytools/e2e_weights.py [port]" {
 		t.Fatalf("%q / %q", k1, k2)
+	}
+	// the units' tests run beside the model are verification, not the direction: one more or
+	// one fewer is the same direction
+	more := stubs(ws1)
+	more.Loaders = append(more.Loaders, E2ELoader{Exe: ws1 + "/build/gr_parity", Cmdline: ws1 + "/build/gr_parity --selftest", Port: true, PortKernels: []string{"gr_norm_kernel"}})
+	if k := directionKey(ws1, more); k != k1 {
+		t.Fatalf("a unit's test changed the direction: %q", k)
 	}
 	vllm := EvalBenchRun{Loaders: []E2ELoader{{Exe: "/usr/local/bin/python3.10", Cmdline: "python3 -", Weights: 2}}}
 	if k := directionKey(ws1, vllm); k != "python3.10 - [other]" || k == k1 {
