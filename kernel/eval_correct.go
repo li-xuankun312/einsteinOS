@@ -18,6 +18,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 )
 
 const (
@@ -87,6 +89,57 @@ func teacherForcedWith(python, modelDir, arch string, prompt, generated []int) (
 // judgeEnvForFn: the judge environment for the model, measured and built (eval_judge.go); a
 // variable for tests.
 var judgeEnvForFn = func(modelDir, arch string) (python, versions string, err error) {
+	key := modelDir + "|" + arch
+	if why, ok := judgeFailedRecently(key, time.Now()); ok {
+		return "", "", why
+	}
+	started := time.Now()
+	python, versions, err = judgeEnvFor(modelDir, arch)
+	if err != nil {
+		judgeNoteFailed(key, err, started, time.Now())
+	}
+	return python, versions, err
+}
+
+// judgeFailHold: how long a judge environment that could not be measured or built is not tried
+// again. 11/22 16:31:53-16:58:29 the integration's verification spent 27 minutes fetching
+// transformers wheels through the proxy until one ended in EOF, and the next verification of
+// the same tree began the same.
+const judgeFailHold = time.Hour
+
+// %[1]v the error, %[2]s when that attempt started, %[3]s how long it took, %[4]s until when
+const judgeFailedFmt = "%[1]v (the attempt at %[2]s, %[3]s, failed so; not tried again before %[4]s)"
+
+var (
+	judgeFailMu sync.Mutex
+	judgeFail   = map[string]struct {
+		err      error
+		at, took time.Time
+	}{}
+)
+
+func judgeNoteFailed(key string, err error, started, ended time.Time) {
+	judgeFailMu.Lock()
+	defer judgeFailMu.Unlock()
+	judgeFail[key] = struct {
+		err      error
+		at, took time.Time
+	}{err, started, ended}
+}
+
+// judgeFailedRecently: the stored failure of key, when it is younger than judgeFailHold.
+func judgeFailedRecently(key string, now time.Time) (error, bool) {
+	judgeFailMu.Lock()
+	defer judgeFailMu.Unlock()
+	f, ok := judgeFail[key]
+	if !ok || now.Sub(f.at) >= judgeFailHold {
+		return nil, false
+	}
+	return fmt.Errorf(judgeFailedFmt, f.err, f.at.Format("15:04:05"), f.took.Sub(f.at).Round(time.Second), f.at.Add(judgeFailHold).Format("15:04:05")), true
+}
+
+// judgeEnvFor measures the judge's environment for the model and builds it.
+func judgeEnvFor(modelDir, arch string) (python, versions string, err error) {
 	out, err := judgeRunFn(os.Environ(), "python3", "-c", "import sys; print('%d.%d.%d' % sys.version_info[:3])")
 	if err != nil {
 		return "", "", fmt.Errorf("python3's version: %v: %s", err, tailText(out, 200))

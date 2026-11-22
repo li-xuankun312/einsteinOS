@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeWheel: a transformers wheel holding the given model directories and import_utils.py.
@@ -194,5 +195,23 @@ func TestTheJudgeSpecIsMeasuredOncePerModelTypeAndPython(t *testing.T) {
 	b, err2 := judgeSpecFor("qwen3_5_moe", "3.10.12")
 	if err != nil || err2 != nil || a != b || a.Transformers != "5.2.0" || *downloads != first {
 		t.Fatalf("%+v %+v %v %v downloads %d then %d", a, b, err, err2, first, *downloads)
+	}
+}
+
+// 11/22 16:31-16:58 the judge's environment took 27 minutes to fail, and the next
+// verification began the same: a failure is not tried again for judgeFailHold
+func TestAJudgeEnvironmentThatFailedIsNotTriedAgainForAWhile(t *testing.T) {
+	key := "/m|XForCausalLM"
+	t0 := time.Date(2026, 11, 22, 16, 31, 53, 0, time.Local)
+	if _, ok := judgeFailedRecently(key, t0); ok {
+		t.Fatal("a failure before any attempt")
+	}
+	judgeNoteFailed(key, fmt.Errorf("through socks5h://127.0.0.1:1080: EOF"), t0, t0.Add(27*time.Minute))
+	err, ok := judgeFailedRecently(key, t0.Add(30*time.Minute))
+	if !ok || !strings.Contains(err.Error(), "EOF (the attempt at 16:31:53, 27m0s, failed so; not tried again before 17:31:53)") {
+		t.Fatalf("%v %v", ok, err)
+	}
+	if _, ok := judgeFailedRecently(key, t0.Add(61*time.Minute)); ok {
+		t.Fatal("still held after judgeFailHold")
 	}
 }
