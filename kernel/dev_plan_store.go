@@ -144,6 +144,9 @@ type DevPlan struct {
 	Gates string `json:"gates,omitempty"`
 	// IntegrationUnit: judged by the reference's own registered tests (integration.go)
 	IntegrationUnit *DevPlanNode `json:"integration_unit,omitempty"`
+	// IntegrationModel: the planner's answers on how the port's kernels run the model on this
+	// machine, by what they were asked on (integration_model_plan.go)
+	IntegrationModel map[string]string `json:"integration_model,omitempty"`
 
 	// silent counts, per unit, the conversations IN A ROW that wrote no file. In memory
 	// only: a restart is a person deciding to try again, and starts the count over.

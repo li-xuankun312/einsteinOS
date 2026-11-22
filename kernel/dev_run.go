@@ -865,6 +865,9 @@ func (r *devRun) unitPrompt(unit DevPlanNode, idx, total, attempt int, fail DevF
 		c.WriteString(newRefMask(refMaskIdent, r.repo).Replace(r.requirements(unit).Block("(reference)", r.plan.RefSHA)))
 		c.WriteString(r.shown(unit).PortChecklist("(reference)", r.plan.RefSHA, unit.ID))
 		c.WriteString(r.shown(unit).IntegrationBlock("(reference)", r.plan.RefSHA, unit.ID))
+		if unit.Integration {
+			r.integrationModelAnswer(unit)
+		}
 	}
 	passed := 0
 	for _, l := range plan.Leaves() {
