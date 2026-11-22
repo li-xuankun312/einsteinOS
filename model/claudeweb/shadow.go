@@ -53,12 +53,23 @@ type toolInput struct {
 }
 
 func (s *ShadowExecutor) Execute(toolName string, inputJSON string) string {
-	// what this machine printed goes back to the conversation: never with the kernel's
-	// secrets in it (11/13 05:01:42 the token came from this machine's bash history)
-	return kernel.RedactSecrets(s.execute(toolName, inputJSON))
+	out, _ := s.ExecuteWhy(toolName, inputJSON)
+	return out
 }
 
-func (s *ShadowExecutor) execute(toolName string, inputJSON string) string {
+// ExecuteWhy is Execute that also says what of the kernel's a command touched when it was not
+// run here for that ("" when it ran, or was not run for another reason).
+func (s *ShadowExecutor) ExecuteWhy(toolName string, inputJSON string) (string, string) {
+	// what this machine printed goes back to the conversation: never with the kernel's
+	// secrets in it (11/13 05:01:42 the token came from this machine's bash history)
+	var why string
+	out := s.execute(toolName, inputJSON, &why)
+	return kernel.RedactSecrets(out), why
+}
+
+// execute runs the tool call here; why is set to what of the kernel's it touched when that
+// is why it was not run.
+func (s *ShadowExecutor) execute(toolName string, inputJSON string, why *string) string {
 	if !s.Enabled || inputJSON == "" {
 		return ""
 	}
@@ -130,6 +141,7 @@ func (s *ShadowExecutor) execute(toolName string, inputJSON string) string {
 	// the kernel's places whenever the configured working directory lay in it (runDir)
 	if what := touchesKernel(command, s.runDir()); what != "" {
 		log.Printf("[shadow] not run here: it touches %s (the sandbox's result stands)", what)
+		*why = what
 		return ""
 	}
 

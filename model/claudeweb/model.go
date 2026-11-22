@@ -461,14 +461,21 @@ func (m *Model) shadowExecuteRaw(convID, toolName, inputJSON string) string {
 		// measured from the .lean files before and after (11/04 03:11 and 03:13 were only
 		// caught because they came through str_replace)
 		before := leanStatements(kernel.TheoryOutputsDir)
-		out := m.Shadow.Execute(toolName, inputJSON)
+		out, why := m.Shadow.ExecuteWhy(toolName, inputJSON)
 		for _, c := range statementDiffs(before, leanStatements(kernel.TheoryOutputsDir)) {
 			sig := kernel.RecordStatementChange(convID, c[0], c[1], c[2])
 			log.Printf("[shadow] statement changed by a command in %s: %s", c[0], strings.Join(sig, "; "))
 		}
+		if why != "" {
+			kernel.NoteRefusedHere(convID, why)
+		}
 		return out
 	}
-	return m.Shadow.Execute(toolName, inputJSON)
+	out, why := m.Shadow.ExecuteWhy(toolName, inputJSON)
+	if why != "" {
+		kernel.NoteRefusedHere(convID, why)
+	}
+	return out
 }
 
 // searchNotRunHereFmt: %[1]s the role whose tool call is not run on this machine.
@@ -754,8 +761,8 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 			diag = startExitDiag(exitDiagRecord(childRole, st.convID, exitCodeStr(code), st.rounds, st.totalTools,
 				st.consecutiveContinues, text, kernel.NewDiagRequest(modelName, effort, kind, webReq.Prompt)))
 		}
-		log.Printf("claudeweb: do_exit(%s) rounds=%d tools=%d continues=%d conv=%s%s",
-			exitCodeStr(code), st.rounds, st.totalTools, st.consecutiveContinues, truncate(st.convID, 8), diagSuffix(diag))
+		log.Printf("claudeweb: do_exit(%s) rounds=%d tools=%d continues=%d conv=%s%s%s",
+			exitCodeStr(code), st.rounds, st.totalTools, st.consecutiveContinues, truncate(st.convID, 8), diagSuffix(diag), kernel.RefusedHereSummary(st.convID))
 		yield(&model.LLMResponse{
 			Content: &genai.Content{
 				Role:  "model",
