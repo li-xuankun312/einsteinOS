@@ -674,8 +674,10 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 		if out.Verified {
 			out = devRetryPush(cloneDir, mirror, r.devRepo, r.branch, baseRef, unit.ID, out)
 		} else {
-			if changed, removed, _ := treeDelta(mirror, base); try == 1 && pre != nil && pre.ok && pre.digest == deltaDigest(mirror, changed, removed) {
-				// the tree the conversation ended on is the one the kernel just verified
+			if changed, removed, _ := treeDelta(mirror, base); try == 1 && pre.endedOn(deltaDigest(mirror, changed, removed)) {
+				// the tree the conversation ended on is the one the kernel just verified — passed,
+				// or failed on a gate outside the unit (11/22 16:58:43 integration_reference_impl_missing
+				// let the conversation end, and the same tree was built and run again from 16:59:06)
 				log.Printf("dev_verify: unit %s: the tree is the one verified at the done line — that verification is used", unit.ID)
 				out = pre.out
 				out.msg = fmt.Sprintf("unit %s: %s [compile=%s smoke=%s gate=%s kernels=%s, verified by the kernel]", unit.ID, truncStr(nodeDesc(unit), 120), out.Result.Compile, out.Result.Smoke, gateOrNone(out.Result.Gate), out.Result.Test.LaunchCount())

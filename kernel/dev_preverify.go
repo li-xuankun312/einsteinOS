@@ -170,6 +170,12 @@ func deltaDigest(mirror string, changed, removed []string) string {
 // sameRejected: the last verification at a done line failed on exactly these files. 11/06
 // 18:19-18:50 four done lines in a row re-ran the same 7.5-minute verification of unchanged
 // files, each with the same result.
+// endedOn: p is the verification at a done line that let the conversation end (it passed, or
+// what failed is outside the unit, preverifyMayEnd) and digest is its tree.
+func (p *preVerifyResult) endedOn(digest string) bool {
+	return p != nil && p.digest != "" && p.digest == digest && p.out.Verified && preverifyMayEnd(p.ok, p.out.Result.Gate)
+}
+
 func (p *preVerifyResult) sameRejected(digest string) bool {
 	return p != nil && !p.ok && p.digest != "" && p.digest == digest
 }
