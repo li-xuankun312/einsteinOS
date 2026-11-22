@@ -471,7 +471,9 @@ func runUnitVerifyAlone(ws, unitID, gpuUsable string, req UnitRequirements, chan
 		return finish()
 	}
 	env := devVerifyEnvISA(gpuUsable, req.ISAFlags)
+	bstart := time.Now()
 	code, out, btrace, err := runWatched(env+"bash "+build+" 2>&1", ws, buildTimeout)
+	log.Printf(verifyProcTimesFmt, unitID, build, time.Since(bstart).Round(time.Second), procTimesByExe(btrace.Processes), e2eProcTimes(btrace.Processes, e2eProcTimesMin))
 	res.Build = btrace
 	res.BuildExit, res.BuildOut = code, tailText(out, 3000)
 	if err != nil {
@@ -509,7 +511,9 @@ func runUnitVerifyAlone(ws, unitID, gpuUsable string, req UnitRequirements, chan
 			testEnv += launchProbeEnv(lib, probeLog)
 		}
 	}
+	tstart := time.Now()
 	code, out, ttrace, err := runWatched(testEnv+"bash "+test+" 2>&1", ws, testTimeout)
+	log.Printf(verifyProcTimesFmt, unitID, test, time.Since(tstart).Round(time.Second), procTimesByExe(ttrace.Processes), e2eProcTimes(ttrace.Processes, e2eProcTimesMin))
 	ttrace.ProbeErr = probeErr
 	if probeLog != "" {
 		pl := readProbeLog(probeLog)
@@ -952,3 +956,10 @@ func branchMovedUnder(tipDir string, base fileDigest, changed, removed []string)
 	sort.Strings(out)
 	return out
 }
+
+// %[1]s unit, %[2]s the script, %[3]s how long it ran, %[4]s by executable, %[5]s its longest
+// processes (e2eProcTimes). 11/22
+// a verification of the integration unit took 6m26s from its start to the end of build.sh,
+// with the build directory of the last one put back or not, and how much of it was build.sh,
+// which compile, or test.sh was not in the log.
+const verifyProcTimesFmt = "dev_verify: unit %[1]s: %[2]s ran %[3]s; by executable: %[4]s; its processes seen running at least 1s, longest first: %[5]s"

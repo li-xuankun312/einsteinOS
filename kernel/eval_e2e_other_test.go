@@ -140,3 +140,21 @@ func TestTheRunnerLaunchesEveryKernelTheOpLinesName(t *testing.T) {
 		t.Fatal("every named kernel launched, and no runner")
 	}
 }
+
+func TestABuildsProcessesAreSummedByExecutableAndCapped(t *testing.T) {
+	now := time.Now()
+	var ps []ProcSeen
+	for i := 0; i < 20; i++ {
+		ps = append(ps, ProcSeen{PID: 100 + i, Exe: "/usr/local/corex/bin/clang++", Cmdline: "clang++ -c x.cu", First: now, Last: now.Add(time.Duration(2+i) * time.Second)})
+	}
+	ps = append(ps, ProcSeen{PID: 1, Exe: "/usr/bin/bash", First: now, Last: now.Add(400 * time.Second)})
+	if got := procTimesByExe(ps); got != "/usr/local/corex/bin/clang++ ×20 3m50s; /usr/bin/bash ×1 6m40s" && got != "/usr/bin/bash ×1 6m40s; /usr/local/corex/bin/clang++ ×20 3m50s" {
+		t.Fatalf("%q", got)
+	}
+	if got := procTimesByExe(ps); !strings.HasPrefix(got, "/usr/bin/bash ×1 6m40s") {
+		t.Fatalf("most time first: %q", got)
+	}
+	if got := e2eProcTimes(ps, time.Second); !strings.HasSuffix(got, "; and 9 more") {
+		t.Fatalf("not capped: %q", got)
+	}
+}

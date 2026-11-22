@@ -366,12 +366,58 @@ func e2eProcTimes(procs []ProcSeen, min time.Duration) string {
 	}
 	sort.Slice(ps, func(i, j int) bool { return ps[i].Last.Sub(ps[i].First) > ps[j].Last.Sub(ps[j].First) })
 	var out []string
+	more := 0
+	if len(ps) > procTimesMax {
+		more = len(ps) - procTimesMax
+		ps = ps[:procTimesMax]
+	}
 	for _, p := range ps {
 		cmd := p.Cmdline
 		if len(cmd) > 160 {
 			cmd = cmd[:160] + "…"
 		}
 		out = append(out, fmt.Sprintf(e2eProcTimeFmt, p.PID, p.Exe, cmd, p.Last.Sub(p.First).Round(100*time.Millisecond)))
+	}
+	if len(out) == 0 {
+		return "none"
+	}
+	if more > 0 {
+		out = append(out, fmt.Sprintf("and %d more", more))
+	}
+	return strings.Join(out, "; ")
+}
+
+// procTimesMax: the processes e2eProcTimes names one by one.
+const procTimesMax = 12
+
+// procTimesByExe: per executable, how many of the processes ran it and their summed time,
+// most time first.
+func procTimesByExe(procs []ProcSeen) string {
+	type agg struct {
+		n int
+		d time.Duration
+	}
+	by := map[string]*agg{}
+	for _, p := range procs {
+		a := by[p.Exe]
+		if a == nil {
+			a = &agg{}
+			by[p.Exe] = a
+		}
+		a.n++
+		a.d += p.Last.Sub(p.First)
+	}
+	var exes []string
+	for e := range by {
+		exes = append(exes, e)
+	}
+	sort.Slice(exes, func(i, j int) bool { return by[exes[i]].d > by[exes[j]].d })
+	var out []string
+	for i, e := range exes {
+		if i == procTimesMax {
+			break
+		}
+		out = append(out, fmt.Sprintf("%s ×%d %s", e, by[e].n, by[e].d.Round(100*time.Millisecond)))
 	}
 	if len(out) == 0 {
 		return "none"
