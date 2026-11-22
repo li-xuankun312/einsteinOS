@@ -124,7 +124,10 @@ func missingUnits(l E2ELoader, units []string, perUnit map[string][]string) []st
 }
 
 // e2eRunner: the port's process that launched a kernel of every unit and read the weights
-// (the longest seen running, when more than one did).
+// (the longest seen running, when more than one did). Without the planner's answer it is one
+// that launched a kernel of some unit; with it, of every unit the model uses: 11/22 15:07
+// e2e_weights.py read the whole model and launched kernels of 7 of 7 units, and a forward
+// pass written in python beside one launch would have made it the runner.
 func e2eRunner(br EvalBenchRun, perUnit map[string][]string) (E2ELoader, bool) {
 	var units []string
 	for u := range perUnit {
@@ -137,7 +140,13 @@ func e2eRunner(br EvalBenchRun, perUnit map[string][]string) (E2ELoader, bool) {
 		// the runner launches ported kernels itself (when units ported any); that every unit's kernels ran is asked of the
 		// whole run (e2ePortGate) — the units' own tests, many processes, verify them beside it —
 		// and how many the runner covers is its direction's measure (eval_direction.go)
-		if l.Port && (tookTheModel(l, br.ModelBytes) || len(l.Derived) > 0) && (len(units) == 0 || len(missingUnits(l, units, perUnit)) < len(units)) && (!found || l.Seconds > best.Seconds) {
+		covers := len(units) == 0 || len(missingUnits(l, units, perUnit)) < len(units)
+		if br.RunnerAllUnits {
+			// the planner answered which units this model's forward uses (integration_model_plan.go):
+			// the process that runs it launches a kernel of each of them itself
+			covers = len(missingUnits(l, units, perUnit)) == 0
+		}
+		if l.Port && (tookTheModel(l, br.ModelBytes) || len(l.Derived) > 0) && covers && (!found || l.Seconds > best.Seconds) {
 			best, found = l, true
 		}
 	}

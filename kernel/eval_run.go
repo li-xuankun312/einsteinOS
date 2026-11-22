@@ -41,6 +41,11 @@ type EvalBenchRun struct {
 	// probe's out lines); PromptIDs and GeneratedIDs are those of the process that ran the
 	// port on the model (eval_e2e_rate.go, e2eRunnerTokens)
 	TokensBy map[int][]string `json:"tokens_by,omitempty"`
+	// RunnerAllUnits: the planner answered which units the model uses, so the runner launches
+	// a kernel of every one of them itself (e2eRunner); RunnerKernels: the kernels its op lines
+	// name, each of which the runner launches itself
+	RunnerAllUnits bool     `json:"runner_all_units,omitempty"`
+	RunnerKernels  []string `json:"runner_kernels,omitempty"`
 	// Loaders: the processes that opened or mapped weight files, each with whether it is the
 	// port's program and the ported kernels it launched itself (eval_e2e_loader.go)
 	Loaders []E2ELoader `json:"loaders,omitempty"`

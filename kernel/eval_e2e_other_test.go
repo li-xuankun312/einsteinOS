@@ -91,3 +91,26 @@ func TestTheRunsProcessesAreLoggedLongestFirst(t *testing.T) {
 		t.Fatalf("%q", got)
 	}
 }
+
+// once the planner answered which units the model uses, a process that launched one used
+// unit's kernel beside a forward pass of its own is not the runner
+func TestWithThePlannersAnswerTheRunnerLaunchesEveryUsedUnit(t *testing.T) {
+	perUnit := map[string][]string{"u_gdn": {"gdn_k"}, "u_moe": {"moe_k"}, "u_attn": {"attn_k"}}
+	br := EvalBenchRun{ModelBytes: 100, Loaders: []E2ELoader{
+		{PID: 9, Port: true, Weights: 26, TookBytes: 100, PortKernels: []string{"gdn_k"}, Seconds: 8},
+	}}
+	if _, ok := e2eRunner(br, perUnit); !ok {
+		t.Fatal("without the planner's answer one unit's kernel makes the runner")
+	}
+	br.RunnerAllUnits = true
+	if _, ok := e2eRunner(br, perUnit); ok {
+		t.Fatal("one of three used units' kernels made the runner")
+	}
+	if k, txt := e2eLoaderGate(br, perUnit); k != "integration_e2e_loader_not_port" || !strings.Contains(txt, "u_attn: attn_k") || !strings.Contains(txt, "u_moe: moe_k") {
+		t.Fatalf("the gate should name the used units the process did not launch: %q %s", k, txt)
+	}
+	br.Loaders[0].PortKernels = []string{"attn_k", "gdn_k", "moe_k"}
+	if _, ok := e2eRunner(br, perUnit); !ok {
+		t.Fatal("every used unit launched, and no runner")
+	}
+}

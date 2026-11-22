@@ -84,6 +84,9 @@ func evalRunE2E(ws, unitID string) EvalBenchRun {
 		br.Loaders = e2eWithOtherCode(ws, br.Loaders, tr.Processes, e2eCodeFn(logPath), e2eModelNames())
 	}
 	perUnit := e2eUsedPortKernels(ws, unitID)
+	if a := integrationAnswerOf(unitID); len(a.Ops) > 0 {
+		br.RunnerAllUnits = true
+	}
 	// the token ids are the runner's: what another process printed is not the port's output
 	br.PromptIDs, br.GeneratedIDs = e2eRunnerTokens(br, perUnit)
 	// the rate is the kernel's: what the script printed is kept, not judged
