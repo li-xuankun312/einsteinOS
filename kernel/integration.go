@@ -219,8 +219,13 @@ const (
 	integrationListHead   = "[INTEGRATION — measured from %[1]s at %[2]s] this unit is done when every test the reference registers passes against the code on this branch, on the real machine.\nwrite %[3]s: it builds the whole project into build/ (executables named as the reference names them). %[4]s is written by the kernel and runs, from build/:\n"
 	integrationListLine   = "  %[1]s: %[2]s\n"
 	integrationGPULine    = "the reference builds CUDA: the tests must open a GPU device.\n"
-	// %[1]s the e2e script, %[2]s the model directory, %[3]s the model's name
-	integrationE2ELine = "after the tests the kernel runs %[1]s with MODEL_DIR=%[2]s (the model on this machine: %[3]s) and reads the prefill and decode tok/s it prints.\n"
+	// what the kernel does with the end-to-end run, each clause a check of eval_integration.go:
+	// %[1]s the e2e script, %[2]s the model directory, %[3]s the model's name, %[4]d its weight
+	// files, %[5]s their size, %[6]d modelTakenPercent, %[7]s the names config.json gives it
+	integrationE2ELine = "after the tests the kernel runs %[1]s with MODEL_DIR=%[2]s (the model on this machine: %[3]s, %[4]d weight file(s), %[5]s). " +
+		"its runner is the process of the port that takes in at least %[6]d%% of those bytes and launches, itself, kernels the units ported; " +
+		"the rate is the kernel's: the ids that process prints on lines \"prompt: …\" and \"generated: …\" over the time it runs, the ids checked by the kernel's judge; " +
+		"a process that reads code outside the workspace naming the model (%[7]s) is not the port's.\n"
 )
 
 // integrationScript is the test.sh the kernel writes for the integration unit.
@@ -249,7 +254,7 @@ func (u UnitRequirements) IntegrationBlock(repo, sha, unitID string) string {
 		b.WriteString(integrationGPULine)
 	}
 	name, _, _, _ := readModelConditions(evalModel())
-	b.WriteString(fmt.Sprintf(integrationE2ELine, devE2EScript(unitID), evalModel(), name))
+	b.WriteString(fmt.Sprintf(integrationE2ELine, devE2EScript(unitID), evalModel(), name, len(modelShards(evalModel())), gib(modelBytes(evalModel())), modelTakenPercent, strings.Join(e2eModelNames(), ", ")))
 	b.WriteString(integrationModelBlock(evalModel()))
 	return b.String()
 }

@@ -155,3 +155,22 @@ func TestTheIntegrationUnitIsToldTheModelAsMeasured(t *testing.T) {
 		t.Fatalf("an unmeasured model should say so: %s", got)
 	}
 }
+
+// 11/22 the e2e line said the kernel "reads the prefill and decode tok/s it prints", which it
+// had stopped doing (bb428f62); it says what the kernel checks, with the measured model.
+func TestTheE2ELineSaysWhatTheKernelChecks(t *testing.T) {
+	dir := writeModelDir(t)
+	old := evalModelDir
+	defer func() { evalModelDir = old }()
+	evalModelDir = dir
+	blk := UnitRequirements{Tests: []RefTest{{Name: "t", Command: "t"}}}.IntegrationBlock("r", "abc", "uint")
+	for _, w := range []string{"2 weight file(s)", "takes in at least 90% of those bytes", "launches, itself, kernels the units ported",
+		"the ids that process prints", "naming the model (XForCausalLM, x_moe)"} {
+		if !strings.Contains(blk, w) {
+			t.Fatalf("missing %q in\n%s", w, blk)
+		}
+	}
+	if strings.Contains(blk, "reads the prefill and decode tok/s it prints") {
+		t.Fatalf("the old line is still there:\n%s", blk)
+	}
+}
