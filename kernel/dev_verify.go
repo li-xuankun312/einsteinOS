@@ -293,10 +293,13 @@ type VerifyResult struct {
 	Compile   string // pass | fail | missing
 	Smoke     string // pass | fail | skipped | missing
 	BuildExit int
-	TestExit  int
-	BuildOut  string // tail
-	TestOut   string // tail
-	Elapsed   time.Duration
+	// BuildReused: build.sh was not run — the unit's last build read what this one would
+	// (verify_build_memo.go) and its record and outputs were put back
+	BuildReused bool `json:"build_reused,omitempty"`
+	TestExit    int
+	BuildOut    string // tail
+	TestOut     string // tail
+	Elapsed     time.Duration
 	// Gate is the first measured requirement the unit failed (unit_gates.go), "" if none;
 	// GateText says what was measured. Build/Test are what the scripts' processes did.
 	Gate     string
@@ -471,8 +474,32 @@ func runUnitVerifyAlone(ws, unitID, gpuUsable string, req UnitRequirements, chan
 		return finish()
 	}
 	env := devVerifyEnvISA(gpuUsable, req.ISAFlags)
+	// a build of the unit's own workspace whose inputs did not change is not run again
+	// (verify_build_memo.go); the build runs under the probe, which records what it read and wrote
+	memoOn := !freshBuild() && filepath.Base(ws) == "einsteinos_verify_"+unitID
+	key := buildMemoKey(ws, build, env)
+	if memoOn {
+		if m, ok := reuseBuildMemo(unitID, ws, key); ok {
+			log.Printf(buildMemoReusedFmt, unitID, build, len(m.Inputs), len(m.Dirs), len(m.Outputs))
+			res.Build, res.BuildExit, res.BuildOut, res.NoToolchain, res.BuildReused = m.Trace, m.Exit, m.Out, m.NoTool, true
+			if m.Exit != 0 {
+				res.Compile, res.Smoke = "fail", "skipped"
+				return finish()
+			}
+			res.Compile = "pass"
+			return runUnitTestStage(ws, unitID, gpuUsable, req, changed, buildTimeout, testTimeout, env, build, test, res, start)
+		}
+	}
+	benv, blog := env, ""
+	if memoOn {
+		if lib, lerr := launchProbeLib(); lerr == nil {
+			blog = filepath.Join(os.TempDir(), fmt.Sprintf("einsteinos-build-files-%d.log", time.Now().UnixNano()))
+			benv += "export EINSTEINOS_PROBE_FILES=1; " + launchProbeEnv(lib, blog)
+			defer os.Remove(blog)
+		}
+	}
 	bstart := time.Now()
-	code, out, btrace, err := runWatched(env+"bash "+build+" 2>&1", ws, buildTimeout)
+	code, out, btrace, err := runWatched(benv+"bash "+build+" 2>&1", ws, buildTimeout)
 	log.Printf(verifyProcTimesFmt, unitID, build, time.Since(bstart).Round(time.Second), procTimesByExe(btrace.Processes), e2eProcTimes(btrace.Processes, e2eProcTimesMin))
 	res.Build = btrace
 	res.BuildExit, res.BuildOut = code, tailText(out, 3000)
@@ -494,6 +521,20 @@ func runUnitVerifyAlone(ws, unitID, gpuUsable string, req UnitRequirements, chan
 		}
 	}
 
+	// what the build read and wrote, kept before test.sh can change anything it wrote
+	if blog != "" {
+		if m := memoFromBuild(ws, key, readProbeLog(blog), res.BuildExit, res.BuildOut, res.Build, res.NoToolchain); len(m.Inputs) > 0 {
+			if serr := saveBuildMemo(unitID, ws, m); serr == nil {
+				log.Printf(buildMemoSavedFmt, unitID, build, len(m.Inputs), len(m.Dirs), len(m.Outputs))
+			}
+		}
+	}
+	return runUnitTestStage(ws, unitID, gpuUsable, req, changed, buildTimeout, testTimeout, env, build, test, res, start)
+}
+
+// runUnitTestStage runs test.sh in ws after a build that passed (res holds its record).
+func runUnitTestStage(ws, unitID, gpuUsable string, req UnitRequirements, changed []string, buildTimeout, testTimeout time.Duration, env, build, test string, res VerifyResult, start time.Time) VerifyResult {
+	finish := func() VerifyResult { res.Elapsed = time.Since(start); return res }
 	if _, err := os.Stat(filepath.Join(ws, filepath.FromSlash(test))); err != nil {
 		return finish() // Smoke stays "missing"
 	}
@@ -784,9 +825,9 @@ func devVerifyOnly(cloneDir, mirror, branch, baseRef, unitID, gpuUsable string, 
 	// the gates judge the unit's code, not this attempt's edit of it (unitFiles)
 	out.Result = runUnitVerifyWith(ws, unitID, gpuUsable, req, files, 60*time.Minute, 60*time.Minute)
 	done()
-	if seeded && out.Result.Passed() {
-		// a pass on the last build's directory counts once it passes from nothing
-		log.Printf("dev_verify: unit %s passed on the build directory of its last verification — verified again from nothing before it counts", unitID)
+	if (seeded || out.Result.BuildReused) && out.Result.Passed() {
+		// a pass on the last build's directory, or on its reused build, counts once it passes from nothing
+		log.Printf("dev_verify: unit %s passed on the build of its last verification — verified again from nothing before it counts", unitID)
 		fresh, ferr := assembleWorkspace(cloneDir, mirror, changed, removed)
 		if ferr != nil {
 			out.Err = fmt.Errorf("assemble workspace: %w", ferr)
@@ -963,3 +1004,9 @@ func branchMovedUnder(tipDir string, base fileDigest, changed, removed []string)
 // with the build directory of the last one put back or not, and how much of it was build.sh,
 // which compile, or test.sh was not in the log.
 const verifyProcTimesFmt = "dev_verify: unit %[1]s: %[2]s ran %[3]s; by executable: %[4]s; its processes seen running at least 1s, longest first: %[5]s"
+
+const (
+	// %[1]s unit, %[2]s build.sh, %[3]d files read, %[4]d directories listed, %[5]d files written
+	buildMemoReusedFmt = "dev_verify: unit %[1]s: %[2]s not run — the %[3]d workspace file(s) its last run read and the %[4]d director(ies) it listed are what they were; the %[5]d file(s) it wrote are put back"
+	buildMemoSavedFmt  = "dev_verify: unit %[1]s: %[2]s read %[3]d workspace file(s), listed %[4]d director(ies) and wrote %[5]d file(s) — kept, for a verification whose inputs are the same"
+)
