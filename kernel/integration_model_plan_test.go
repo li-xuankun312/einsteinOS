@@ -127,3 +127,12 @@ func TestThePartsOfTheProgramAreGivenWithTheSpawnLimits(t *testing.T) {
 		}
 	}
 }
+
+func TestTheAnswersCountsAreWhatWasTakenAndDropped(t *testing.T) {
+	ms := ModelShape{Tensors: []ModelTensor{{Name: "m.0.w", Dtype: "BF16", Shape: []int64{2}}}}
+	perUnit := map[string][]string{"u1": {"k1"}, "u2": {"k2"}}
+	p := parseIntegrationModel("op: m.{i}.w u1 k1\nop: m.{i}.w u1 nope\nmissing: m.{i}.w x\nmissing: zz y\nunused: u2\nunused: u9\npart: a: b\npart: c\nnot a line\n", ms, perUnit)
+	if got := p.counts(); got != "op 1, missing 1, unused 1 (u2), part 1, dropped 4" {
+		t.Fatalf("%q", got)
+	}
+}

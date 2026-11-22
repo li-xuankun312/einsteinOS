@@ -156,6 +156,7 @@ func (r *devRun) integrationModelAnswer(unit DevPlanNode) IntegrationModelPlan {
 		devPlanSave(r.repo, r.devRepo, r.branch, r.plan, "plan: the planner's answer on how the port runs the model")
 	}
 	p := parseIntegrationModel(out, ms, perUnit)
+	log.Printf(integrationModelLogFmt, r.repo, unit.ID, p.counts(), len(ms.TensorGroups()), len(perUnit))
 	integrationAnswersMu.Lock()
 	integrationAnswers[unit.ID] = p
 	integrationAnswersMu.Unlock()
@@ -176,6 +177,8 @@ type IntegrationModelPlan struct {
 	Unused []string
 	// Parts: how the program that runs the model divides, "<name>: <what it does>"
 	Parts []string
+	// Dropped: lines of the answer's kinds that named something the data does not have
+	Dropped int
 }
 
 // parseIntegrationModel reads the planner's lines; a line naming a group, unit or kernel the
@@ -193,22 +196,28 @@ func parseIntegrationModel(out string, ms ModelShape, perUnit map[string][]strin
 		case strings.HasPrefix(l, "op:"):
 			f := strings.Fields(strings.TrimPrefix(l, "op:"))
 			if len(f) != 3 || !groups[f[0]] || !hasString(perUnit[f[1]], f[2]) {
+				p.Dropped++
 				continue
 			}
 			p.Ops = append(p.Ops, IntegrationOp{Group: f[0], Unit: f[1], Kernel: f[2]})
 		case strings.HasPrefix(l, "missing:"):
 			f := strings.SplitN(strings.TrimSpace(strings.TrimPrefix(l, "missing:")), " ", 2)
 			if len(f) != 2 || !groups[f[0]] {
+				p.Dropped++
 				continue
 			}
 			p.Ops = append(p.Ops, IntegrationOp{Group: f[0], What: strings.TrimSpace(f[1])})
 		case strings.HasPrefix(l, "part:"):
 			if f := strings.SplitN(strings.TrimSpace(strings.TrimPrefix(l, "part:")), ":", 2); len(f) == 2 && strings.TrimSpace(f[0]) != "" && strings.TrimSpace(f[1]) != "" {
 				p.Parts = append(p.Parts, strings.TrimSpace(f[0])+": "+strings.TrimSpace(f[1]))
+			} else {
+				p.Dropped++
 			}
 		case strings.HasPrefix(l, "unused:"):
 			if u := strings.TrimSpace(strings.TrimPrefix(l, "unused:")); perUnit[u] != nil && !hasString(p.Unused, u) {
 				p.Unused = append(p.Unused, u)
+			} else {
+				p.Dropped++
 			}
 		}
 	}
@@ -299,4 +308,20 @@ func (p IntegrationModelPlan) Block() string {
 		}
 	}
 	return b.String()
+}
+
+// %[1]s repo, %[2]s unit, %[3]s the answer's counts, %[4]d tensor groups, %[5]d units with kernels
+const integrationModelLogFmt = "dev_from_theorems: %[1]s integration unit %[2]s: the planner's answer read: %[3]s (of %[4]d tensor groups and %[5]d units with ported kernels)"
+
+// counts: how many lines of each kind the answer had that the kernel took, and dropped.
+func (p IntegrationModelPlan) counts() string {
+	op, missing := 0, 0
+	for _, o := range p.Ops {
+		if o.Unit != "" {
+			op++
+		} else {
+			missing++
+		}
+	}
+	return fmt.Sprintf("op %d, missing %d, unused %d (%s), part %d, dropped %d", op, missing, len(p.Unused), strings.Join(p.Unused, " "), len(p.Parts), p.Dropped)
 }
