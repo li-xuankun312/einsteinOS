@@ -12,6 +12,7 @@ package kernel
 // run one at a time on it, and each file changed is set down to the conversation that changed it.
 
 import (
+	"fmt"
 	"io/fs"
 	"log"
 	"path/filepath"
@@ -63,6 +64,7 @@ type mirrorUnit struct {
 	dir    string
 	part   map[string]string // conv -> its part ("" for the unit's own conversation)
 	owner  map[string]string // file -> the conversation that first wrote it in this attempt
+	named  map[string]string // file -> the part the planner's partfile lines give it
 	writes []mirrorWrite
 	seq    int
 }
@@ -82,7 +84,7 @@ func noteMirrorConv(unitID, dir, conv, part string) {
 	defer mirrorUnitsMu.Unlock()
 	u := mirrorUnits[unitID]
 	if u == nil || u.dir != dir {
-		u = &mirrorUnit{dir: dir, part: map[string]string{}, owner: map[string]string{}}
+		u = &mirrorUnit{dir: dir, part: map[string]string{}, owner: map[string]string{}, named: map[string]string{}}
 		mirrorUnits[unitID] = u
 	}
 	u.part[conv] = part
@@ -113,6 +115,7 @@ func MirrorCommand(conv string, run func() string) string {
 	before := statMirror(u.dir)
 	out := run()
 	after := statMirror(u.dir)
+	others := u.othersTouched(conv, before, after)
 	var said []string
 	for _, w := range mirrorDiff(before, after) {
 		u.seq++
@@ -130,7 +133,60 @@ func MirrorCommand(conv string, run func() string) string {
 	if len(said) > 0 {
 		log.Printf(mirrorWroteFmt, shortID(conv), partName(u.part[conv]), len(said), strings.Join(said, " "))
 	}
+	if len(others) > 0 {
+		log.Printf(mirrorOthersLogFmt, shortID(conv), partName(u.part[conv]), len(others), strings.Join(others, "; "))
+		out += fmt.Sprintf(mirrorOthersFmt, len(others), "  "+strings.Join(others, "\n  ")+"\n")
+	}
 	return out
+}
+
+const (
+	// %[1]s the conversation, %[2]s its part, %[3]d files, %[4]s them with whose they were
+	mirrorOthersLogFmt = "mirror: a command of %[1]s (%[2]s) changed or removed %[3]d file(s) another conversation of the unit wrote: %[4]s"
+	// %[1]d files, %[2]s them with whose they were
+	mirrorOthersFmt = "\n[THE UNIT'S MIRROR — measured on this machine]\nthis command changed or removed %[1]d file(s) that another conversation of the unit wrote or the planner gave another part:\n%[2]s"
+)
+
+// othersTouched: the files conv's command changed or removed that are another's — another
+// conversation was first to write them in this attempt, or the planner gave them to another
+// part — each with whose it was. Called with u.mu held.
+func (u *mirrorUnit) othersTouched(conv string, before, after map[string]mirrorStat) []string {
+	mine := partName(u.part[conv])
+	var out []string
+	for _, w := range mirrorDiff(before, after) {
+		whose := ""
+		if o, ok := u.owner[w.File]; ok && o != conv {
+			whose = fmt.Sprintf("written by %s, conversation %s", partName(u.part[o]), shortID(o))
+		} else if p, ok := u.named[w.File]; ok && p != mine {
+			whose = "the planner gave it to " + p
+		}
+		if whose == "" {
+			continue
+		}
+		what := "changed"
+		if w.Removed {
+			what = "removed"
+		}
+		out = append(out, fmt.Sprintf("%s %s (%s)", w.File, what, whose))
+	}
+	return out
+}
+
+// noteMirrorPartFiles: the files the planner's partfile lines give each part of unit.
+func noteMirrorPartFiles(unitID string, files map[string][]string) {
+	mirrorUnitsMu.Lock()
+	u := mirrorUnits[unitID]
+	mirrorUnitsMu.Unlock()
+	if u == nil {
+		return
+	}
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	for part, fs := range files {
+		for _, f := range fs {
+			u.named[f] = part
+		}
+	}
 }
 
 // mirrorDiff: the files changed, created or removed between two readings of a mirror.

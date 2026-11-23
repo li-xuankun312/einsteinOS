@@ -89,3 +89,34 @@ func TestMirrorCommandsRunOneAtATime(t *testing.T) {
 		t.Fatalf("%d commands ran at once on the mirror", most)
 	}
 }
+
+// 11/23 16:07:27 a conversation deleted gdn_layer.cu, which another had written, and was told
+// nothing of it: the command's result says which files of another conversation's — or another
+// part's, by the planner's partfile lines — it changed or removed, and the log says so too
+func TestACommandTouchingAnothersFileIsToldSo(t *testing.T) {
+	resetMirrorUnits()
+	defer resetMirrorUnits()
+	dir := t.TempDir()
+	putTree(t, dir, map[string]string{"include/baloon/rt_native.hpp": "x"})
+	noteMirrorConv("uint", dir, "0ea8884d", "gdn: runs one GDN sub-layer")
+	noteMirrorConv("uint", dir, "ffdec91c", "qsa: runs one QSA sub-layer")
+	noteMirrorPartFiles("uint", map[string][]string{"gdn": {"include/baloon/rt_native.hpp"}})
+	gdn := filepath.Join(dir, "src/kernels/gpu/gdn_layer.cu")
+	os.MkdirAll(filepath.Dir(gdn), 0o755)
+	if out := MirrorCommand("0ea8884d", func() string { os.WriteFile(gdn, []byte("a"), 0o644); return "ok" }); out != "ok" {
+		t.Fatalf("its own write was noted: %q", out)
+	}
+	out := MirrorCommand("ffdec91c", func() string {
+		os.Remove(gdn)
+		os.WriteFile(filepath.Join(dir, "include/baloon/rt_native.hpp"), []byte("yy"), 0o644)
+		return "ok"
+	})
+	for _, w := range []string{"changed or removed 2 file(s)", "src/kernels/gpu/gdn_layer.cu removed (written by gdn, conversation 0ea8884d)", "include/baloon/rt_native.hpp changed (the planner gave it to gdn)"} {
+		if !strings.Contains(out, w) {
+			t.Fatalf("missing %q in %q", w, out)
+		}
+	}
+	if out := MirrorCommand("0ea8884d", func() string { os.WriteFile(gdn, []byte("b"), 0o644); return "ok" }); out != "ok" {
+		t.Fatalf("a file it was first to write again is its own: %q", out)
+	}
+}

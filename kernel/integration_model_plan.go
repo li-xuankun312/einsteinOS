@@ -491,6 +491,7 @@ func startIntegrationParts(unitID, parent string, parts []string, body string, f
 	mirror := partMirrorPath[unitID]
 	partMirrorMu.Unlock()
 	noteMirrorConv(unitID, mirror, parent, "")
+	noteMirrorPartFiles(unitID, files)
 	atOnce := integrationPartsAtOnce()
 	queue := append([]string(nil), parts...)
 	retried := map[string]bool{}
