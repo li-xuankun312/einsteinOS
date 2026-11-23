@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -162,5 +163,32 @@ func TestAHelperBesideTheRunnerIsTheSameDirection(t *testing.T) {
 	}}
 	if k := directionKey(ws, norunner, perUnit); k != "python3.10 pytools/b.py [port]" {
 		t.Fatalf("%q", k)
+	}
+}
+
+// 11/23 the integration's e2e.sh still ran the programs of a direction closed since 11/22: the
+// closed directions every program of which the script names outside a comment are measured
+// from it before any build
+func TestAnE2EScriptRunningAClosedDirectionIsMeasured(t *testing.T) {
+	tree := t.TempDir()
+	os.MkdirAll(filepath.Join(tree, ".einsteinOS/verify/uint"), 0o755)
+	os.WriteFile(filepath.Join(tree, ".einsteinOS/verify/uint/e2e.sh"), []byte(`#!/bin/bash
+# Direction: build/e2e_sub [port] (comment only)
+python3.10 "$ROOT/pytools/e2e_weights.py" "$MODEL_REAL" || true
+"$BUILD/e2e_all_check" "$MODEL_REAL" || true
+python3.10 "$ROOT/pytools/e2e_infer.py"
+`), 0o644)
+	at := time.Date(2026, 11, 22, 7, 55, 0, 0, time.UTC)
+	book := &DirectionBook{Unit: "uint", Dirs: map[string]*DirectionStat{
+		"build/e2e_all_check [port] + python3.10 pytools/e2e_weights.py [port]": {ClosedAt: at},
+		"python3.10 pytools/e2e_infer.py [port]":                                {},
+		"build/e2e_sub [port]":                                                  {ClosedAt: at},
+	}}
+	got := e2eClosedDirections(tree, "uint", book)
+	if len(got) != 1 || got[0] != ".einsteinOS/verify/uint/e2e.sh names every program of the direction closed at 11/22 07:55: build/e2e_all_check [port] + python3.10 pytools/e2e_weights.py [port]" {
+		t.Fatalf("%q", got)
+	}
+	if e2eClosedDirections(tree, "uint", nil) != nil {
+		t.Fatal("no book, a direction")
 	}
 }

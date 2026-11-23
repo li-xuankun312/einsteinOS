@@ -206,8 +206,13 @@ func (r *devRun) integrationModelAnswer(unit DevPlanNode, baseRef string) Integr
 	takes := func(a string) bool { return parseIntegrationModelIn(a, ms, perUnit, treeHas).taken() > 0 }
 	planHad := len(r.plan.IntegrationModel)
 	prev := r.plan.IntegrationModel[r.plan.IntegrationModelLast]
+	var book *DirectionBook
+	if dir, err := evalStateDir(r.devRepo); err == nil {
+		book = loadDirections(dir, unit.ID)
+	}
+	closed := closedDirectionsBlock(e2eClosedDirections(tree, unit.ID, book))
 	data := integrationModelDataFiles(ms, perUnit, sources, treeFiles) +
-		measurePortInventory(tree, ms).Block(len(ms.TensorGroups())) +
+		measurePortInventory(tree, ms).Block(len(ms.TensorGroups())) + closed +
 		integrationFeedback(r.plan.LastFailure[unit.ID], prev)
 	out, fresh := askIntegrationModel(r.pid, r.repo, r.plan, data, string(theory), len(ms.TensorGroups()), len(perUnit), r.whileWaiting, takes)
 	if !takes(out) && prev != "" {
@@ -230,7 +235,7 @@ func (r *devRun) integrationModelAnswer(unit DevPlanNode, baseRef string) Integr
 		log.Printf(integrationOffPathLogFmt, unit.ID, len(p.OffPath), strings.Join(p.OffPath, "; "), measureModelPath(ms).TextRoot)
 	}
 	// where the port's tree stands is the unit's to know too, not the planner's alone
-	p.Inventory = measurePortInventory(tree, ms).Block(len(ms.TensorGroups()))
+	p.Inventory = measurePortInventory(tree, ms).Block(len(ms.TensorGroups())) + closed
 	log.Printf(integrationModelLogFmt, r.repo, unit.ID, p.counts(), len(ms.TensorGroups()), len(perUnit))
 	integrationAnswersMu.Lock()
 	integrationAnswers[unit.ID] = p
@@ -434,6 +439,16 @@ func (p IntegrationModelPlan) Block() string {
 }
 
 // %[1]s repo, %[2]s unit, %[3]s the answer's counts, %[4]d tensor groups, %[5]d units with kernels
+// %[1]d lines, %[2]s them
+const closedDirectionsFmt = "### the unit's e2e.sh runs a closed direction (measured from the script and the unit's directions)\n%[2]s\n"
+
+func closedDirectionsBlock(l []string) string {
+	if len(l) == 0 {
+		return ""
+	}
+	return fmt.Sprintf(closedDirectionsFmt, len(l), lines(l))
+}
+
 // %[1]s unit, %[2]s what moved
 const integrationAnswerMovedFmt = "dev_from_theorems: integration unit %[1]s: the planner's new answer moves tensor groups between a unit's kernel and the integration unit's own code: %[2]s"
 

@@ -261,3 +261,65 @@ func (b *DirectionBook) summary(modelBytes int64) string {
 	}
 	return out
 }
+
+// directionProgramPaths: the programs a direction's key names ("python3.10 pytools/e2e_infer.py
+// [port] + build/e2e_all_check [port]" → pytools/e2e_infer.py, build/e2e_all_check).
+func directionProgramPaths(key string) []string {
+	var out []string
+	for _, piece := range strings.Split(key, " + ") {
+		piece = strings.TrimSpace(piece)
+		if i := strings.LastIndex(piece, " ["); i >= 0 {
+			piece = piece[:i]
+		}
+		f := strings.Fields(piece)
+		if len(f) == 0 {
+			continue
+		}
+		out = append(out, f[len(f)-1])
+	}
+	return out
+}
+
+// %[1]s the script, %[2]s the direction, %[3]s when it closed
+const e2eClosedDirectionFmt = "%[1]s names every program of the direction closed at %[3]s: %[2]s"
+
+// e2eClosedDirections: the closed directions of the unit every program of which the unit's
+// e2e.sh in tree names outside a comment — measured from the script before any build or run.
+// 11/23 the integration's e2e.sh still ran build/e2e_all_check, pytools/e2e_infer.py and
+// pytools/e2e_weights.py, whose direction had used its budget, and each verification would have
+// built for minutes to be told so.
+func e2eClosedDirections(tree, unitID string, book *DirectionBook) []string {
+	if book == nil {
+		return nil
+	}
+	raw, err := os.ReadFile(filepath.Join(tree, devE2EScript(unitID)))
+	if err != nil {
+		return nil
+	}
+	var code []string
+	for _, l := range strings.Split(string(raw), "\n") {
+		if t := strings.TrimSpace(l); t != "" && !strings.HasPrefix(t, "#") {
+			code = append(code, l)
+		}
+	}
+	text := strings.Join(code, "\n")
+	var out []string
+	for key, d := range book.Dirs {
+		if !d.Closed() {
+			continue
+		}
+		progs := directionProgramPaths(key)
+		all := len(progs) > 0
+		for _, p := range progs {
+			if !strings.Contains(text, filepath.Base(p)) {
+				all = false
+				break
+			}
+		}
+		if all {
+			out = append(out, fmt.Sprintf(e2eClosedDirectionFmt, devE2EScript(unitID), key, d.ClosedAt.UTC().Format("01/02 15:04")))
+		}
+	}
+	sort.Strings(out)
+	return out
+}
