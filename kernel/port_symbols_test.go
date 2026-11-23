@@ -98,3 +98,20 @@ func TestFunctionsDeclaredAndCalledButDefinedNowhereAreMeasured(t *testing.T) {
 		t.Fatalf("%s", blk)
 	}
 }
+
+// 11/23 16:14:40 compile=fail went back with the compiler's tail alone: the functions the mirror
+// defines twice or nowhere go with it; a compile that passed carries nothing
+func TestAFailedCompileCarriesTheTreesFunctions(t *testing.T) {
+	tree := t.TempDir()
+	putTree(t, tree, map[string]string{
+		"include/baloon/kg_kernels.hpp":             gdnHeader1123,
+		"tests/k39_integration/gdn_layer_parity.cu": "int main() { return kg::gdn_ssm_norm(nullptr, nullptr, nullptr, 1, 1, 1e-6f); }\n",
+	})
+	got := compileSymbolFacts("fail", tree)
+	if !strings.Contains(got, "0 function(s) defined in more than one source") || !strings.Contains(got, "1 function(s) a header declares and a source calls that no source defines:\n  kg::gdn_ssm_norm: declared in include/baloon/kg_kernels.hpp") {
+		t.Fatalf("%s", got)
+	}
+	if compileSymbolFacts("pass", tree) != "" {
+		t.Fatal("a compile that passed carries the facts")
+	}
+}

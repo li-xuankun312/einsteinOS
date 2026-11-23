@@ -9,6 +9,7 @@ package kernel
 // read from its files, not asked of a conversation.
 
 import (
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -236,4 +237,31 @@ func lastName(q string) string {
 		return q[i+2:]
 	}
 	return q
+}
+
+const (
+	// %[1]d functions, %[2]s them
+	compileRedefinedFmt = "[THE TREE'S FUNCTIONS — measured from the files the verification compiled]\n%[1]d function(s) defined in more than one source (not static or inline):\n%[2]s"
+	// %[1]d functions, %[2]s them
+	compileUndefinedFmt = "%[1]d function(s) a header declares and a source calls that no source defines:\n%[2]s"
+)
+
+// compileSymbolFacts: with a verification whose compile failed, the functions the mirror defines
+// twice and those it declares and calls but defines nowhere, as the conversation is sent them
+// beside the compiler's output. 11/23 16:14:40 the verification of the tree in which both GDN
+// definitions had been deleted went back to the conversation as compile=fail with the
+// compiler's tail, and three conversations went on deciding from their own sandboxes which
+// file to delete.
+func compileSymbolFacts(compile, mirror string) string {
+	if compile != "fail" || mirror == "" {
+		return ""
+	}
+	sites := treeFuncSites(mirror)
+	re, un := redefinedFuncs(sites), undefinedFuncs(mirror, sites)
+	if len(re) == 0 && len(un) == 0 {
+		return ""
+	}
+	s := fmt.Sprintf(compileRedefinedFmt, len(re), lines(re))
+	s += fmt.Sprintf(compileUndefinedFmt, len(un), lines(un))
+	return s
 }

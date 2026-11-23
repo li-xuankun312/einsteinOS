@@ -596,7 +596,7 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 					log.Printf("dev_preverify: %s unit %s: the rejected tree is parked on %s — a run stopped before this attempt ends continues from it", r.repo, unit.ID, wip)
 				}
 			}
-			return false, preVerifyReport(o)
+			return false, preVerifyReport(o) + compileSymbolFacts(o.Result.Compile, mirror)
 		})
 		r.whileWaiting(func() { child, ferr = ForkWithTermination(prompt, ".", role, cond) })
 		if ferr != nil {
