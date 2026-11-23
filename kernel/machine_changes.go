@@ -17,6 +17,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -111,4 +112,57 @@ func shownPaths(ps []string, n int) string {
 		return strings.Join(ps, " ")
 	}
 	return strings.Join(ps[:n], " ") + " … " + strconv.Itoa(len(ps)-n) + " more"
+}
+
+// machinePackagesNamedRe: a line that names where a Python environment keeps its packages.
+var machinePackagesNamedRe = regexp.MustCompile(`(site|dist)-packages|getsitepackages|getusersitepackages|get_paths\(\)\[["']purelib`)
+
+// scriptFileRe: a file a script runs or reads, by its path in the workspace.
+var scriptFileRe = regexp.MustCompile(`[A-Za-z0-9_./${}"-]*[A-Za-z0-9_-]+\.(py|sh|pl|rb)\b`)
+
+// scriptsNamingMachinePackages: the lines, outside comments, of the unit's build.sh, test.sh and
+// e2e.sh and of the workspace's files they name that name this machine's Python package
+// directories ("path:line: text") — read before any of them runs. 11/21 03:01 and 11/22 23:47
+// the integration's scripts rewrote corex's vllm registry and transformers' import_utils.py,
+// and the change was measured after the fact; 11/23 the e2e.sh on the wip branch still ran
+// pytools/patch_import_utils.py, whose SEARCH_BASES lists /usr/local/lib/python3.10/site-packages.
+func scriptsNamingMachinePackages(ws, unitID string) []string {
+	build, test := devVerifyScripts(unitID)
+	queue := []string{build, test, devE2EScript(unitID)}
+	seen := map[string]bool{}
+	var out []string
+	for len(queue) > 0 {
+		rel := filepath.ToSlash(queue[0])
+		queue = queue[1:]
+		if seen[rel] {
+			continue
+		}
+		seen[rel] = true
+		raw, err := os.ReadFile(filepath.Join(ws, filepath.FromSlash(rel)))
+		if err != nil {
+			continue
+		}
+		for i, l := range strings.Split(string(raw), "\n") {
+			t := strings.TrimSpace(l)
+			if t == "" || strings.HasPrefix(t, "#") || strings.HasPrefix(t, "//") {
+				continue
+			}
+			if machinePackagesNamedRe.MatchString(t) {
+				out = append(out, rel+":"+strconv.Itoa(i+1)+": "+truncStr(t, 160))
+			}
+			for _, m := range scriptFileRe.FindAllString(t, -1) {
+				p := strings.Trim(m, `"'`)
+				for _, pre := range []string{"$ROOT/", "${ROOT}/", "$HERE/", "./"} {
+					p = strings.TrimPrefix(p, pre)
+				}
+				if strings.ContainsAny(p, "${}\"") || strings.HasPrefix(p, "/") {
+					continue
+				}
+				if st, err := os.Stat(filepath.Join(ws, filepath.FromSlash(p))); err == nil && st.Mode().IsRegular() {
+					queue = append(queue, p)
+				}
+			}
+		}
+	}
+	return out
 }

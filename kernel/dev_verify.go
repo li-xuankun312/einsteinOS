@@ -363,8 +363,10 @@ var devVerifyRunner = func(command, dir string, timeout time.Duration) (int, str
 }
 
 const (
-	gateVerifyModifiesMachineFmt = "verify_modifies_machine: %[1]s and %[2]s changed %[3]d file(s) or director(ies) of this machine's Python packages, outside the workspace, and no other command ran here meanwhile: %[4]s — the unit runs on the machine as it is"
-	verifyMachineBesideFmt       = "dev_verify: unit %[1]s: while build.sh and test.sh ran, %[2]d file(s) or director(ies) of this machine's Python packages changed: %[3]s — not judged: %[4]d command(s) of conversations ran here beside it"
+	// %[1]d lines, %[2]s them
+	gateVerifyNamesMachinePackagesFmt = "verify_names_machine_packages: %[1]d line(s) of the unit's verification scripts, or of the files of its workspace they run, name this machine's Python package directories, and none of them was run here: %[2]s"
+	gateVerifyModifiesMachineFmt      = "verify_modifies_machine: %[1]s and %[2]s changed %[3]d file(s) or director(ies) of this machine's Python packages, outside the workspace, and no other command ran here meanwhile: %[4]s — the unit runs on the machine as it is"
+	verifyMachineBesideFmt            = "dev_verify: unit %[1]s: while build.sh and test.sh ran, %[2]d file(s) or director(ies) of this machine's Python packages changed: %[3]s — not judged: %[4]d command(s) of conversations ran here beside it"
 )
 
 // devVerifyScripts: where the unit's scripts live, relative to the repo root.
@@ -471,6 +473,13 @@ func runUnitVerifyAlone(ws, unitID, gpuUsable string, req UnitRequirements, chan
 	finish := func() VerifyResult { res.Elapsed = time.Since(start); return res }
 
 	if _, err := os.Stat(filepath.Join(ws, filepath.FromSlash(build))); err != nil {
+		return finish()
+	}
+	// a script that names this machine's Python package directories is not run here at all
+	if named := scriptsNamingMachinePackages(ws, unitID); len(named) > 0 {
+		res.Compile, res.Smoke = "skipped", "skipped"
+		res.Gates, res.Gate, res.GateText = []string{"verify_names_machine_packages"}, "verify_names_machine_packages", fmt.Sprintf(gateVerifyNamesMachinePackagesFmt, len(named), shownPaths(named, 12))
+		log.Printf("dev_verify: unit %s: %s", unitID, res.GateText)
 		return finish()
 	}
 	env := devVerifyEnvISA(gpuUsable, req.ISAFlags)
