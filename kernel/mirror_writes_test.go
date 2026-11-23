@@ -143,3 +143,36 @@ func TestEachCommandIsToldWhatTheOthersChangedSince(t *testing.T) {
 		t.Fatalf("told twice: %q", out)
 	}
 }
+
+// 11/23 15:45:59 the planner gave no partfile line, and the parts started later (visual
+// 16:58:59, mtp 17:12:02, the errored ones again) were given no file of theirs or of the
+// others': a part is then given the files each part's conversation was first to write
+func TestWithoutPartfileLinesThePartsAreGivenTheFilesMeasured(t *testing.T) {
+	resetMirrorUnits()
+	defer resetMirrorUnits()
+	dir := t.TempDir()
+	noteMirrorConv("uint", dir, "0ea8884d", "gdn: runs one GDN sub-layer")
+	noteMirrorConv("uint", dir, "ffdec91c", "qsa: runs one QSA sub-layer")
+	if got := partFilesOf("uint", "gdn: x", nil); got != "" {
+		t.Fatalf("nothing written yet, given %q", got)
+	}
+	MirrorCommand("0ea8884d", func() string {
+		os.MkdirAll(filepath.Join(dir, "src"), 0o755)
+		os.WriteFile(filepath.Join(dir, "src/gdn_layer.cu"), []byte("a"), 0o644)
+		return ""
+	})
+	MirrorCommand("ffdec91c", func() string {
+		os.WriteFile(filepath.Join(dir, "src/qsa_layer.cu"), []byte("b"), 0o644)
+		return ""
+	})
+	got := partFilesOf("uint", "qsa: runs one QSA sub-layer", nil)
+	for _, w := range []string{"measured: the files its earlier conversation was first to write", "this part wrote these 1 file(s):\n  src/qsa_layer.cu", "src/gdn_layer.cu (gdn)"} {
+		if !strings.Contains(got, w) {
+			t.Fatalf("missing %q in\n%s", w, got)
+		}
+	}
+	planned := partFilesOf("uint", "qsa: x", map[string][]string{"qsa": {"a.cu"}})
+	if !strings.Contains(planned, "the planner named them") || strings.Contains(planned, "measured") {
+		t.Fatalf("the planner's files give way: %s", planned)
+	}
+}

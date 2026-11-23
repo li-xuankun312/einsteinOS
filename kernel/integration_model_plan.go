@@ -495,13 +495,16 @@ func startIntegrationParts(unitID, parent string, parts []string, body string, f
 	atOnce := integrationPartsAtOnce()
 	queue := append([]string(nil), parts...)
 	retried := map[string]bool{}
+	prompts := map[string]string{} // addr -> the prompt its part was started with
 	start := func(part string) (SpawnResult, bool) {
-		res, err := spawnConvWith(parent, "work", spawnPrompt(parent, "work", part, body+partFilesBlock(part, files)), kernelPartPolicy(parent))
+		prompt := spawnPrompt(parent, "work", part, body+partFilesOf(unitID, part, files))
+		res, err := spawnConvWith(parent, "work", prompt, kernelPartPolicy(parent))
 		if err != nil {
 			log.Printf(integrationPartsLogFmt, unitID, 0, len(parts), shortID(parent), fmt.Sprintf("%q: %v", part, err))
 			return res, false
 		}
 		noteMirrorConv(unitID, mirror, res.Addr, part)
+		prompts[res.Addr] = prompt
 		return res, true
 	}
 	var first []SpawnResult
@@ -531,13 +534,13 @@ func startIntegrationParts(unitID, parent string, parts []string, body string, f
 					continue
 				}
 				delete(running, addr)
-				if wrote := partWroteOthers(unitID, part, files); len(wrote) > 0 {
+				if wrote := partWroteOthers(unitID, part, partFilesOr(unitID, files)); len(wrote) > 0 {
 					log.Printf(partWroteOthersFmt, unitID, shortID(addr), part, len(wrote), strings.Join(wrote, "; "))
 				}
 				if why := conversationError(out); why != "" {
 					if !retried[part] {
 						retried[part] = true
-						forgetSpawn(parent, "work", spawnPrompt(parent, "work", part, body+partFilesBlock(part, files)))
+						forgetSpawn(parent, "work", prompts[addr])
 						queue = append(queue, part)
 						log.Printf(integrationPartsAgainFmt, unitID, shortID(addr), part, why)
 					} else {
@@ -674,6 +677,11 @@ const (
 // its text gone), where the 44 units of the plan are independent by what the kernel measures
 // (acd1e1df).
 func partFilesBlock(part string, files map[string][]string) string {
+	return partFilesBlockWith(partFilesFmt, part, files)
+}
+
+// partFilesBlockWith: partFilesBlock, its first lines head (%[1]d the part's files, %[2]s them).
+func partFilesBlockWith(head, part string, files map[string][]string) string {
 	name, _, _ := strings.Cut(part, ":")
 	mine := files[strings.TrimSpace(name)]
 	if len(mine) == 0 && len(files) == 0 {
@@ -684,7 +692,7 @@ func partFilesBlock(part string, files map[string][]string) string {
 	for _, f := range mine {
 		lines.WriteString("  " + f + "\n")
 	}
-	b.WriteString(fmt.Sprintf(partFilesFmt, len(mine), lines.String()))
+	b.WriteString(fmt.Sprintf(head, len(mine), lines.String()))
 	var others []string
 	var owner []string
 	for n, fs := range files {
@@ -709,6 +717,33 @@ func partFilesBlock(part string, files map[string][]string) string {
 		b.WriteString(fmt.Sprintf(strings.Replace(partOthersFmt, "%[3]s", "%[2]s", 1), len(others), ol.String()))
 	}
 	return b.String()
+}
+
+// %[1]d the part's files, %[2]s them — the files of a part measured, where the planner named none
+const partFilesMeasuredFmt = "[THE FILES OF THIS PART — measured: the files its earlier conversation was first to write in the unit's mirror]\nthis part wrote these %[1]d file(s):\n%[2]s"
+
+// partFilesOr: the planner's files of each part, or — where its answer gave none — the files
+// each part's conversation was first to write in the unit's mirror (mirror_writes.go).
+func partFilesOr(unitID string, files map[string][]string) map[string][]string {
+	if len(files) > 0 {
+		return files
+	}
+	return mirrorOwners(unitID)
+}
+
+// partFilesOf: the files block a part's conversation is started with — the planner's, or the
+// measured ones when it named none. 11/23 15:45:59 the planner's answer had no partfile line
+// and the parts started at 16:58:59 and 17:12:02, when the others had written for an hour, were
+// given no file of theirs or of anyone's.
+func partFilesOf(unitID, part string, files map[string][]string) string {
+	if len(files) > 0 {
+		return partFilesBlock(part, files)
+	}
+	measured := mirrorOwners(unitID)
+	if len(measured) == 0 {
+		return ""
+	}
+	return partFilesBlockWith(partFilesMeasuredFmt, part, measured)
 }
 
 // integrationTreeFilesMax: how many of the tree's files the planner is given.
