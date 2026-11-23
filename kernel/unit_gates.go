@@ -52,6 +52,8 @@ type GateInput struct {
 	UnitID string
 	// PortFiles: the files the unit's port map writes its counterparts into
 	PortFiles map[string]bool
+	// PortFilesRefused: the integration unit's port map rows that do not count (port_gate.go)
+	PortFilesRefused []string
 	// Shadowed: kernels the port map names that a test file defines too (shadowedKernels)
 	Shadowed []string
 	// PortRefFiles: port map lines whose reference file is not one of the unit's
@@ -94,13 +96,15 @@ func presentGPUCompilers() []string {
 }
 
 const (
-	gateGPUCodeMissingFmt      = "gpu_code_missing: the unit's modules come from CUDA sources in the reference (%[1]s) but it wrote no .cu/.cuh file"
-	gateGPUNotCompiledFmt      = "gpu_not_compiled: build.sh ran no CUDA compile of %[1]s (CUDA compiles seen: %[2]s)"
-	gateGPUUnusedFmt           = "gpu_unused: test.sh exited 0 but none of its %[1]d process(es) opened a GPU device (%[2]s); executables that ran: %[3]s"
-	gateISAMissingFmt          = "isa_path_missing: the reference builds %[1]s with %[2]s; no binary the build produced or the test ran contains %[3]s (binaries looked at: %[4]s)"
-	gateISAWhereFmt            = "; looked for inside the unit's counterparts of the definitions of those files: %[1]s"
-	gateISAUnmeasuredFmt       = "isa_unmeasured: the reference builds %[1]s with %[2]s, and the binaries could not be disassembled (%[3]s)"
-	gateToolchainUnusedFmt     = "toolchain_unused: the unit is GPU work but no process of build.sh ran a program from %[1]s (programs that ran: %[2]s) — a build that skips the toolchain proves nothing"
+	gateGPUCodeMissingFmt  = "gpu_code_missing: the unit's modules come from CUDA sources in the reference (%[1]s) but it wrote no .cu/.cuh file"
+	gateGPUNotCompiledFmt  = "gpu_not_compiled: build.sh ran no CUDA compile of %[1]s (CUDA compiles seen: %[2]s)"
+	gateGPUUnusedFmt       = "gpu_unused: test.sh exited 0 but none of its %[1]d process(es) opened a GPU device (%[2]s); executables that ran: %[3]s"
+	gateISAMissingFmt      = "isa_path_missing: the reference builds %[1]s with %[2]s; no binary the build produced or the test ran contains %[3]s (binaries looked at: %[4]s)"
+	gateISAWhereFmt        = "; looked for inside the unit's counterparts of the definitions of those files: %[1]s"
+	gateISAUnmeasuredFmt   = "isa_unmeasured: the reference builds %[1]s with %[2]s, and the binaries could not be disassembled (%[3]s)"
+	gateToolchainUnusedFmt = "toolchain_unused: the unit is GPU work but no process of build.sh ran a program from %[1]s (programs that ran: %[2]s) — a build that skips the toolchain proves nothing"
+	// %[1]d rows, %[2]s them, %[3]s the missing prefix
+	gateKernelUnportedRowsFmt  = "; %[1]d row(s) of the port map do not count: %[2]s — a kernel for a tensor group the planner's missing lines give the integration unit is written in a row whose first column is %[3]s<group>"
 	gateKernelUnportedFmt      = "kernel_unported: %[1]s define __global__ kernels (%[2]s) and are neither test files nor files the unit's port map %[3]s writes a counterpart into"
 	gateGPUKernelMissingFmt    = "gpu_kernel_missing: the unit's modules come from CUDA sources in the reference (%[1]s) but its CUDA files define no __global__ kernel: %[2]s — a host header about a kernel is not the kernel; kernels its port map %[3]s names: %[4]d; kernels its test launched: %[5]s"
 	gateKernelNotLaunchedFmt   = "gpu_kernel_not_launched: test.sh exited 0 but launched none of the unit's kernels (%[1]s); kernels its processes launched: %[2]s; executables the launch probe was in: %[3]s — a test that opens the device and checks on the CPU proves nothing about the kernels"
@@ -181,7 +185,11 @@ func unitGatesAll(in GateInput) (kinds, texts []string) {
 		if len(files) > 0 {
 			sort.Strings(files)
 			sort.Strings(names)
-			fail("kernel_unported", fmt.Sprintf(gateKernelUnportedFmt, strings.Join(files, ", "), shortList(names, 12), PortMapPath(in.UnitID)))
+			t := fmt.Sprintf(gateKernelUnportedFmt, strings.Join(files, ", "), shortList(names, 12), PortMapPath(in.UnitID))
+			if len(in.PortFilesRefused) > 0 {
+				t += fmt.Sprintf(gateKernelUnportedRowsFmt, len(in.PortFilesRefused), shortList(in.PortFilesRefused, 12), integrationMissingPrefix)
+			}
+			fail("kernel_unported", t)
 		}
 	}
 	// …unless its port map names __global__ kernels as its counterparts of the reference's: 11/09

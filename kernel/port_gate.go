@@ -16,6 +16,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -339,4 +340,56 @@ func withRefPathsPresent(ws string, changed []string, req UnitRequirements) []st
 		}
 	}
 	return out
+}
+
+// integrationMissingPrefix: the first column of an integration unit's port map row for a kernel
+// it writes for a tensor group the planner's missing lines give it ("missing:<group>").
+const integrationMissingPrefix = "missing:"
+
+// integrationPortFiles: the files the integration unit's port map writes counterparts into, for
+// kernel_unported — a row counts when its first column is missing:<group> for a group the
+// planner's answer gives the integration unit to write, or when its reference definition is one
+// another unit's port map ports as a kernel; any other row does not. 11/23 16:29:13 the gate
+// held the kernels the planner's missing lines had given the unit, which have no reference
+// counterpart, and at 16:43 the conversation wrote rows naming the reference's test helpers
+// (gdn_parity.cpp check, shared_expert_parity.cpp s2_weight, sigmoid_f) as their counterparts.
+func integrationPortFiles(ws, unitID string, pm map[string]portEntry) (map[string]bool, []string) {
+	missing := map[string]bool{}
+	for _, o := range integrationAnswerOf(unitID).Ops {
+		if o.Unit == "" {
+			missing[o.Group] = true
+		}
+	}
+	refKernels := map[string]bool{}
+	maps, _ := filepath.Glob(filepath.Join(ws, ".einsteinOS", "port", "*.tsv"))
+	for _, m := range maps {
+		u := strings.TrimSuffix(filepath.Base(m), ".tsv")
+		if u == unitID {
+			continue
+		}
+		ks := portKernels(ws, u)
+		for _, e := range readPortMap(ws, u) {
+			if ks[symbolBase(e.name)] {
+				refKernels[e.refName] = true
+			}
+		}
+	}
+	out := map[string]bool{}
+	var refused []string
+	for _, e := range pm {
+		switch {
+		case strings.HasPrefix(e.refFile, integrationMissingPrefix):
+			if missing[strings.TrimPrefix(e.refFile, integrationMissingPrefix)] {
+				out[e.file] = true
+			} else {
+				refused = append(refused, e.refFile+" → "+e.file+" "+e.name+" (no missing line of the planner's names this group)")
+			}
+		case refKernels[e.refName]:
+			out[e.file] = true
+		default:
+			refused = append(refused, e.refFile+" "+e.refName+" → "+e.file+" "+e.name+" (no unit ports "+e.refName+" as a kernel)")
+		}
+	}
+	sort.Strings(refused)
+	return out, refused
 }
