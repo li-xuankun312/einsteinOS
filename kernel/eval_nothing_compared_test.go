@@ -48,7 +48,7 @@ func TestNothingComparedIsNotAPass(t *testing.T) {
 			os.WriteFile(filepath.Join(ws, "build", "port"), b, 0o755)
 		}
 	}
-	os.WriteFile(filepath.Join(ws, ".einsteinOS/verify/uint/e2e.sh"), []byte("build/port -c 'sleep 0.3 3<&-; echo \"prompt: 9707 11 1879\"; echo \"generated: 220 248046 198\"' 3< \"$MODEL_DIR/model-00001-of-00001.safetensors\"; echo 'prefill: 57.54 tok/s'; echo 'decode: 11.20 tok/s'\n"), 0o755)
+	os.WriteFile(filepath.Join(ws, ".einsteinOS/verify/uint/e2e.sh"), []byte("build/port -c 'sleep 1 3<&-; echo \"prompt: 9707 11 1879\"; echo \"generated: 220 248046 198\"' 3< \"$MODEL_DIR/model-00001-of-00001.safetensors\"; echo 'prefill: 57.54 tok/s'; echo 'decode: 11.20 tok/s'\n"), 0o755)
 	mask := newRefMask(refMaskIdent, "Niko1221/Strata").Replace
 	modelDir := t.TempDir()
 	os.WriteFile(filepath.Join(modelDir, "config.json"), []byte(`{"architectures":["Qwen3_5MoeForCausalLM"]}`), 0o644)

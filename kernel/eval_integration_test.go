@@ -72,7 +72,7 @@ func TestTheIntegrationIsJudgedAgainstTheReferenceRunHere(t *testing.T) {
 		os.MkdirAll(filepath.Join(ws, "build"), 0o755)
 		os.WriteFile(filepath.Join(ws, "build", "port"), b, 0o755)
 	}
-	e2e("build/port -c 'sleep 0.3 3<&-; echo \"prompt: 9707 11 1879\"; echo \"generated: 220 248046 198\"' 3< \"$MODEL_DIR/model-00001-of-00001.safetensors\"\necho \"prefill   3562 tokens in 6611.2 ms  ->  538.75 tok/s\"\necho \"decode   256 tokens in 2706.4 ms  ->  94.59 tok/s\"\n")
+	e2e("build/port -c 'sleep 1 3<&-; echo \"prompt: 9707 11 1879\"; echo \"generated: 220 248046 198\"' 3< \"$MODEL_DIR/model-00001-of-00001.safetensors\"\necho \"prefill   3562 tokens in 6611.2 ms  ->  538.75 tok/s\"\necho \"decode   256 tokens in 2706.4 ms  ->  94.59 tok/s\"\n")
 	port("40")
 	if k, txt := integrationEval("uintegration")(ws, shown); k != "integration_below_reference" || !strings.Contains(txt, "50") {
 		t.Fatalf("slower than the reference: %q %s", k, txt)
