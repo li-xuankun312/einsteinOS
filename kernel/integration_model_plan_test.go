@@ -2,6 +2,8 @@ package kernel
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -160,7 +162,7 @@ func TestTheKernelStartsThePartsUnderTheIntegrationConversation(t *testing.T) {
 	parent := "aaaabbbb-0000-0000-0000-00000000000f"
 	RegisterConv(0, parent, "r", "dev_fix_5_uintegration_t", 44)
 	parts := []string{"loader: maps the shards", "gdn layers: linear attention", "moe layers: experts"}
-	got := startIntegrationParts("uintegration_t", parent, parts, "[MODEL — measured]\n")
+	got := startIntegrationParts("uintegration_t", parent, parts, "[MODEL — measured]\n", nil)
 	if len(got) != 3 || len(prompts) != 3 {
 		t.Fatalf("started %d (%d prompts)", len(got), len(prompts))
 	}
@@ -169,10 +171,10 @@ func TestTheKernelStartsThePartsUnderTheIntegrationConversation(t *testing.T) {
 			t.Fatalf("part %d's prompt:\n%s", i, p)
 		}
 	}
-	if again := startIntegrationParts("uintegration_t", parent, parts, "[MODEL — measured]\n"); again != nil || len(prompts) != 3 {
+	if again := startIntegrationParts("uintegration_t", parent, parts, "[MODEL — measured]\n", nil); again != nil || len(prompts) != 3 {
 		t.Fatalf("the same parts were started again: %v", again)
 	}
-	if none := startIntegrationParts("uintegration_t", "", []string{"x: y"}, ""); none != nil {
+	if none := startIntegrationParts("uintegration_t", "", []string{"x: y"}, "", nil); none != nil {
 		t.Fatal("no parent, and parts started")
 	}
 }
@@ -252,7 +254,7 @@ func TestThePartsRunAFewAtOnceAndAnErroredOneAgain(t *testing.T) {
 	spawnFinal = func(pid int64) string { mu.Lock(); defer mu.Unlock(); return finals[pid] }
 	parent := "aaaabbbb-0000-0000-0000-0000000000a1"
 	RegisterConv(0, parent, "r", "dev_fix_7_uintegration_q", 44)
-	got := startIntegrationParts("uintegration_q", parent, []string{"embed: a", "layer: b", "head: c"}, "body\n")
+	got := startIntegrationParts("uintegration_q", parent, []string{"embed: a", "layer: b", "head: c"}, "body\n", nil)
 	if len(got) != 2 {
 		t.Fatalf("started at once: %d", len(got))
 	}
@@ -334,7 +336,7 @@ func TestMoreThanSixPartsStartOneAfterAnother(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		parts = append(parts, fmt.Sprintf("p%d: part %d", i, i))
 	}
-	startIntegrationParts("uintegration_r", parent, parts, "body\n")
+	startIntegrationParts("uintegration_r", parent, parts, "body\n", nil)
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		mu.Lock()
@@ -372,5 +374,55 @@ func TestThePlannerIsToldTheLastVerificationAndItsPreviousAnswer(t *testing.T) {
 	askIntegrationModel(0, "r", plan, "data-feedback-1", "t", 1, 1, direct, takes)
 	if plan.IntegrationModelLast == "" || plan.IntegrationModel[plan.IntegrationModelLast] != "op: a u k\n" {
 		t.Fatalf("the answer read is not the last: %q %v", plan.IntegrationModelLast, plan.IntegrationModel)
+	}
+}
+
+// 11/23 the six parts shared one mirror with no file of their own and undid one another's
+// edits: the planner names each part's files, the kernel checks them against the tree, and
+// each part's conversation is given its own and the others'
+func TestEachPartIsGivenItsOwnFilesAndTheOthers(t *testing.T) {
+	tree := t.TempDir()
+	for _, f := range []string{"src/rt/embed_head.cpp", "include/baloon/rt_native.hpp", "src/kernels/gpu/gdn_layer.cu"} {
+		os.MkdirAll(filepath.Join(tree, filepath.Dir(f)), 0o755)
+		os.WriteFile(filepath.Join(tree, f), []byte("x"), 0o644)
+	}
+	files, has := integrationTreeFiles(tree)
+	for _, w := range []string{"  include/baloon/rt_native.hpp\n", "  src/kernels/gpu/gdn_layer.cu\n"} {
+		if !strings.Contains(files, w) {
+			t.Fatalf("missing %q in\n%s", w, files)
+		}
+	}
+	if !has("src/rt/embed_head.cpp") || !has("src/rt/new_file.cpp") || has("nowhere/x.cpp") {
+		t.Fatal("a path of the tree, a new file in a directory it has, and a path it does not have")
+	}
+	out := "part: embed: gathers the rows\npart: gdn: the linear attention\n" +
+		"partfile: embed src/rt/embed_head.cpp\n" +
+		"partfile: embed include/baloon/rt_native.hpp\n" +
+		"partfile: gdn src/kernels/gpu/gdn_layer.cu\n" +
+		"partfile: gdn include/baloon/rt_native.hpp\n" + // the last namer keeps it
+		"partfile: embed nowhere/x.cpp\n" + // the tree does not have it
+		"partfile: head src/rt/embed_head.cpp\n" // no part named head
+	p := parseIntegrationModelIn(out, ModelShape{}, nil, has)
+	if strings.Join(p.PartFiles["embed"], " ") != "src/rt/embed_head.cpp" {
+		t.Fatalf("embed's files: %v", p.PartFiles["embed"])
+	}
+	if strings.Join(p.PartFiles["gdn"], " ") != "include/baloon/rt_native.hpp src/kernels/gpu/gdn_layer.cu" {
+		t.Fatalf("gdn's files: %v", p.PartFiles["gdn"])
+	}
+	if _, ok := p.PartFiles["head"]; ok {
+		t.Fatal("files of a part the answer does not name are no part's")
+	}
+	if p.Dropped != 2 {
+		t.Fatalf("dropped %d", p.Dropped)
+	}
+	blk := partFilesBlock("gdn: the linear attention", p.PartFiles)
+	for _, w := range []string{"this part writes these 2 file(s):\n  include/baloon/rt_native.hpp\n  src/kernels/gpu/gdn_layer.cu\n",
+		"the other parts write these 1 file(s), which this part does not write:\n  src/rt/embed_head.cpp (embed)\n"} {
+		if !strings.Contains(blk, w) {
+			t.Fatalf("missing %q in\n%s", w, blk)
+		}
+	}
+	if partFilesBlock("x: y", nil) != "" {
+		t.Fatal("no files named, and a block given")
 	}
 }

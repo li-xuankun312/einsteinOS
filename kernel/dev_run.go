@@ -608,7 +608,7 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 			// the planner's parts, each a work conversation under this one on the same tree
 			a := integrationAnswerOf(unit.ID)
 			body := newRefMask(refMaskIdent, r.repo).Replace(integrationModelBlock(evalModel()) + a.Block() + newDevRepoFacts(r.devRepo, baseRef, mirror).Block())
-			startIntegrationPartsOf(unit.ID, child, a.Parts, body)
+			startIntegrationPartsOf(unit.ID, child, a.Parts, body, a.PartFiles)
 		}
 		// the fork returns at once and the conversation runs until Wait returns: the check
 		// stays registered for all of it (11/05 07:14:08 dev_fix_1 of u12d8dd5102 ended with no

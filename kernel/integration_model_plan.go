@@ -17,8 +17,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -40,14 +42,23 @@ const (
 		"'missing: <tensor group> <what>' — what the model computes with that group that no unit's kernel does; given to the integration unit, which writes it.\n" +
 		"'unused: <unit id>' — a unit none of whose kernels the model's forward needs; its kernels are not asked of the end-to-end run.\n" +
 		"'part: <name>: <what it does>' — one part of the program that runs the model; the parts are given to the integration unit with their count.\n" +
-		"a line naming a group, unit or kernel the data does not have is not read.\n"
+		"'partfile: <part name> <path>' — a file of the tree that part writes, one line per file. The kernel gives each part's conversation its own files and the files of the others, and a part that writes another's file is logged; a path the tree does not have, and a file two parts name, are read for the part that names it last.\n" +
+		"a line naming a group, unit, kernel or path the data does not have is not read.\n"
 )
 
 // integrationModelData is the planner's data file.
 func integrationModelData(ms ModelShape, perUnit map[string][]string, sources map[string][]string) string {
+	return integrationModelDataFiles(ms, perUnit, sources, "")
+}
+
+// integrationModelDataFiles is integrationModelData with the tree's files a part may be given.
+func integrationModelDataFiles(ms ModelShape, perUnit map[string][]string, sources map[string][]string, files string) string {
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("## the model at %s (measured: config.json and the safetensors headers)\n\n### config.json\n```\n%s```\n\n### tensor groups (name, dtype, shape, count, the numeric segments' values)\n```\n%s```\n\n",
 		ms.Dir, ms.ConfigLines(), ms.TensorLines()))
+	if files != "" {
+		b.WriteString("## the files of the tree, which a partfile line names (measured)\n\n```\n" + files + "```\n\n")
+	}
 	b.WriteString("## the units of the port: the kernels each ported, and the reference files they came from\n")
 	var units []string
 	for u := range perUnit {
@@ -191,10 +202,11 @@ func (r *devRun) integrationModelAnswer(unit DevPlanNode, baseRef string) Integr
 		}
 	}
 	theory, _ := os.ReadFile(filepath.Join(tree, ".einsteinOS", "theory.md"))
-	takes := func(a string) bool { return parseIntegrationModel(a, ms, perUnit).taken() > 0 }
+	treeFiles, treeHas := integrationTreeFiles(tree)
+	takes := func(a string) bool { return parseIntegrationModelIn(a, ms, perUnit, treeHas).taken() > 0 }
 	planHad := len(r.plan.IntegrationModel)
 	prev := r.plan.IntegrationModel[r.plan.IntegrationModelLast]
-	data := integrationModelData(ms, perUnit, sources) +
+	data := integrationModelDataFiles(ms, perUnit, sources, treeFiles) +
 		measurePortInventory(tree, ms).Block(len(ms.TensorGroups())) +
 		integrationFeedback(r.plan.LastFailure[unit.ID], prev)
 	out, fresh := askIntegrationModel(r.pid, r.repo, r.plan, data, string(theory), len(ms.TensorGroups()), len(perUnit), r.whileWaiting, takes)
@@ -208,7 +220,7 @@ func (r *devRun) integrationModelAnswer(unit DevPlanNode, baseRef string) Integr
 	if fresh && out != "" {
 		devPlanSave(r.repo, r.devRepo, r.branch, r.plan, "plan: the planner's answer on how the port runs the model")
 	}
-	p := parseIntegrationModel(out, ms, perUnit)
+	p := parseIntegrationModelIn(out, ms, perUnit, treeHas)
 	// where the port's tree stands is the unit's to know too, not the planner's alone
 	p.Inventory = measurePortInventory(tree, ms).Block(len(ms.TensorGroups()))
 	log.Printf(integrationModelLogFmt, r.repo, unit.ID, p.counts(), len(ms.TensorGroups()), len(perUnit))
@@ -232,6 +244,9 @@ type IntegrationModelPlan struct {
 	Unused []string
 	// Parts: how the program that runs the model divides, "<name>: <what it does>"
 	Parts []string
+	// PartFiles: per part name, the files of the tree it writes — a path the tree has, and a
+	// file of one part only (the part that names it last keeps it)
+	PartFiles map[string][]string
 	// Inventory: where the port's tree stands toward running the model (integration_inventory.go)
 	Inventory string
 	// Dropped: lines of the answer's kinds that named something the data does not have
@@ -241,11 +256,18 @@ type IntegrationModelPlan struct {
 // parseIntegrationModel reads the planner's lines; a line naming a group, unit or kernel the
 // data does not have is dropped.
 func parseIntegrationModel(out string, ms ModelShape, perUnit map[string][]string) IntegrationModelPlan {
+	return parseIntegrationModelIn(out, ms, perUnit, func(string) bool { return false })
+}
+
+// parseIntegrationModelIn is parseIntegrationModel where treeHas says whether the tree has a
+// path a partfile line names.
+func parseIntegrationModelIn(out string, ms ModelShape, perUnit map[string][]string, treeHas func(string) bool) IntegrationModelPlan {
 	groups := map[string]bool{}
 	for _, g := range ms.TensorGroups() {
 		groups[g.Pattern] = true
 	}
 	var p IntegrationModelPlan
+	var partFiles [][2]string // the partfile lines in the order the answer names them
 	for _, raw := range strings.Split(out, "\n") {
 		l := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(raw), "- "))
 		l = strings.TrimSpace(strings.Trim(l, "`"))
@@ -264,6 +286,13 @@ func parseIntegrationModel(out string, ms ModelShape, perUnit map[string][]strin
 				continue
 			}
 			p.Ops = append(p.Ops, IntegrationOp{Group: f[0], What: strings.TrimSpace(f[1])})
+		case strings.HasPrefix(l, "partfile:"):
+			f := strings.Fields(strings.TrimPrefix(l, "partfile:"))
+			if len(f) != 2 || !treeHas(f[1]) {
+				p.Dropped++
+				continue
+			}
+			partFiles = append(partFiles, [2]string{f[0], f[1]})
 		case strings.HasPrefix(l, "part:"):
 			if f := strings.SplitN(strings.TrimSpace(strings.TrimPrefix(l, "part:")), ":", 2); len(f) == 2 && strings.TrimSpace(f[0]) != "" && strings.TrimSpace(f[1]) != "" {
 				p.Parts = append(p.Parts, strings.TrimSpace(f[0])+": "+strings.TrimSpace(f[1]))
@@ -294,6 +323,28 @@ func parseIntegrationModel(out string, ms ModelShape, perUnit map[string][]strin
 		keep = nil
 	}
 	p.Unused = keep
+	// a file is of the part that names it last, among the parts the answer names
+	owner := map[string]string{}
+	for _, pf := range partFiles {
+		named := false
+		for _, part := range p.Parts {
+			named = named || strings.HasPrefix(part, pf[0]+": ")
+		}
+		if !named {
+			p.Dropped++
+			continue
+		}
+		owner[pf[1]] = pf[0]
+	}
+	for file, name := range owner {
+		if p.PartFiles == nil {
+			p.PartFiles = map[string][]string{}
+		}
+		p.PartFiles[name] = append(p.PartFiles[name], file)
+	}
+	for name := range p.PartFiles {
+		sort.Strings(p.PartFiles[name])
+	}
 	return p
 }
 
@@ -423,7 +474,7 @@ const integrationPartsLogFmt = "dev_from_theorems: integration unit %[1]s: %[2]d
 // started at once; the rest are started in the background. 11/23 01:53:37 the six parts allowed
 // were started at once beside the integration conversation, seven running, and at 02:19:23 the
 // server refused one of them for the account's concurrency.
-func startIntegrationParts(unitID, parent string, parts []string, body string) []SpawnResult {
+func startIntegrationParts(unitID, parent string, parts []string, body string, files map[string][]string) []SpawnResult {
 	if parent == "" || len(parts) == 0 {
 		return nil
 	}
@@ -440,7 +491,7 @@ func startIntegrationParts(unitID, parent string, parts []string, body string) [
 	queue := append([]string(nil), parts...)
 	retried := map[string]bool{}
 	start := func(part string) (SpawnResult, bool) {
-		res, err := spawnConvWith(parent, "work", spawnPrompt(parent, "work", part, body), kernelPartPolicy(parent))
+		res, err := spawnConvWith(parent, "work", spawnPrompt(parent, "work", part, body+partFilesBlock(part, files)), kernelPartPolicy(parent))
 		if err != nil {
 			log.Printf(integrationPartsLogFmt, unitID, 0, len(parts), shortID(parent), fmt.Sprintf("%q: %v", part, err))
 			return res, false
@@ -477,7 +528,7 @@ func startIntegrationParts(unitID, parent string, parts []string, body string) [
 				if why := conversationError(out); why != "" {
 					if !retried[part] {
 						retried[part] = true
-						forgetSpawn(parent, "work", spawnPrompt(parent, "work", part, body))
+						forgetSpawn(parent, "work", spawnPrompt(parent, "work", part, body+partFilesBlock(part, files)))
 						queue = append(queue, part)
 						log.Printf(integrationPartsAgainFmt, unitID, shortID(addr), part, why)
 					} else {
@@ -553,7 +604,7 @@ const conversationErrorTail = 4096
 
 // startIntegrationPartsOf waits for the forked conversation child to report its address and
 // starts the parts under it (in the background: the unit waits on the conversation).
-func startIntegrationPartsOf(unitID string, child int64, parts []string, body string) {
+func startIntegrationPartsOf(unitID string, child int64, parts []string, body string, files map[string][]string) {
 	if len(parts) == 0 {
 		return
 	}
@@ -568,12 +619,14 @@ func startIntegrationPartsOf(unitID string, child int64, parts []string, body st
 			log.Printf(integrationPartsLogFmt, unitID, 0, len(parts), "-", "the conversation did not report its address")
 			return
 		}
-		startIntegrationParts(unitID, parent, parts, body)
+		startIntegrationParts(unitID, parent, parts, body, files)
 	}()
 }
 
 // taken: how many of the answer's lines the kernel took.
-func (p IntegrationModelPlan) taken() int { return len(p.Ops) + len(p.Unused) + len(p.Parts) }
+func (p IntegrationModelPlan) taken() int {
+	return len(p.Ops) + len(p.Unused) + len(p.Parts) + len(p.PartFiles)
+}
 
 const (
 	// %[1]s the gate, %[2]s its text
@@ -595,4 +648,116 @@ func integrationFeedback(last DevFailure, prev string) string {
 		b.WriteString(fmt.Sprintf(integrationPreviousAnswerFmt, prev))
 	}
 	return b.String()
+}
+
+const (
+	// %[1]d the part's files, %[2]s them, %[3]d the other parts' files, %[4]s them
+	partFilesFmt = "[THE FILES OF THIS PART — the planner named them, and the kernel checked each against the tree]\nthis part writes these %[1]d file(s):\n%[2]s"
+	// %[1]d files, %[2]s them with their part
+	partOthersFmt = "the other parts write these %[1]d file(s), which this part does not write:\n%[3]s"
+	// %[1]s the file, %[2]s the part
+	partOtherLineFmt = "  %[1]s (%[2]s)\n"
+)
+
+// partFilesBlock: the files of the part, and the files of the others, as its conversation is
+// given them. 11/23 the six parts shared one mirror with no file of their own, and their edits
+// of core_layer.hpp, rt_native.hpp and e2e_all_check.cu undid one another (str_replace found
+// its text gone), where the 44 units of the plan are independent by what the kernel measures
+// (acd1e1df).
+func partFilesBlock(part string, files map[string][]string) string {
+	name, _, _ := strings.Cut(part, ":")
+	mine := files[strings.TrimSpace(name)]
+	if len(mine) == 0 && len(files) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	var lines strings.Builder
+	for _, f := range mine {
+		lines.WriteString("  " + f + "\n")
+	}
+	b.WriteString(fmt.Sprintf(partFilesFmt, len(mine), lines.String()))
+	var others []string
+	var owner []string
+	for n, fs := range files {
+		if strings.TrimSpace(name) == n {
+			continue
+		}
+		for _, f := range fs {
+			others = append(others, f)
+			owner = append(owner, n)
+		}
+	}
+	if len(others) > 0 {
+		idx := make([]int, len(others))
+		for i := range idx {
+			idx[i] = i
+		}
+		sort.Slice(idx, func(i, j int) bool { return others[idx[i]] < others[idx[j]] })
+		var ol strings.Builder
+		for _, i := range idx {
+			ol.WriteString(fmt.Sprintf(partOtherLineFmt, others[i], owner[i]))
+		}
+		b.WriteString(fmt.Sprintf(strings.Replace(partOthersFmt, "%[3]s", "%[2]s", 1), len(others), ol.String()))
+	}
+	return b.String()
+}
+
+// integrationTreeFilesMax: how many of the tree's files the planner is given.
+const integrationTreeFilesMax = 400
+
+// integrationTreeFiles: the tree's source files, one per line, and whether the tree has a path.
+// A partfile line names one of these.
+func integrationTreeFiles(tree string) (string, func(string) bool) {
+	var all []string
+	filepath.WalkDir(tree, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case ".git", "build", "_build", "node_modules", "__pycache__":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		switch strings.ToLower(filepath.Ext(p)) {
+		case ".c", ".cc", ".cpp", ".cu", ".cuh", ".h", ".hpp", ".py", ".sh", ".lean":
+			rel, rerr := filepath.Rel(tree, p)
+			if rerr == nil {
+				all = append(all, filepath.ToSlash(rel))
+			}
+		}
+		return nil
+	})
+	sort.Strings(all)
+	has := map[string]bool{}
+	for _, f := range all {
+		has[f] = true
+	}
+	shown := all
+	more := 0
+	if len(shown) > integrationTreeFilesMax {
+		more = len(shown) - integrationTreeFilesMax
+		shown = shown[:integrationTreeFilesMax]
+	}
+	var b strings.Builder
+	for _, f := range shown {
+		b.WriteString("  " + f + "\n")
+	}
+	if more > 0 {
+		b.WriteString(fmt.Sprintf("  … and %d more\n", more))
+	}
+	// a path the tree has, whether or not it was shown; a file a part is to create is named
+	// under a directory the tree has
+	return b.String(), func(p string) bool {
+		p = filepath.ToSlash(strings.TrimPrefix(strings.TrimSpace(p), "./"))
+		if has[p] {
+			return true
+		}
+		if d := path.Dir(p); d != "." && d != "/" {
+			st, err := os.Stat(filepath.Join(tree, filepath.FromSlash(d)))
+			return err == nil && st.IsDir()
+		}
+		return false
+	}
 }
