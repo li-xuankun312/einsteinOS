@@ -27,6 +27,8 @@ type PortInventory struct {
 	Readers  []string // sources that name the model's weight files (.safetensors)
 	Named    map[string][]string
 	Unnamed  []string // tensor groups no source names
+	// Redefined: functions defined, not static or inline, in more than one source (port_symbols.go)
+	Redefined []string
 }
 
 // portSourceExts: the sources a program of the port is built from.
@@ -105,6 +107,7 @@ func measurePortInventory(tree string, ms ModelShape) PortInventory {
 			inv.Unnamed = append(inv.Unnamed, g.Pattern)
 		}
 	}
+	inv.Redefined = redefinedFuncs(treeFuncSites(tree))
 	sort.Strings(inv.Programs)
 	sort.Strings(inv.Readers)
 	sort.Strings(inv.Unnamed)
@@ -128,7 +131,8 @@ const (
 	portInventoryFmt = "## the port's tree as the attempt starts on it (measured: its C/C++/CUDA sources)\n\n" +
 		"### %[1]d program(s) — a source with int main, and its first comment line\n%[2]s\n" +
 		"### %[3]d source(s) naming .safetensors\n%[4]s\n" +
-		"### %[5]d of the model's %[6]d tensor groups are named in some source; these are named in none\n%[7]s\n"
+		"### %[5]d of the model's %[6]d tensor groups are named in some source; these are named in none\n%[7]s\n" +
+		"### %[8]d function(s) defined in more than one source (not static or inline)\n%[9]s\n"
 )
 
 func lines(l []string) string {
@@ -141,5 +145,5 @@ func lines(l []string) string {
 // Block: the inventory as the planner's data.
 func (inv PortInventory) Block(groups int) string {
 	return fmt.Sprintf(portInventoryFmt, len(inv.Programs), lines(inv.Programs), len(inv.Readers), lines(inv.Readers),
-		groups-len(inv.Unnamed), groups, lines(inv.Unnamed))
+		groups-len(inv.Unnamed), groups, lines(inv.Unnamed), len(inv.Redefined), lines(inv.Redefined))
 }
