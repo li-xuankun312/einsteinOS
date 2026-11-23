@@ -61,3 +61,25 @@ func TestTheUnitIsGivenWhereThePortsTreeStands(t *testing.T) {
 		t.Fatal("nothing measured and nothing answered should insert nothing")
 	}
 }
+
+// 11/23 15:45:59 the answer read op 8, missing 59 where at 01:53 it read op 78, missing 21: the
+// groups it moves between a unit's kernel and the integration unit's own code are named
+func TestTheGroupsANewAnswerMovesAreNamed(t *testing.T) {
+	prev := IntegrationModelPlan{Ops: []IntegrationOp{
+		{Group: "model.language_model.embed_tokens.weight", Unit: "u7991572426", Kernel: "embedding_gather_kernel"},
+		{Group: "lm_head.weight", Unit: "pcd027bc02f", Kernel: "bf16_gemv_warp_kernel"},
+		{Group: "model.visual.patch_embed.proj.weight", What: "3-D conv"},
+	}}
+	now := IntegrationModelPlan{Ops: []IntegrationOp{
+		{Group: "model.language_model.embed_tokens.weight", What: "embedding gather"},
+		{Group: "lm_head.weight", Unit: "pcd027bc02f", Kernel: "bf16_f32_mmvf_kernel"},
+		{Group: "model.visual.patch_embed.proj.weight", Unit: "pcd027bc02f", Kernel: "x"},
+	}}
+	got := answerMoves(prev, now)
+	if got != "1 from op to missing (model.language_model.embed_tokens.weight); 1 from missing to op (model.visual.patch_embed.proj.weight)" {
+		t.Fatalf("%s", got)
+	}
+	if answerMoves(now, now) != "" {
+		t.Fatal("the same answer moves something")
+	}
+}

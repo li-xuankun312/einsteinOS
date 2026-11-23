@@ -221,6 +221,11 @@ func (r *devRun) integrationModelAnswer(unit DevPlanNode, baseRef string) Integr
 		devPlanSave(r.repo, r.devRepo, r.branch, r.plan, "plan: the planner's answer on how the port runs the model")
 	}
 	p := parseIntegrationModelIn(out, ms, perUnit, treeHas)
+	if prev != "" && out != prev {
+		if moved := answerMoves(parseIntegrationModelIn(prev, ms, perUnit, treeHas), p); moved != "" {
+			log.Printf(integrationAnswerMovedFmt, unit.ID, moved)
+		}
+	}
 	if p.Parts, p.OffPath = offPathParts(ms, p.Parts); len(p.OffPath) > 0 {
 		log.Printf(integrationOffPathLogFmt, unit.ID, len(p.OffPath), strings.Join(p.OffPath, "; "), measureModelPath(ms).TextRoot)
 	}
@@ -429,6 +434,43 @@ func (p IntegrationModelPlan) Block() string {
 }
 
 // %[1]s repo, %[2]s unit, %[3]s the answer's counts, %[4]d tensor groups, %[5]d units with kernels
+// %[1]s unit, %[2]s what moved
+const integrationAnswerMovedFmt = "dev_from_theorems: integration unit %[1]s: the planner's new answer moves tensor groups between a unit's kernel and the integration unit's own code: %[2]s"
+
+// answerMoves: the tensor groups the new answer moves from an op line (a unit's kernel computes
+// with them) to a missing line (the integration unit writes them) and back, against the previous
+// answer. 11/23 15:45:59 the answer read op 8, missing 59 where at 01:53 it had read op 78,
+// missing 21, and the log said only the counts.
+func answerMoves(prev, now IntegrationModelPlan) string {
+	kind := func(p IntegrationModelPlan) map[string]string {
+		m := map[string]string{}
+		for _, o := range p.Ops {
+			if o.Unit != "" {
+				m[o.Group] = "op"
+			} else if m[o.Group] == "" {
+				m[o.Group] = "missing"
+			}
+		}
+		return m
+	}
+	was, is := kind(prev), kind(now)
+	var toMissing, toOp []string
+	for g, k := range is {
+		switch {
+		case k == "missing" && was[g] == "op":
+			toMissing = append(toMissing, g)
+		case k == "op" && was[g] == "missing":
+			toOp = append(toOp, g)
+		}
+	}
+	if len(toMissing) == 0 && len(toOp) == 0 {
+		return ""
+	}
+	sort.Strings(toMissing)
+	sort.Strings(toOp)
+	return fmt.Sprintf("%d from op to missing (%s); %d from missing to op (%s)", len(toMissing), strings.Join(toMissing, " "), len(toOp), strings.Join(toOp, " "))
+}
+
 // %[1]s unit, %[2]d parts, %[3]s them, %[4]s the text path's root
 const integrationOffPathLogFmt = "dev_from_theorems: integration unit %[1]s: %[2]d of the planner's part(s) are not started — they name only tensors off the path the model's text goes through (%[4]s, the layers num_hidden_layers counts): %[3]s"
 
