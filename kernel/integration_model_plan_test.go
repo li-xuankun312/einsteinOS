@@ -349,3 +349,28 @@ func TestMoreThanSixPartsStartOneAfterAnother(t *testing.T) {
 	defer mu.Unlock()
 	t.Fatalf("%d of 10 parts started", started)
 }
+
+// 11/23 the planner was asked once at 01:53; the verifications after it never reached it: its
+// data carries the integration unit's last verification and its own previous answer, and the
+// answer it gives is the one the next question carries
+func TestThePlannerIsToldTheLastVerificationAndItsPreviousAnswer(t *testing.T) {
+	fb := integrationFeedback(DevFailure{Kind: "integration_direction_closed", Text: "the processes of e2e.sh are the direction python3.10 pytools/e2e_infer.py [port], closed"}, "op: a u k\npart: loader: reads the shards")
+	for _, w := range []string{"## the integration unit's last verification", "gate: integration_direction_closed", "pytools/e2e_infer.py [port], closed", "## the previous answer to this question", "part: loader: reads the shards"} {
+		if !strings.Contains(fb, w) {
+			t.Fatalf("missing %q in\n%s", w, fb)
+		}
+	}
+	if integrationFeedback(DevFailure{}, "") != "" {
+		t.Fatal("nothing to tell, and something told")
+	}
+	old := devPlannerRunner
+	defer func() { devPlannerRunner = old }()
+	devPlannerRunner = func(int64, string, string) string { return "op: a u k\n" }
+	plan := &DevPlan{}
+	direct := func(f func()) { f() }
+	takes := func(a string) bool { return strings.Contains(a, "op:") }
+	askIntegrationModel(0, "r", plan, "data-feedback-1", "t", 1, 1, direct, takes)
+	if plan.IntegrationModelLast == "" || plan.IntegrationModel[plan.IntegrationModelLast] != "op: a u k\n" {
+		t.Fatalf("the answer read is not the last: %q %v", plan.IntegrationModelLast, plan.IntegrationModel)
+	}
+}

@@ -33,7 +33,8 @@ const (
 	integrationModelWhatFmt = "内核测量了这台机器上的模型（%[1]d 组张量）和移植版 %[2]d 个 unit 已移植的 kernel"
 	// %[1]s the data file, %[2]s the theory
 	integrationModelContentFmt = "[DATA] %[1]s: the model on this machine as its own files say it is (config.json, every tensor group's name, dtype and shape), " +
-		"and per unit of the port the kernels it ported and the reference files they came from; %[2]s: the theory the units were written from.\n" +
+		"per unit of the port the kernels it ported and the reference files they came from, the port's tree as this attempt starts on it (its programs, the sources naming the model's weight files, the tensor groups no source names), " +
+		"the integration unit's last verification, and the previous answer to this question; %[2]s: the theory the units were written from.\n" +
 		"[ANSWER] the kernel reads lines:\n" +
 		"'op: <tensor group> <unit id> <kernel>' — that unit's kernel computes with that tensor group of the model (the group as the data names it); given to the integration unit.\n" +
 		"'missing: <tensor group> <what>' — what the model computes with that group that no unit's kernel does; given to the integration unit, which writes it.\n" +
@@ -120,6 +121,7 @@ func askIntegrationModel(pid int64, repo string, plan *DevPlan, data, theory str
 			plan.IntegrationModel = map[string]string{}
 		}
 		plan.IntegrationModel[key] = out
+		plan.IntegrationModelLast = key
 	}
 	return out, true
 }
@@ -157,7 +159,7 @@ func integrationAnswerOf(unitID string) IntegrationModelPlan {
 // integrationModelAnswer asks (or reads back) the planner's answer for the integration unit:
 // the model as measured, the kernels each unit ported on the dev branch and the reference
 // files they came from, and the theory stored there.
-func (r *devRun) integrationModelAnswer(unit DevPlanNode) IntegrationModelPlan {
+func (r *devRun) integrationModelAnswer(unit DevPlanNode, baseRef string) IntegrationModelPlan {
 	ms, err := modelShapeOf(evalModel())
 	if err != nil {
 		return IntegrationModelPlan{}
@@ -166,7 +168,13 @@ func (r *devRun) integrationModelAnswer(unit DevPlanNode) IntegrationModelPlan {
 	if err != nil {
 		return IntegrationModelPlan{}
 	}
-	tree, err := branchTree(dir, r.branch)
+	// the tree this attempt starts on (its wip branch), not the dev branch: the integration's
+	// work is there
+	ref := baseRef
+	if ref == "" {
+		ref = r.branch
+	}
+	tree, err := branchTree(dir, ref)
 	if err != nil {
 		log.Printf("dev_from_theorems: %s: the branch could not be read for the planner's question on the model (%v)", r.repo, err)
 		return IntegrationModelPlan{}
@@ -185,7 +193,15 @@ func (r *devRun) integrationModelAnswer(unit DevPlanNode) IntegrationModelPlan {
 	theory, _ := os.ReadFile(filepath.Join(tree, ".einsteinOS", "theory.md"))
 	takes := func(a string) bool { return parseIntegrationModel(a, ms, perUnit).taken() > 0 }
 	planHad := len(r.plan.IntegrationModel)
-	out, fresh := askIntegrationModel(r.pid, r.repo, r.plan, integrationModelData(ms, perUnit, sources), string(theory), len(ms.TensorGroups()), len(perUnit), r.whileWaiting, takes)
+	prev := r.plan.IntegrationModel[r.plan.IntegrationModelLast]
+	data := integrationModelData(ms, perUnit, sources) +
+		measurePortInventory(tree, ms).Block(len(ms.TensorGroups())) +
+		integrationFeedback(r.plan.LastFailure[unit.ID], prev)
+	out, fresh := askIntegrationModel(r.pid, r.repo, r.plan, data, string(theory), len(ms.TensorGroups()), len(perUnit), r.whileWaiting, takes)
+	if !takes(out) && prev != "" {
+		// a new answer the kernel reads nothing of leaves the last one standing
+		out = prev
+	}
 	if len(r.plan.IntegrationModel) < planHad {
 		devPlanSave(r.repo, r.devRepo, r.branch, r.plan, "plan: a planner's answer with nothing the kernel reads dropped")
 	}
@@ -550,3 +566,25 @@ func startIntegrationPartsOf(unitID string, child int64, parts []string, body st
 
 // taken: how many of the answer's lines the kernel took.
 func (p IntegrationModelPlan) taken() int { return len(p.Ops) + len(p.Unused) + len(p.Parts) }
+
+const (
+	// %[1]s the gate, %[2]s its text
+	integrationLastVerificationFmt = "## the integration unit's last verification\n\ngate: %[1]s\n```\n%[2]s\n```\n\n"
+	// %[1]s the answer
+	integrationPreviousAnswerFmt = "## the previous answer to this question\n\n```\n%[1]s\n```\n"
+)
+
+// integrationFeedback: what the planner is told of the attempts since its last answer — the
+// integration unit's last verification (plan.json's last failure: its gate and text) and that
+// answer. 11/23 01:53 the planner was asked once; the four verifications and 3 hours after it
+// (direction closed, a compile failure, a refusal over the branch) never reached it.
+func integrationFeedback(last DevFailure, prev string) string {
+	var b strings.Builder
+	if last.Kind != "" || last.Text != "" {
+		b.WriteString(fmt.Sprintf(integrationLastVerificationFmt, last.Kind, truncStr(last.Text, 6000)))
+	}
+	if prev != "" {
+		b.WriteString(fmt.Sprintf(integrationPreviousAnswerFmt, prev))
+	}
+	return b.String()
+}

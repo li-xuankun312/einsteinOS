@@ -147,6 +147,8 @@ type DevPlan struct {
 	// IntegrationModel: the planner's answers on how the port's kernels run the model on this
 	// machine, by what they were asked on (integration_model_plan.go)
 	IntegrationModel map[string]string `json:"integration_model,omitempty"`
+	// IntegrationModelLast: the key of the last answer of the planner the kernel read lines of
+	IntegrationModelLast string `json:"integration_model_last,omitempty"`
 
 	// silent counts, per unit, the conversations IN A ROW that wrote no file. In memory
 	// only: a restart is a person deciding to try again, and starts the count over.
