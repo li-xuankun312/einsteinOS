@@ -16,6 +16,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -105,23 +106,46 @@ func memoFromBuild(ws, key string, pl probeLog, exit int, out string, trace Proc
 	return m
 }
 
-// memoMatches: ws, as the build would see it, is what the memo's build saw.
-func (m buildMemo) memoMatches(ws, key string) bool {
-	if m.Key != key || len(m.Inputs) == 0 {
-		return false
+// memoChanged: what of ws, as the build would see it, is not what the memo's build saw — at
+// most memoChangedMax of each kind, with how many there are; none when it is the same.
+func (m buildMemo) memoChanged(ws, key string) []string {
+	var out []string
+	if m.Key != key {
+		out = append(out, "build.sh or its environment")
 	}
+	if len(m.Inputs) == 0 {
+		out = append(out, "no file read was recorded")
+	}
+	var files, dirs []string
 	for rel, sha := range m.Inputs {
 		if fileSHA(filepath.Join(ws, filepath.FromSlash(rel))) != sha {
-			return false
+			files = append(files, rel)
 		}
 	}
 	for rel, l := range m.Dirs {
 		if dirListing(filepath.Join(ws, filepath.FromSlash(rel))) != l {
-			return false
+			dirs = append(dirs, rel+"/")
 		}
 	}
-	return true
+	sort.Strings(files)
+	sort.Strings(dirs)
+	some := func(kind string, l []string) {
+		if len(l) == 0 {
+			return
+		}
+		shown := l
+		if len(shown) > memoChangedMax {
+			shown = shown[:memoChangedMax]
+		}
+		out = append(out, fmt.Sprintf("%d %s (%s)", len(l), kind, strings.Join(shown, " ")))
+	}
+	some("file(s) it read changed", files)
+	some("director(ies) it listed have other entries", dirs)
+	return out
 }
+
+// memoChangedMax: how many changed files, or directories, a miss names.
+const memoChangedMax = 5
 
 func memoCopyFile(src, dst string) error {
 	in, err := os.Open(src)
@@ -177,17 +201,20 @@ func saveBuildMemo(unitID, ws string, m buildMemo) error {
 }
 
 // reuseBuildMemo: when the unit's last build saw what a build in ws would, its outputs are put
-// back and its record returned.
-func reuseBuildMemo(unitID, ws, key string) (buildMemo, bool) {
+// back and its record returned; else what changed (nothing when no build was kept).
+func reuseBuildMemo(unitID, ws, key string) (buildMemo, bool, []string) {
 	var m buildMemo
 	b, err := os.ReadFile(filepath.Join(buildMemoDir(unitID), "memo.json"))
-	if err != nil || json.Unmarshal(b, &m) != nil || !m.memoMatches(ws, key) {
-		return buildMemo{}, false
+	if err != nil || json.Unmarshal(b, &m) != nil {
+		return buildMemo{}, false, nil
+	}
+	if changed := m.memoChanged(ws, key); len(changed) > 0 {
+		return buildMemo{}, false, changed
 	}
 	for _, o := range m.Outputs {
 		if err := memoCopyFile(storedOutput(unitID, o), outputPath(ws, o)); err != nil {
-			return buildMemo{}, false
+			return buildMemo{}, false, []string{"a kept output could not be put back: " + err.Error()}
 		}
 	}
-	return m, true
+	return m, true, nil
 }

@@ -479,7 +479,11 @@ func runUnitVerifyAlone(ws, unitID, gpuUsable string, req UnitRequirements, chan
 	memoOn := !freshBuild() && filepath.Base(ws) == "einsteinos_verify_"+unitID
 	key := buildMemoKey(ws, build, env)
 	if memoOn {
-		if m, ok := reuseBuildMemo(unitID, ws, key); ok {
+		m, ok, changed := reuseBuildMemo(unitID, ws, key)
+		if !ok && len(changed) > 0 {
+			log.Printf(buildMemoMissFmt, unitID, build, strings.Join(changed, "; "))
+		}
+		if ok {
 			log.Printf(buildMemoReusedFmt, unitID, build, len(m.Inputs), len(m.Dirs), len(m.Outputs))
 			res.Build, res.BuildExit, res.BuildOut, res.NoToolchain, res.BuildReused = m.Trace, m.Exit, m.Out, m.NoTool, true
 			if m.Exit != 0 {
@@ -1008,5 +1012,7 @@ const verifyProcTimesFmt = "dev_verify: unit %[1]s: %[2]s ran %[3]s; by executab
 const (
 	// %[1]s unit, %[2]s build.sh, %[3]d files read, %[4]d directories listed, %[5]d files written
 	buildMemoReusedFmt = "dev_verify: unit %[1]s: %[2]s not run — the %[3]d workspace file(s) its last run read and the %[4]d director(ies) it listed are what they were; the %[5]d file(s) it wrote are put back"
-	buildMemoSavedFmt  = "dev_verify: unit %[1]s: %[2]s read %[3]d workspace file(s), listed %[4]d director(ies) and wrote %[5]d file(s) — kept, for a verification whose inputs are the same"
+	// %[1]s unit, %[2]s build.sh, %[3]s what changed
+	buildMemoMissFmt  = "dev_verify: unit %[1]s: %[2]s runs — since its last run %[3]s"
+	buildMemoSavedFmt = "dev_verify: unit %[1]s: %[2]s read %[3]d workspace file(s), listed %[4]d director(ies) and wrote %[5]d file(s) — kept, for a verification whose inputs are the same"
 )

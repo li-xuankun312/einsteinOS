@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -68,5 +69,25 @@ func TestABuildWhoseInputsDidNotChangeIsNotRunAgain(t *testing.T) {
 	t.Setenv("EINSTEINOS_FRESH_BUILD", "1")
 	if r := verify(); r.BuildReused || runs() != 5 {
 		t.Fatalf("EINSTEINOS_FRESH_BUILD=1 reused a build: runs=%d", runs())
+	}
+}
+
+// 11/23 00:05 and 00:20 the integration unit's build ran again with nothing in the log saying
+// why: a miss names what changed
+func TestAMissSaysWhatChanged(t *testing.T) {
+	ws := t.TempDir()
+	os.MkdirAll(filepath.Join(ws, "pytools"), 0o755)
+	os.WriteFile(filepath.Join(ws, "pytools", "e2e_infer.py"), []byte("1"), 0o644)
+	os.WriteFile(filepath.Join(ws, "build.sh"), []byte("x"), 0o644)
+	m := buildMemo{Key: "k", Inputs: map[string]string{"pytools/e2e_infer.py": fileSHA(filepath.Join(ws, "pytools", "e2e_infer.py"))},
+		Dirs: map[string]string{"pytools": dirListing(filepath.Join(ws, "pytools"))}}
+	if c := m.memoChanged(ws, "k"); len(c) != 0 {
+		t.Fatalf("nothing changed: %v", c)
+	}
+	os.WriteFile(filepath.Join(ws, "pytools", "e2e_infer.py"), []byte("2"), 0o644)
+	os.WriteFile(filepath.Join(ws, "pytools", "patch_import_utils.py"), []byte(""), 0o644)
+	got := strings.Join(m.memoChanged(ws, "k2"), "; ")
+	if got != "build.sh or its environment; 1 file(s) it read changed (pytools/e2e_infer.py); 1 director(ies) it listed have other entries (pytools/)" {
+		t.Fatalf("%q", got)
 	}
 }
