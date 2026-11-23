@@ -171,8 +171,16 @@ func evalIntegration(pid int64, repo, sha, devRepo, unitID string, benches []Eva
 		// formula's rates — was looked at
 		start := time.Now()
 		log.Printf("eval: %s %s: running %s on the model at %s", repo, shortSHA(sha), devE2EScript(unitID), evalModel())
+		guard := guardModelDir(evalModel())
 		rec.E2E = evalRunE2E(ws, unitID)
 		log.Printf("eval: %s %s: %s exited %d in %s, %d metric(s)", repo, shortSHA(sha), devE2EScript(unitID), rec.E2E.Exit, time.Since(start).Round(time.Second), len(rec.E2E.Metrics))
+		// what the run changed in the model's directory is put back, and the run is not evaluated
+		if changed := guard.restore(); len(changed) > 0 {
+			k, t := "integration_e2e_modifies_model", fmt.Sprintf(gateE2EModifiesModelFmt, devE2EScript(unitID), guard.dir, len(changed), shownPaths(changed, 12))
+			log.Printf(evalE2EFirstFmt, repo, shortSHA(sha), devE2EScript(unitID), k)
+			log.Printf(evalE2EGateTextFmt, repo, shortSHA(sha), truncStr(t, evalE2EGateTextMax))
+			return k, t
+		}
 		// the run's direction, as its processes measured it (eval_direction.go)
 		var book *DirectionBook
 		if dir, err := evalStateDir(devRepo); err == nil {
