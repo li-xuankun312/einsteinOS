@@ -416,7 +416,7 @@ func startIntegrationParts(unitID, parent string, parts []string, body string) [
 	queue := append([]string(nil), parts...)
 	retried := map[string]bool{}
 	start := func(part string) (SpawnResult, bool) {
-		res, err := SpawnConv(parent, "work", spawnPrompt(parent, "work", part, body))
+		res, err := spawnConvWith(parent, "work", spawnPrompt(parent, "work", part, body), kernelPartPolicy(parent))
 		if err != nil {
 			log.Printf(integrationPartsLogFmt, unitID, 0, len(parts), shortID(parent), fmt.Sprintf("%q: %v", part, err))
 			return res, false
@@ -450,11 +450,15 @@ func startIntegrationParts(unitID, parent string, parts []string, body string) [
 					continue
 				}
 				delete(running, addr)
-				if conversationEndedInError(out) && !retried[part] {
-					retried[part] = true
-					forgetSpawn(parent, "work", spawnPrompt(parent, "work", part, body))
-					queue = append(queue, part)
-					log.Printf(integrationPartsAgainFmt, unitID, shortID(addr), part, firstSentence(out))
+				if why := conversationError(out); why != "" {
+					if !retried[part] {
+						retried[part] = true
+						forgetSpawn(parent, "work", spawnPrompt(parent, "work", part, body))
+						queue = append(queue, part)
+						log.Printf(integrationPartsAgainFmt, unitID, shortID(addr), part, why)
+					} else {
+						log.Printf(integrationPartsGaveUpFmt, unitID, shortID(addr), part, why)
+					}
 				}
 				for len(queue) > 0 && len(running) < atOnce {
 					next := queue[0]
@@ -474,7 +478,9 @@ const (
 	// %[1]d at once, %[2]d queued
 	integrationPartsQueuedFmt = " — at most %[1]d at once, %[2]d queued"
 	// %[1]s unit, %[2]s the conversation, %[3]s its part, %[4]s how its result begins
-	integrationPartsAgainFmt = "dev_from_theorems: integration unit %[1]s: part conversation %[2]s (%[3]s) ended with an error (%[4]q) — its part is started once more"
+	integrationPartsAgainFmt = "dev_from_theorems: integration unit %[1]s: part conversation %[2]s (%[3]s) ended with an error (%[4]s) — its part is started once more"
+	// %[1]s unit, %[2]s the conversation, %[3]s its part, %[4]s why
+	integrationPartsGaveUpFmt = "dev_from_theorems: integration unit %[1]s: part conversation %[2]s (%[3]s) ended with an error again (%[4]s) — not started a third time"
 	// %[1]s unit, %[2]s the conversation, %[3]s its part, %[4]d still queued
 	integrationPartsNextFmt = "dev_from_theorems: integration unit %[1]s: part conversation %[2]s started for %[3]s; %[4]d part(s) still queued"
 )
@@ -497,12 +503,29 @@ var integrationPartsAtOnce = func() int {
 	return n
 }
 
-// conversationEndedInError: the final text of a conversation that ended with the model
-// layer's error exit.
-func conversationEndedInError(out string) bool {
-	s := strings.TrimSpace(out)
-	return strings.HasPrefix(s, "[Error]") || strings.HasPrefix(s, "[API Error]")
+// conversationError: why a conversation ended with the model layer's error exit — its final
+// text from the last error marker on, which doExit writes at the end of it ("" when it did not).
+// 11/23 06:29:25 and 06:45:59 the parts 8f60a081 and 579c0d30 ended so, and a test of the text's
+// start found nothing: the marker is where the conversation's text ends.
+func conversationError(out string) string {
+	tail := out
+	if len(tail) > conversationErrorTail {
+		tail = tail[len(tail)-conversationErrorTail:]
+	}
+	at := -1
+	for _, m := range []string{"[Error]", "[API Error]"} {
+		if i := strings.LastIndex(tail, m); i > at {
+			at = i
+		}
+	}
+	if at < 0 {
+		return ""
+	}
+	return truncStr(strings.TrimSpace(tail[at:]), 300)
 }
+
+// conversationErrorTail: how much of a conversation's end is read for its error exit.
+const conversationErrorTail = 4096
 
 // startIntegrationPartsOf waits for the forked conversation child to report its address and
 // starts the parts under it (in the background: the unit waits on the conversation).

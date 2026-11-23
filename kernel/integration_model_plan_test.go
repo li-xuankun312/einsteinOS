@@ -289,3 +289,63 @@ func TestThePartsRunAFewAtOnceAndAnErroredOneAgain(t *testing.T) {
 	}
 	mu.Unlock()
 }
+
+// 11/23 06:29:25 the part 8f60a081 ended with an error and was not started again: its text ends
+// with the error, it does not begin with it
+func TestAConversationsErrorIsReadFromTheEndOfItsText(t *testing.T) {
+	out := "I read the cache's header and the slot arena. Next I…\n[Error] {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"Internal server error\"}}"
+	if why := conversationError(out); !strings.HasPrefix(why, "[Error] {\"type\":\"error\"") {
+		t.Fatalf("%q", why)
+	}
+	if why := conversationError("done: the sampler's tests pass"); why != "" {
+		t.Fatalf("%q", why)
+	}
+	if why := conversationError("worked\n[API Error] Post \"…/completion\": status 502"); !strings.HasPrefix(why, "[API Error]") {
+		t.Fatalf("%q", why)
+	}
+}
+
+// 11/23 06:29:35 the queued parts were refused "this conversation already started 6 (limit 6)":
+// the parts the kernel starts are bounded by how many run at once, not by the six children a
+// conversation may start itself
+func TestMoreThanSixPartsStartOneAfterAnother(t *testing.T) {
+	oldFork, oldID, oldWait, oldFinal, oldAt, oldPoll := spawnForkFn, spawnConvID, spawnWaitFn, spawnFinal, integrationPartsAtOnce, integrationPartsPoll
+	defer func() {
+		spawnForkFn, spawnConvID, spawnWaitFn, spawnFinal, integrationPartsAtOnce, integrationPartsPoll = oldFork, oldID, oldWait, oldFinal, oldAt, oldPoll
+	}()
+	integrationPartsAtOnce = func() int { return 6 }
+	integrationPartsPoll = 10 * time.Millisecond
+	var mu sync.Mutex
+	started := 0
+	next := int64(9300)
+	spawnForkFn = func(role, prompt string) (int64, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		next++
+		started++
+		return next, nil
+	}
+	spawnConvID = func(pid int64) string { return fmt.Sprintf("%08d-0000-0000-0000-00000000000b", pid) }
+	spawnWaitFn = func(int64) {} // each part ends at once
+	spawnFinal = func(int64) string { return "done" }
+	parent := "aaaabbbb-0000-0000-0000-0000000000b1"
+	RegisterConv(0, parent, "r", "dev_fix_7_uintegration_r", 44)
+	var parts []string
+	for i := 0; i < 10; i++ {
+		parts = append(parts, fmt.Sprintf("p%d: part %d", i, i))
+	}
+	startIntegrationParts("uintegration_r", parent, parts, "body\n")
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		n := started
+		mu.Unlock()
+		if n == 10 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	t.Fatalf("%d of 10 parts started", started)
+}
