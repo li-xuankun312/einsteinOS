@@ -31,6 +31,54 @@ type PortInventory struct {
 	Redefined []string
 	// Undefined: functions a header declares and a source calls that no source defines
 	Undefined []string
+	// Printers: the sources of any language (and the line) printing "generated:" — the token
+	// ids a runner prints and the kernel measures the rate and the correctness by
+	Printers []string
+}
+
+// printerExts: the sources a "generated:" line may be printed from.
+var printerExts = map[string]bool{".c": true, ".cc": true, ".cpp": true, ".cu": true, ".cuh": true, ".h": true, ".hpp": true,
+	".py": true, ".sh": true, ".rs": true, ".go": true}
+
+// printsGeneratedRe: a line that prints "generated:" (a print call, a stream or an echo with it).
+var printsGeneratedRe = regexp.MustCompile(`(print|printf|puts|cout|cerr|echo|write)\b.*generated:|generated:.*(<<|\bprint)`)
+
+// generatedPrinters: each source of the tree (its .einsteinOS left out) with a line printing
+// "generated:", as "path:line". 11/23 the only one was pytools/e2e_infer.py, a forward written in
+// Python, in a direction closed since 11/22 18:11, and none of the planner's eight parts was a
+// program printing them.
+func generatedPrinters(tree string) []string {
+	var out []string
+	filepath.WalkDir(tree, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		rel, _ := filepath.Rel(tree, p)
+		rel = filepath.ToSlash(rel)
+		if d.IsDir() {
+			switch d.Name() {
+			case ".git", ".einsteinOS", "build", "_build", "__pycache__", "node_modules":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !printerExts[strings.ToLower(filepath.Ext(p))] {
+			return nil
+		}
+		b, err := os.ReadFile(p)
+		if err != nil || !strings.Contains(string(b), "generated:") {
+			return nil
+		}
+		for i, l := range strings.Split(string(b), "\n") {
+			if printsGeneratedRe.MatchString(l) {
+				out = append(out, fmt.Sprintf("%s:%d", rel, i+1))
+				break
+			}
+		}
+		return nil
+	})
+	sort.Strings(out)
+	return out
 }
 
 // portSourceExts: the sources a program of the port is built from.
@@ -112,6 +160,7 @@ func measurePortInventory(tree string, ms ModelShape) PortInventory {
 	sites := treeFuncSites(tree)
 	inv.Redefined = redefinedFuncs(sites)
 	inv.Undefined = undefinedFuncs(tree, sites)
+	inv.Printers = generatedPrinters(tree)
 	sort.Strings(inv.Programs)
 	sort.Strings(inv.Readers)
 	sort.Strings(inv.Unnamed)
@@ -137,7 +186,8 @@ const (
 		"### %[3]d source(s) naming .safetensors\n%[4]s\n" +
 		"### %[5]d of the model's %[6]d tensor groups are named in some source; these are named in none\n%[7]s\n" +
 		"### %[8]d function(s) defined in more than one source (not static or inline)\n%[9]s\n" +
-		"### %[10]d function(s) a header declares and a source calls that no source defines\n%[11]s\n"
+		"### %[10]d function(s) a header declares and a source calls that no source defines\n%[11]s\n" +
+		"### %[12]d source(s), of any language, with a line printing `generated:` (the token ids the kernel measures the rate by)\n%[13]s\n"
 )
 
 func lines(l []string) string {
@@ -151,5 +201,5 @@ func lines(l []string) string {
 func (inv PortInventory) Block(groups int) string {
 	return fmt.Sprintf(portInventoryFmt, len(inv.Programs), lines(inv.Programs), len(inv.Readers), lines(inv.Readers),
 		groups-len(inv.Unnamed), groups, lines(inv.Unnamed), len(inv.Redefined), lines(inv.Redefined),
-		len(inv.Undefined), lines(inv.Undefined))
+		len(inv.Undefined), lines(inv.Undefined), len(inv.Printers), lines(inv.Printers))
 }

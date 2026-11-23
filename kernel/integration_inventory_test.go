@@ -83,3 +83,24 @@ func TestTheGroupsANewAnswerMovesAreNamed(t *testing.T) {
 		t.Fatal("the same answer moves something")
 	}
 }
+
+// 11/23 the one source printing "generated:" was pytools/e2e_infer.py, a forward in Python, and
+// none of the planner's parts was a program printing it: the sources that print it, of any
+// language, are measured and given to the planner and the unit
+func TestTheSourcesPrintingGeneratedAreMeasured(t *testing.T) {
+	tree := t.TempDir()
+	putTree(t, tree, map[string]string{
+		"pytools/e2e_infer.py":        "# Prints \"prompt: <ids>\" and \"generated: <ids>\"\nimport sys\n\n        print(\"generated:\", \" \".join(map(str, generated))); sys.stdout.flush()\n",
+		"src/driver/generate_cli.cpp": "// runs the decode loop on the deterministic synthetic backend\nint main() { std::cout << \"tokens\"; }\n",
+		"src/rt/runner.cu":            "int main() {\n  printf(\"generated:\");\n}\n",
+		".einsteinOS/verify/u/e2e.sh": "echo generated: 1 2\n",
+	})
+	got := strings.Join(generatedPrinters(tree), " ")
+	if got != "pytools/e2e_infer.py:4 src/rt/runner.cu:2" {
+		t.Fatalf("%s", got)
+	}
+	ms := ModelShape{Tensors: []ModelTensor{{Name: "model.norm.weight", Dtype: "BF16", Shape: []int64{8}}}}
+	if blk := measurePortInventory(tree, ms).Block(1); !strings.Contains(blk, "### 2 source(s), of any language, with a line printing `generated:`") {
+		t.Fatalf("%s", blk)
+	}
+}
