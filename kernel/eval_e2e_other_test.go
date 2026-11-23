@@ -115,29 +115,33 @@ func TestWithThePlannersAnswerTheRunnerLaunchesEveryUsedUnit(t *testing.T) {
 	}
 }
 
-// the op lines name the kernel each tensor group is computed with: a runner that launched one
-// kernel of each unit and computed the rest in python is not the runner
-func TestTheRunnerLaunchesEveryKernelTheOpLinesName(t *testing.T) {
-	perUnit := map[string][]string{"u_gdn": {"gdn_step", "gdn_conv"}, "u_moe": {"moe_k"}}
-	a := IntegrationModelPlan{Ops: []IntegrationOp{{Group: "a", Unit: "u_gdn", Kernel: "gdn_step"}, {Group: "b", Unit: "u_gdn", Kernel: "gdn_conv"},
-		{Group: "c", Unit: "u_moe", Kernel: "moe_k"}, {Group: "d", Unit: "u_gone", Kernel: "x"}, {Group: "e", What: "q norm"}}}
-	ks := a.opKernels(perUnit)
-	if strings.Join(ks, " ") != "gdn_conv gdn_step moe_k" {
-		t.Fatalf("%v", ks)
+// the op lines name, per tensor group, the kernels that compute it — alternatives (a bf16 and a
+// quantized matvec for lm_head, three gathers for embed_tokens): a runner launches one of each
+// group's, and a group none of whose kernels it launched keeps it from being the runner
+func TestTheRunnerLaunchesAKernelOfEveryTensorGroup(t *testing.T) {
+	perUnit := map[string][]string{"u_gdn": {"gdn_step", "gdn_conv"}, "u_dec": {"bf16_gemv_warp_kernel", "mmvq_kernel"}}
+	a := IntegrationModelPlan{Ops: []IntegrationOp{
+		{Group: "lm_head.weight", Unit: "u_dec", Kernel: "bf16_gemv_warp_kernel"}, {Group: "lm_head.weight", Unit: "u_dec", Kernel: "mmvq_kernel"},
+		{Group: "linear_attn.conv1d.weight", Unit: "u_gdn", Kernel: "gdn_conv"}, {Group: "linear_attn.A_log", Unit: "u_gdn", Kernel: "gdn_step"},
+		{Group: "x", Unit: "u_gone", Kernel: "x"}, {Group: "q_norm", What: "per-head norm"}}}
+	gs := a.opGroups(perUnit)
+	if len(gs) != 3 || strings.Join(gs["lm_head.weight"], " ") != "bf16_gemv_warp_kernel mmvq_kernel" {
+		t.Fatalf("%v", gs)
 	}
-	br := EvalBenchRun{ModelBytes: 100, RunnerAllUnits: true, RunnerKernels: ks, Loaders: []E2ELoader{
-		{PID: 9, Port: true, Weights: 26, TookBytes: 100, PortKernels: []string{"gdn_step", "moe_k"}, Seconds: 8},
+	br := EvalBenchRun{ModelBytes: 100, RunnerAllUnits: true, RunnerGroups: gs, Loaders: []E2ELoader{
+		{PID: 9, Port: true, Weights: 26, TookBytes: 100, PortKernels: []string{"bf16_gemv_warp_kernel", "gdn_conv"}, Seconds: 8},
 	}}
 	if _, ok := e2eRunner(br, perUnit); ok {
-		t.Fatal("a process that did not launch gdn_conv is the runner")
+		t.Fatal("a process that launched no kernel of linear_attn.A_log is the runner")
 	}
 	k, txt := e2eLoaderGate(br, perUnit)
-	if k != "integration_e2e_loader_not_port" || !strings.Contains(txt, "of the 3 kernels the planner's op lines name for the model's tensor groups, 1 the port's process that took in the most of the model did not launch itself: gdn_conv") {
+	if k != "integration_e2e_loader_not_port" || !strings.Contains(txt, "of the 3 tensor groups the planner's op lines name, 1 had none of their kernels launched by the port's process that took in the most of the model: linear_attn.A_log (one of: gdn_step)") {
 		t.Fatalf("%q %s", k, txt)
 	}
-	br.Loaders[0].PortKernels = append(br.Loaders[0].PortKernels, "gdn_conv")
+	// one of lm_head's two kernels is enough
+	br.Loaders[0].PortKernels = append(br.Loaders[0].PortKernels, "gdn_step")
 	if _, ok := e2eRunner(br, perUnit); !ok {
-		t.Fatal("every named kernel launched, and no runner")
+		t.Fatal("a kernel of every group launched, and no runner")
 	}
 }
 

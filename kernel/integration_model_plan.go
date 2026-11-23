@@ -363,15 +363,18 @@ func (p IntegrationModelPlan) counts() string {
 	return fmt.Sprintf("op %d, missing %d, unused %d (%s), part %d, dropped %d", op, missing, len(p.Unused), strings.Join(p.Unused, " "), len(p.Parts), p.Dropped)
 }
 
-// opKernels: the distinct kernels the op lines name, of the units in perUnit, sorted.
-func (p IntegrationModelPlan) opKernels(perUnit map[string][]string) []string {
-	var out []string
+// opGroups: per tensor group the op lines name, the kernels they name for it (of the units in
+// perUnit), sorted — the kernels of one group are ways to compute it, any of which does.
+func (p IntegrationModelPlan) opGroups(perUnit map[string][]string) map[string][]string {
+	out := map[string][]string{}
 	for _, o := range p.Ops {
-		if o.Unit != "" && perUnit[o.Unit] != nil && !hasString(out, o.Kernel) {
-			out = append(out, o.Kernel)
+		if o.Unit != "" && perUnit[o.Unit] != nil && !hasString(out[o.Group], o.Kernel) {
+			out[o.Group] = append(out[o.Group], o.Kernel)
 		}
 	}
-	sort.Strings(out)
+	for g := range out {
+		sort.Strings(out[g])
+	}
 	return out
 }
 

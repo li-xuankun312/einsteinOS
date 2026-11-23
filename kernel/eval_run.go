@@ -42,10 +42,10 @@ type EvalBenchRun struct {
 	// port on the model (eval_e2e_rate.go, e2eRunnerTokens)
 	TokensBy map[int][]string `json:"tokens_by,omitempty"`
 	// RunnerAllUnits: the planner answered which units the model uses, so the runner launches
-	// a kernel of every one of them itself (e2eRunner); RunnerKernels: the kernels its op lines
-	// name, each of which the runner launches itself
-	RunnerAllUnits bool     `json:"runner_all_units,omitempty"`
-	RunnerKernels  []string `json:"runner_kernels,omitempty"`
+	// a kernel of every one of them itself (e2eRunner); RunnerGroups: per tensor group its op
+	// lines name, the kernels named for it — the runner launches at least one of each group's
+	RunnerAllUnits bool                `json:"runner_all_units,omitempty"`
+	RunnerGroups   map[string][]string `json:"runner_groups,omitempty"`
 	// Loaders: the processes that opened or mapped weight files, each with whether it is the
 	// port's program and the ported kernels it launched itself (eval_e2e_loader.go)
 	Loaders []E2ELoader `json:"loaders,omitempty"`
