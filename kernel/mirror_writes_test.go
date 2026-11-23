@@ -116,7 +116,30 @@ func TestACommandTouchingAnothersFileIsToldSo(t *testing.T) {
 			t.Fatalf("missing %q in %q", w, out)
 		}
 	}
-	if out := MirrorCommand("0ea8884d", func() string { os.WriteFile(gdn, []byte("b"), 0o644); return "ok" }); out != "ok" {
+	if out := MirrorCommand("0ea8884d", func() string { os.WriteFile(gdn, []byte("b"), 0o644); return "ok" }); strings.Contains(out, "changed or removed") {
 		t.Fatalf("a file it was first to write again is its own: %q", out)
+	}
+}
+
+// 11/23 16:12:48 "exit differs: sandbox 0, here 1" for head gdn_qwen.cu was the one trace that a
+// part's sandbox and the mirror had parted: each command's result carries the files the other
+// conversations changed in the mirror since the conversation was last told, once
+func TestEachCommandIsToldWhatTheOthersChangedSince(t *testing.T) {
+	resetMirrorUnits()
+	defer resetMirrorUnits()
+	dir := t.TempDir()
+	putTree(t, dir, map[string]string{"src/kernels/gpu/gdn_qwen.cu": "a"})
+	noteMirrorConv("uint", dir, "92e537ed", "")
+	noteMirrorConv("uint", dir, "0ea8884d", "gdn: runs one GDN sub-layer")
+	MirrorCommand("0ea8884d", func() string {
+		os.Remove(filepath.Join(dir, "src/kernels/gpu/gdn_qwen.cu"))
+		return "ok"
+	})
+	out := MirrorCommand("92e537ed", func() string { return "head: cannot open" })
+	if !strings.Contains(out, "changed 1 file(s) of the mirror, which its sandbox does not have:\n  src/kernels/gpu/gdn_qwen.cu removed by gdn (conversation 0ea8884d)") {
+		t.Fatalf("%q", out)
+	}
+	if out := MirrorCommand("92e537ed", func() string { return "again" }); out != "again" {
+		t.Fatalf("told twice: %q", out)
 	}
 }

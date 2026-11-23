@@ -67,6 +67,7 @@ type mirrorUnit struct {
 	named  map[string]string // file -> the part the planner's partfile lines give it
 	writes []mirrorWrite
 	seq    int
+	heard  map[string]int // conv -> the last write it was told of
 }
 
 var (
@@ -84,7 +85,7 @@ func noteMirrorConv(unitID, dir, conv, part string) {
 	defer mirrorUnitsMu.Unlock()
 	u := mirrorUnits[unitID]
 	if u == nil || u.dir != dir {
-		u = &mirrorUnit{dir: dir, part: map[string]string{}, owner: map[string]string{}, named: map[string]string{}}
+		u = &mirrorUnit{dir: dir, part: map[string]string{}, owner: map[string]string{}, named: map[string]string{}, heard: map[string]int{}}
 		mirrorUnits[unitID] = u
 	}
 	u.part[conv] = part
@@ -133,6 +134,7 @@ func MirrorCommand(conv string, run func() string) string {
 	if len(said) > 0 {
 		log.Printf(mirrorWroteFmt, shortID(conv), partName(u.part[conv]), len(said), strings.Join(said, " "))
 	}
+	out += u.sinceHeard(conv)
 	if len(others) > 0 {
 		log.Printf(mirrorOthersLogFmt, shortID(conv), partName(u.part[conv]), len(others), strings.Join(others, "; "))
 		out += fmt.Sprintf(mirrorOthersFmt, len(others), "  "+strings.Join(others, "\n  ")+"\n")
@@ -170,6 +172,51 @@ func (u *mirrorUnit) othersTouched(conv string, before, after map[string]mirrorS
 		out = append(out, fmt.Sprintf("%s %s (%s)", w.File, what, whose))
 	}
 	return out
+}
+
+const (
+	// %[1]d files, %[2]s them
+	mirrorSinceFmt = "\n[THE UNIT'S MIRROR — measured on this machine]\nsince this conversation was last told, the other conversations of the unit changed %[1]d file(s) of the mirror, which its sandbox does not have:\n%[2]s"
+	// mirrorSinceMax: how many of them are named
+	mirrorSinceMax = 40
+)
+
+// sinceHeard: the files the other conversations of the unit changed in the mirror since conv
+// was last told — each file once, as it last stands — and conv is marked told of them. Called
+// with u.mu held. 11/23 each part's sandbox kept the tree it had cloned while the mirror took
+// every part's commands, and "exit differs: sandbox 0, here 1" (16:12:48, head gdn_qwen.cu) was
+// the only trace that the two had parted.
+func (u *mirrorUnit) sinceHeard(conv string) string {
+	last := map[string]mirrorWrite{}
+	var order []string
+	for _, w := range u.writes {
+		if w.Seq <= u.heard[conv] || w.Conv == conv {
+			continue
+		}
+		if _, ok := last[w.File]; !ok {
+			order = append(order, w.File)
+		}
+		last[w.File] = w
+	}
+	u.heard[conv] = u.seq
+	if len(order) == 0 {
+		return ""
+	}
+	sort.Strings(order)
+	var ls []string
+	for i, f := range order {
+		if i == mirrorSinceMax {
+			ls = append(ls, fmt.Sprintf("… and %d more", len(order)-mirrorSinceMax))
+			break
+		}
+		w := last[f]
+		what := "written"
+		if w.Removed {
+			what = "removed"
+		}
+		ls = append(ls, fmt.Sprintf("%s %s by %s (conversation %s)", f, what, partName(u.part[w.Conv]), shortID(w.Conv)))
+	}
+	return fmt.Sprintf(mirrorSinceFmt, len(order), "  "+strings.Join(ls, "\n  ")+"\n")
 }
 
 // noteMirrorPartFiles: the files the planner's partfile lines give each part of unit.
