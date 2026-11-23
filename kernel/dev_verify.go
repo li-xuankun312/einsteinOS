@@ -813,7 +813,7 @@ func devVerifyOnly(cloneDir, mirror, branch, baseRef, unitID, gpuUsable string, 
 	}
 	// a file of the delta another unit changed on the branch since this unit's mirror was primed
 	// is not written over (units side by side, dev_schedule.go): the unit runs again, alone
-	if moved := branchMovedUnder(cloneDir, base, changed, removed); len(moved) > 0 {
+	if moved := branchMovedUnder(cloneDir, mirror, base, changed, removed); len(moved) > 0 {
 		out.Err = fmt.Errorf("%w: %s", errBranchMoved, strings.Join(moved, " "))
 		log.Printf("dev_verify: unit %s: %d file(s) of its delta changed on %s since its mirror was primed (%s) — not verified over them", unitID, len(moved), baseRef, strings.Join(moved, " "))
 		return out
@@ -986,17 +986,26 @@ func integrationRepoKernels(ws string, req UnitRequirements) map[string]bool {
 var errBranchMoved = errors.New("the branch changed files of this delta since the unit started")
 
 // branchMovedUnder: the files of a delta (changed or removed) that the tip in tipDir no longer
-// holds as the mirror's base had them — another unit's commit changed them meanwhile. A delta
-// copied over them would undo that commit.
-func branchMovedUnder(tipDir string, base fileDigest, changed, removed []string) []string {
+// holds as the mirror's base had them — another unit's commit changed them meanwhile — and
+// does not hold as the mirror does either. A delta copied over them would undo that commit. A
+// tip that holds what the mirror holds lost nothing to the delta: 11/23 08:44:05 the
+// integration's conversations had pushed the files of their own mirror to the wip branch from
+// their sandboxes (96c7a4c…b6a5e3f), and the verification was refused over seven files whose
+// tip was the mirror's.
+func branchMovedUnder(tipDir, mirrorDir string, base fileDigest, changed, removed []string) []string {
 	var out []string
 	for _, f := range append(append([]string{}, changed...), removed...) {
 		was, had := base[f]
 		now, err := digestFile(filepath.Join(tipDir, f))
 		has := err == nil
-		if had != has || (had && was != now) {
-			out = append(out, f)
+		if !(had != has || (had && was != now)) {
+			continue
 		}
+		mine, merr := digestFile(filepath.Join(mirrorDir, f))
+		if (merr == nil) == has && (!has || mine == now) {
+			continue // the tip is the mirror's
+		}
+		out = append(out, f)
 	}
 	sort.Strings(out)
 	return out
