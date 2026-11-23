@@ -363,11 +363,28 @@ func envWithoutProxy(env []string) []string {
 	return out
 }
 
-// judgeStep runs one network step directly, then with the machine's proxy in its environment.
+// judgePipEnv: env without this machine's pip settings — its pip.conf (PIP_CONFIG_FILE is
+// /dev/null) and every PIP_ variable — so the judge's pip takes the index its arguments name.
+// 11/23 this machine's pip read the Tsinghua mirror through the SOCKS proxy, which gave 32750
+// bytes in 3 minutes, while pypi.org and files.pythonhosted.org answered directly in seconds.
+func judgePipEnv(env []string) []string {
+	var out []string
+	for _, e := range env {
+		k, _, _ := strings.Cut(e, "=")
+		if strings.HasPrefix(strings.ToUpper(k), "PIP_") {
+			continue
+		}
+		out = append(out, e)
+	}
+	return append(out, "PIP_CONFIG_FILE="+os.DevNull)
+}
+
+// judgeStep runs one network step directly, then with the machine's proxy in its environment,
+// never with this machine's pip settings.
 func judgeStep(name string, args ...string) error {
-	envs := [][]string{envWithoutProxy(os.Environ())}
+	envs := [][]string{judgePipEnv(envWithoutProxy(os.Environ()))}
 	if refProxy() != "" {
-		envs = append(envs, os.Environ())
+		envs = append(envs, judgePipEnv(os.Environ()))
 	}
 	var errs []string
 	for i, env := range envs {
@@ -424,13 +441,15 @@ func buildJudgeEnv(spec judgeSpec, arch string) (python, versions string, err er
 	pip := func(args ...string) error {
 		return judgeStep(python, append(append([]string{"-m", "pip", "install", "-q"}, links...), args...)...)
 	}
-	if err := pip("--upgrade", "pip", "pysocks"); err != nil {
+	// the index each step takes is named, PyPI's own (judgePyPI) where it is not torch's
+	pypi := judgePyPI + "/simple"
+	if err := pip("--index-url", pypi, "--upgrade", "pip", "pysocks"); err != nil {
 		return "", "", err
 	}
 	if err := pip("--index-url", judgeTorchIndex, torch); err != nil {
 		return "", "", err
 	}
-	if err := pip("transformers=="+spec.Transformers, "safetensors", "accelerate"); err != nil {
+	if err := pip("--index-url", pypi, "transformers=="+spec.Transformers, "safetensors", "accelerate"); err != nil {
 		return "", "", err
 	}
 	v, err := check()

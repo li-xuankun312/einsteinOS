@@ -247,3 +247,50 @@ func TestAFetchThatFailsSaysWhyOnEveryRoute(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 }
+
+// 11/23 this machine's pip read the Tsinghua mirror through the SOCKS proxy (32750 bytes in 3
+// minutes) while pypi.org answered directly in seconds: the judge's pip reads no pip.conf and
+// no PIP_ variable of the machine, and names its index
+func TestTheJudgesPipTakesNoneOfTheMachinesPipSettings(t *testing.T) {
+	home := t.TempDir()
+	oldHome, oldRun := judgeHome, judgeRunFn
+	judgeHome = func() string { return home }
+	defer func() { judgeHome, judgeRunFn = oldHome, oldRun }()
+	t.Setenv("PIP_INDEX_URL", "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple")
+	t.Setenv("PIP_PROXY", "socks5://127.0.0.1:1080")
+	var pipCalls []string
+	judgeRunFn = func(env []string, name string, args ...string) (string, error) {
+		line := name + " " + strings.Join(args, " ")
+		if strings.Contains(line, "-m venv") {
+			os.MkdirAll(filepath.Join(args[len(args)-1], "bin"), 0o755)
+		}
+		if strings.Contains(line, "-m pip") {
+			cfg := ""
+			for _, e := range env {
+				if strings.HasPrefix(e, "PIP_") && !strings.HasPrefix(e, "PIP_CONFIG_FILE=") {
+					t.Fatalf("the machine's %s reached the judge's pip", e)
+				}
+				if strings.HasPrefix(e, "PIP_CONFIG_FILE=") {
+					cfg = e
+				}
+			}
+			if cfg != "PIP_CONFIG_FILE="+os.DevNull {
+				t.Fatalf("the judge's pip reads a pip.conf: %q", cfg)
+			}
+			pipCalls = append(pipCalls, line)
+		}
+		if strings.Contains(line, "transformers.__version__") {
+			return "transformers 5.20.2 torch 2.6.0+cpu", nil
+		}
+		return "", nil
+	}
+	spec := judgeSpec{ModelType: "qwen3_5_moe", Transformers: "5.20.2", Torch: "2.6", Python: "3.10.12"}
+	if _, _, err := buildJudgeEnv(spec, "Qwen3_5MoeForCausalLM"); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range pipCalls {
+		if !strings.Contains(c, "--index-url "+judgePyPI+"/simple") && !strings.Contains(c, "--index-url "+judgeTorchIndex) {
+			t.Fatalf("a pip step names no index: %s", c)
+		}
+	}
+}
