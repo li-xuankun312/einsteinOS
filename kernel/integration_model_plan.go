@@ -209,6 +209,8 @@ func (r *devRun) integrationModelAnswer(unit DevPlanNode, baseRef string) Integr
 		devPlanSave(r.repo, r.devRepo, r.branch, r.plan, "plan: the planner's answer on how the port runs the model")
 	}
 	p := parseIntegrationModel(out, ms, perUnit)
+	// where the port's tree stands is the unit's to know too, not the planner's alone
+	p.Inventory = measurePortInventory(tree, ms).Block(len(ms.TensorGroups()))
 	log.Printf(integrationModelLogFmt, r.repo, unit.ID, p.counts(), len(ms.TensorGroups()), len(perUnit))
 	integrationAnswersMu.Lock()
 	integrationAnswers[unit.ID] = p
@@ -230,6 +232,8 @@ type IntegrationModelPlan struct {
 	Unused []string
 	// Parts: how the program that runs the model divides, "<name>: <what it does>"
 	Parts []string
+	// Inventory: where the port's tree stands toward running the model (integration_inventory.go)
+	Inventory string
 	// Dropped: lines of the answer's kinds that named something the data does not have
 	Dropped int
 }
@@ -330,10 +334,14 @@ const (
 
 // Block: the answer as the integration unit is given it.
 func (p IntegrationModelPlan) Block() string {
-	if len(p.Ops) == 0 && len(p.Unused) == 0 && len(p.Parts) == 0 {
+	if len(p.Ops) == 0 && len(p.Unused) == 0 && len(p.Parts) == 0 && p.Inventory == "" {
 		return ""
 	}
 	var b strings.Builder
+	b.WriteString(p.Inventory)
+	if len(p.Ops) == 0 && len(p.Unused) == 0 && len(p.Parts) == 0 {
+		return b.String()
+	}
 	have, none := 0, 0
 	for _, o := range p.Ops {
 		if o.Unit != "" {

@@ -44,3 +44,20 @@ func TestThePortsTreeIsMeasuredTowardTheModel(t *testing.T) {
 		}
 	}
 }
+
+// 11/23 the inventory reached the planner and not the unit that writes the code: the block the
+// unit is given holds it, with or without an answer of the planner's
+func TestTheUnitIsGivenWhereThePortsTreeStands(t *testing.T) {
+	inv := "[THE PORT'S TREE — measured]\n  1 program(s)\n"
+	p := IntegrationModelPlan{Inventory: inv}
+	if p.Block() != inv {
+		t.Fatalf("without an answer the inventory is not given: %q", p.Block())
+	}
+	p.Ops = []IntegrationOp{{Group: "a", Unit: "u1", Kernel: "k"}}
+	if got := p.Block(); !strings.HasPrefix(got, inv) || !strings.Contains(got, "  a: u1 k\n") {
+		t.Fatalf("%s", got)
+	}
+	if (IntegrationModelPlan{}).Block() != "" {
+		t.Fatal("nothing measured and nothing answered should insert nothing")
+	}
+}
