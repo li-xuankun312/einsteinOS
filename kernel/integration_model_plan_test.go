@@ -3,7 +3,9 @@ package kernel
 import (
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestThePlannerIsAskedOnceForWhatItIsGiven(t *testing.T) {
@@ -208,4 +210,82 @@ func TestAnAnswerTheKernelReadsNothingOfIsNotKept(t *testing.T) {
 	if got := firstSentence(refusal); got != "I can see what's happening here, and I want to be straightforward about it" {
 		t.Fatalf("%q", got)
 	}
+}
+
+// 11/23 01:53:37 six parts were started at once beside the integration conversation and at
+// 02:19:23 the server refused one for the account's concurrency: parts run at most
+// integrationPartsAtOnce at once, the next started when one ends, an errored one started again
+func TestThePartsRunAFewAtOnceAndAnErroredOneAgain(t *testing.T) {
+	oldFork, oldID, oldWait, oldFinal, oldAt, oldPoll := spawnForkFn, spawnConvID, spawnWaitFn, spawnFinal, integrationPartsAtOnce, integrationPartsPoll
+	defer func() {
+		spawnForkFn, spawnConvID, spawnWaitFn, spawnFinal, integrationPartsAtOnce, integrationPartsPoll = oldFork, oldID, oldWait, oldFinal, oldAt, oldPoll
+	}()
+	integrationPartsAtOnce = func() int { return 2 }
+	integrationPartsPoll = 10 * time.Millisecond
+	var mu sync.Mutex
+	var started []string
+	release := map[int64]chan string{}
+	next := int64(9100)
+	spawnForkFn = func(role, prompt string) (int64, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		next++
+		for _, p := range []string{"embed", "layer", "head"} {
+			if strings.Contains(prompt, "[SCOPE] "+p+":") {
+				started = append(started, p)
+			}
+		}
+		release[next] = make(chan string, 1)
+		return next, nil
+	}
+	spawnConvID = func(pid int64) string { return fmt.Sprintf("%08d-0000-0000-0000-00000000000a", pid) }
+	finals := map[int64]string{}
+	spawnWaitFn = func(pid int64) {
+		mu.Lock()
+		ch := release[pid]
+		mu.Unlock()
+		out := <-ch
+		mu.Lock()
+		finals[pid] = out
+		mu.Unlock()
+	}
+	spawnFinal = func(pid int64) string { mu.Lock(); defer mu.Unlock(); return finals[pid] }
+	parent := "aaaabbbb-0000-0000-0000-0000000000a1"
+	RegisterConv(0, parent, "r", "dev_fix_7_uintegration_q", 44)
+	got := startIntegrationParts("uintegration_q", parent, []string{"embed: a", "layer: b", "head: c"}, "body\n")
+	if len(got) != 2 {
+		t.Fatalf("started at once: %d", len(got))
+	}
+	snapshot := func() string { mu.Lock(); defer mu.Unlock(); return strings.Join(started, " ") }
+	time.Sleep(50 * time.Millisecond)
+	if s := snapshot(); s != "embed layer" {
+		t.Fatalf("a third part started with two running: %s", s)
+	}
+	mu.Lock()
+	release[9101] <- "[Error] {\"type\":\"error\"}" // embed ended with an error
+	mu.Unlock()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) && snapshot() != "embed layer head" {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if s := snapshot(); s != "embed layer head" {
+		t.Fatalf("the next part was not started when one ended: %s", s)
+	}
+	mu.Lock()
+	release[9102] <- "done" // layer ended
+	mu.Unlock()
+	for time.Now().Before(deadline) && snapshot() != "embed layer head embed" {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if s := snapshot(); s != "embed layer head embed" {
+		t.Fatalf("the errored part was not started again: %s", s)
+	}
+	mu.Lock()
+	for _, ch := range release {
+		select {
+		case ch <- "done":
+		default:
+		}
+	}
+	mu.Unlock()
 }

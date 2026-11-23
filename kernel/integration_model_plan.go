@@ -392,9 +392,13 @@ var (
 // %[1]s unit, %[2]d started, %[3]d parts, %[4]s parent, %[5]s the addresses or why not
 const integrationPartsLogFmt = "dev_from_theorems: integration unit %[1]s: %[2]d of the planner's %[3]d part(s) started as work conversations under %[4]s: %[5]s"
 
-// startIntegrationParts starts, under parent, a work conversation for each part the spawn
-// policy allows, once per unit and set of parts in this process; body is what each is given
-// beside its part.
+// startIntegrationParts starts, under parent, work conversations for the parts — at most
+// integrationPartsAtOnce of them running at once, each next part started when one of them ends,
+// a part whose conversation ended with an error started once more — once per unit and set of
+// parts in this process; body is what each is given beside its part. It returns the ones it
+// started at once; the rest are started in the background. 11/23 01:53:37 the six parts allowed
+// were started at once beside the integration conversation, seven running, and at 02:19:23 the
+// server refused one of them for the account's concurrency.
 func startIntegrationParts(unitID, parent string, parts []string, body string) []SpawnResult {
 	if parent == "" || len(parts) == 0 {
 		return nil
@@ -407,19 +411,97 @@ func startIntegrationParts(unitID, parent string, parts []string, body string) [
 	}
 	integrationPartsStarted[key] = true
 	integrationPartsMu.Unlock()
-	var out []SpawnResult
-	var said []string
-	for _, part := range parts {
+
+	atOnce := integrationPartsAtOnce()
+	queue := append([]string(nil), parts...)
+	retried := map[string]bool{}
+	start := func(part string) (SpawnResult, bool) {
 		res, err := SpawnConv(parent, "work", spawnPrompt(parent, "work", part, body))
 		if err != nil {
-			said = append(said, fmt.Sprintf("%q: %v", part, err))
+			log.Printf(integrationPartsLogFmt, unitID, 0, len(parts), shortID(parent), fmt.Sprintf("%q: %v", part, err))
+			return res, false
+		}
+		return res, true
+	}
+	var first []SpawnResult
+	running := map[string]string{} // addr -> part
+	var said []string
+	for len(queue) > 0 && len(running) < atOnce {
+		part := queue[0]
+		queue = queue[1:]
+		res, ok := start(part)
+		if !ok {
 			break
 		}
-		out = append(out, res)
+		first = append(first, res)
+		running[res.Addr] = part
 		said = append(said, shortID(res.Addr)+" "+part)
 	}
-	log.Printf(integrationPartsLogFmt, unitID, len(out), len(parts), shortID(parent), strings.Join(said, "; "))
-	return out
+	log.Printf(integrationPartsLogFmt, unitID, len(first), len(parts), shortID(parent), strings.Join(said, "; ")+fmt.Sprintf(integrationPartsQueuedFmt, atOnce, len(queue)))
+	if len(queue) == 0 && len(running) == 0 {
+		return first
+	}
+	go func() {
+		for len(running) > 0 {
+			time.Sleep(integrationPartsPoll)
+			for addr, part := range running {
+				out, done := GetConvResult(addr)
+				if !done {
+					continue
+				}
+				delete(running, addr)
+				if conversationEndedInError(out) && !retried[part] {
+					retried[part] = true
+					forgetSpawn(parent, "work", spawnPrompt(parent, "work", part, body))
+					queue = append(queue, part)
+					log.Printf(integrationPartsAgainFmt, unitID, shortID(addr), part, firstSentence(out))
+				}
+				for len(queue) > 0 && len(running) < atOnce {
+					next := queue[0]
+					queue = queue[1:]
+					if res, ok := start(next); ok {
+						running[res.Addr] = next
+						log.Printf(integrationPartsNextFmt, unitID, shortID(res.Addr), next, len(queue))
+					}
+				}
+			}
+		}
+	}()
+	return first
+}
+
+const (
+	// %[1]d at once, %[2]d queued
+	integrationPartsQueuedFmt = " — at most %[1]d at once, %[2]d queued"
+	// %[1]s unit, %[2]s the conversation, %[3]s its part, %[4]s how its result begins
+	integrationPartsAgainFmt = "dev_from_theorems: integration unit %[1]s: part conversation %[2]s (%[3]s) ended with an error (%[4]q) — its part is started once more"
+	// %[1]s unit, %[2]s the conversation, %[3]s its part, %[4]d still queued
+	integrationPartsNextFmt = "dev_from_theorems: integration unit %[1]s: part conversation %[2]s started for %[3]s; %[4]d part(s) still queued"
+)
+
+// integrationPartsPoll: how often the started parts' conversations are looked at (a variable
+// for tests).
+var integrationPartsPoll = 15 * time.Second
+
+// integrationPartsAtOnce: how many part conversations run at once — one fewer than the
+// conversations the server took at once, when it refused one for the account's concurrency
+// (conv_room.go), leaving the integration conversation its place; else the spawn policy's.
+var integrationPartsAtOnce = func() int {
+	n := DefaultSpawnPolicy().MaxChildren
+	if room := ConversationRoom(); room > 0 && room-1 < n {
+		n = room - 1
+	}
+	if n < 1 {
+		n = 1
+	}
+	return n
+}
+
+// conversationEndedInError: the final text of a conversation that ended with the model
+// layer's error exit.
+func conversationEndedInError(out string) bool {
+	s := strings.TrimSpace(out)
+	return strings.HasPrefix(s, "[Error]") || strings.HasPrefix(s, "[API Error]")
 }
 
 // startIntegrationPartsOf waits for the forked conversation child to report its address and

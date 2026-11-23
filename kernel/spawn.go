@@ -138,6 +138,14 @@ func spawnKey(parent, kind, prompt string) string {
 // SpawnConv starts a conversation under parentConv and returns its address.
 // The same request from the same parent returns the same address: a replayed
 // tool call (SSE recovery re-runs rounds) must not start a second one.
+// forgetSpawn drops the record of a spawn request, so the same request starts a conversation
+// again (a part whose conversation ended with an error, integration_model_plan.go).
+func forgetSpawn(parentConv, kind, prompt string) {
+	spawnMu.Lock()
+	delete(spawnCache, spawnKey(parentConv, kind, prompt))
+	spawnMu.Unlock()
+}
+
 func SpawnConv(parentConv, kind, prompt string) (SpawnResult, error) {
 	spawnMu.Lock()
 	defer spawnMu.Unlock()
