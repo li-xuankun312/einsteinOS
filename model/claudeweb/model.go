@@ -413,7 +413,9 @@ var (
 // kernel, on behalf of the conversation that issued them, and the answer goes
 // back to the child through the same local-result channel as any other command.
 func (m *Model) shadowExecute(convID, toolName, inputJSON string) string {
-	out := m.shadowExecuteRaw(convID, toolName, inputJSON)
+	// a conversation sharing an integration unit's mirror with others runs its commands there
+	// one at a time, and what each changes is set down as its (kernel/mirror_writes.go)
+	out := kernel.MirrorCommand(convID, func() string { return m.shadowExecuteRaw(convID, toolName, inputJSON) })
 	// what this machine prints is shown to a conversation whose prompt is masked the way its
 	// prompt is: 11/18 a "ls /tmp" here names the reference's clone (/tmp/ref_<owner>_<name>.git)
 	if kernel.RoleSeesMasked(convRole(convID)) {

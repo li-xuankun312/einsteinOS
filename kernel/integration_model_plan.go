@@ -487,6 +487,10 @@ func startIntegrationParts(unitID, parent string, parts []string, body string, f
 	integrationPartsStarted[key] = true
 	integrationPartsMu.Unlock()
 
+	partMirrorMu.Lock()
+	mirror := partMirrorPath[unitID]
+	partMirrorMu.Unlock()
+	noteMirrorConv(unitID, mirror, parent, "")
 	atOnce := integrationPartsAtOnce()
 	queue := append([]string(nil), parts...)
 	retried := map[string]bool{}
@@ -496,6 +500,7 @@ func startIntegrationParts(unitID, parent string, parts []string, body string, f
 			log.Printf(integrationPartsLogFmt, unitID, 0, len(parts), shortID(parent), fmt.Sprintf("%q: %v", part, err))
 			return res, false
 		}
+		noteMirrorConv(unitID, mirror, res.Addr, part)
 		return res, true
 	}
 	var first []SpawnResult
