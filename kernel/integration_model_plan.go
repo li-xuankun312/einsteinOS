@@ -221,6 +221,9 @@ func (r *devRun) integrationModelAnswer(unit DevPlanNode, baseRef string) Integr
 		devPlanSave(r.repo, r.devRepo, r.branch, r.plan, "plan: the planner's answer on how the port runs the model")
 	}
 	p := parseIntegrationModelIn(out, ms, perUnit, treeHas)
+	if p.Parts, p.OffPath = offPathParts(ms, p.Parts); len(p.OffPath) > 0 {
+		log.Printf(integrationOffPathLogFmt, unit.ID, len(p.OffPath), strings.Join(p.OffPath, "; "), measureModelPath(ms).TextRoot)
+	}
 	// where the port's tree stands is the unit's to know too, not the planner's alone
 	p.Inventory = measurePortInventory(tree, ms).Block(len(ms.TensorGroups()))
 	log.Printf(integrationModelLogFmt, r.repo, unit.ID, p.counts(), len(ms.TensorGroups()), len(perUnit))
@@ -247,6 +250,9 @@ type IntegrationModelPlan struct {
 	// PartFiles: per part name, the files of the tree it writes — a path the tree has, and a
 	// file of one part only (the part that names it last keeps it)
 	PartFiles map[string][]string
+	// OffPath: parts not started — their text names tensors off the model's text path only
+	// (model_path.go)
+	OffPath []string
 	// Inventory: where the port's tree stands toward running the model (integration_inventory.go)
 	Inventory string
 	// Dropped: lines of the answer's kinds that named something the data does not have
@@ -423,6 +429,9 @@ func (p IntegrationModelPlan) Block() string {
 }
 
 // %[1]s repo, %[2]s unit, %[3]s the answer's counts, %[4]d tensor groups, %[5]d units with kernels
+// %[1]s unit, %[2]d parts, %[3]s them, %[4]s the text path's root
+const integrationOffPathLogFmt = "dev_from_theorems: integration unit %[1]s: %[2]d of the planner's part(s) are not started — they name only tensors off the path the model's text goes through (%[4]s, the layers num_hidden_layers counts): %[3]s"
+
 const integrationModelLogFmt = "dev_from_theorems: %[1]s integration unit %[2]s: the planner's answer read: %[3]s (of %[4]d tensor groups and %[5]d units with ported kernels)"
 
 // counts: how many lines of each kind the answer had that the kernel took, and dropped.
