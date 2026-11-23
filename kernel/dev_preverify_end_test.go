@@ -1,6 +1,8 @@
 package kernel
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -46,5 +48,25 @@ func TestAGateOutsideTheUnitIsNotTheNextConversationsFailure(t *testing.T) {
 	own := DevFailure{Kind: "integration_e2e_unmeasured", Text: "integration_e2e_unmeasured: the runner printed no ids", BaseRef: "b"}
 	if p := r.unitPrompt(unit, 0, 1, 2, own, "b"); !strings.Contains(p, "the runner printed no ids") {
 		t.Fatal("the unit's own failure was not given")
+	}
+}
+
+// 11/23 03:33:34 the integration conversation ended on 502s having written nothing itself and
+// primeMirror wiped what its part conversations had written: a mirror that differs from the
+// tree the attempt started on holds work
+func TestAMirrorThatDiffersFromItsStartHoldsWork(t *testing.T) {
+	mirror := t.TempDir()
+	os.MkdirAll(filepath.Join(mirror, "src"), 0o755)
+	os.WriteFile(filepath.Join(mirror, "src", "a.cpp"), []byte("a"), 0o644)
+	base, err := snapshotTree(mirror)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mirrorHoldsWork(mirror, base) {
+		t.Fatal("an untouched mirror holds work")
+	}
+	os.WriteFile(filepath.Join(mirror, "src", "embed_head.cpp"), []byte("NativeEmbedBf16"), 0o644)
+	if !mirrorHoldsWork(mirror, base) {
+		t.Fatal("a file a part conversation wrote is not work")
 	}
 }

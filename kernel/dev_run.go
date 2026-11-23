@@ -627,6 +627,15 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 		stdout, status = devCollectLite(child, r.repo)
 		// only "the child did nothing" is worth a fresh child; anything else is
 		// judged by what is in the mirror, not by what the child says about it
+		if status["compile"] == "no_response" && mirrorHoldsWork(mirror, base) && !strings.Contains(stdout, ModelDowngradeMarker) {
+			// the tree holds work — the conversation's or the conversations it or the kernel
+			// started under it — and is judged, not reset: 11/23 03:33:34 the integration
+			// conversation 7b343129 ended on the provider's 502s having written nothing itself,
+			// was read as no response, and primeMirror wiped what its part conversations had
+			// written in the mirror for an hour
+			log.Printf(mirrorHoldsWorkFmt, r.repo, unit.ID, shortID(convID))
+			delete(status, "compile")
+		}
 		if status["compile"] == "no_response" || strings.Contains(stdout, ModelDowngradeMarker) {
 			log.Printf("dev_from_theorems: %s unit %s no response (try %d/5), retrying fresh", r.repo, unit.ID, try)
 			base, _ = primeMirror(cloneDir, mirror)
@@ -1345,4 +1354,13 @@ func endedOnAPIError(stdout string) bool {
 	return strings.Contains(stdout, "[API Error]") || strings.Contains(stdout, streamErrorMarker) ||
 		strings.Contains(stdout, "http request:") || strings.Contains(stdout, "TLS handshake timeout") ||
 		strings.Contains(stdout, "net/http:")
+}
+
+// %[1]s repo, %[2]s unit, %[3]s the conversation
+const mirrorHoldsWorkFmt = "dev_from_theorems: %[1]s unit %[2]s: conversation %[3]s ended without a word of its own, but the mirror differs from the tree it started on — it is judged, not reset"
+
+// mirrorHoldsWork: the mirror differs from base, the tree the attempt started on.
+func mirrorHoldsWork(mirror string, base fileDigest) bool {
+	changed, removed, err := treeDelta(mirror, base)
+	return err == nil && (len(changed) > 0 || len(removed) > 0)
 }
