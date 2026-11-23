@@ -120,10 +120,20 @@ data: {"type":"error","error":{"type":"rate_limit_error","message":"{\"type\":\"
 	kernel.ResetConversationRoom()
 	t.Cleanup(func() { apiWin, exitDiagPublish = oldWin, oldPub; kernel.ResetConversationRoom() })
 
+	var waits []time.Duration
+	oldSleep := rateLimitSleep
+	rateLimitSleep = func(d time.Duration) { waits = append(waits, d) }
+	t.Cleanup(func() { rateLimitSleep = oldSleep })
+
 	m := NewModel(NewClient(ClientConfig{BaseURL: srv.URL, OrgID: "org1", Cookie: "c=1"}), "claude-sonnet-4-6", "medium")
 	m.completionLoop(context.Background(), "a2983f70-c17b-4b70-af70-ee5ff1331748", m.newCompletionRequest("p"), false,
 		func(*model.LLMResponse, error) bool { return true })
 	if kernel.ConversationRoom() == 0 {
 		t.Fatal("the refusal for concurrency did not bound the conversations at once")
+	}
+	// a conversation under way sends its round again — waiting, since the room here was not
+	// exceeded — at most concurrencyRetryMax times, then ends as before
+	if len(waits) != concurrencyRetryMax {
+		t.Fatalf("sent again %d time(s), waits %v", len(waits), waits)
 	}
 }

@@ -776,6 +776,8 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 	// the first send of a new conversation: CreateConversationParams is cleared once it went out
 	newConversation := webReq.CreateConversationParams != nil
 
+	concurrencyRetries := 0 // rounds sent again after a refusal for the account's concurrency
+rounds:
 	for round := 0; round < roleMaxRounds; round++ {
 		st.rounds = round + 1
 
@@ -970,6 +972,19 @@ func (m *Model) completionLoop(ctx context.Context, convID string, webReq *Compl
 				body.Close()
 				if strings.Contains(string(event.Data), "concurrent_limit_reached") {
 					kernel.ConcurrentLimitReached() // the account runs no more at once (kernel/conv_room.go)
+					// a conversation already under way, refused before this round said anything,
+					// waits for room and sends the round again: 11/23 02:19:23 56439a80 was
+					// refused at its third round and ended, its part's work cut where it stood
+					if !(newConversation && round == 0) && textBuf.Len() == 0 && len(toolBlocks) == 0 && concurrencyRetries < concurrencyRetryMax {
+						concurrencyRetries++
+						if !kernel.WaitConversationRoomRunning(truncate(convID, 8)) {
+							// the room was not exceeded here: the account's other conversations
+							log.Printf("claudeweb: %s refused for the account's concurrency within the room measured here — waiting %v, then the round again (%d/%d)", truncate(convID, 8), concurrencyBackoff, concurrencyRetries, concurrencyRetryMax)
+							rateLimitSleep(concurrencyBackoff)
+						}
+						round-- // a refused round is not a round
+						continue rounds
+					}
 				}
 				doExit(exitError, fmt.Sprintf("[Error] %s", string(event.Data)))
 				return
@@ -1726,3 +1741,10 @@ func describeModelUpdate(data []byte, requested string) string {
 	return fmt.Sprintf("MODEL CHANGED by the server: %s -> %s (requested %s)%s; full event: %s",
 		from, to, requested, note, truncate(string(data), 1500))
 }
+
+// concurrencyRetryMax: how many times a conversation refused for the account's concurrency
+// sends its round again before it ends as before; concurrencyBackoff: the wait before that when
+// the room measured here was not exceeded (a variable for tests).
+const concurrencyRetryMax = 3
+
+var concurrencyBackoff = 2 * time.Minute

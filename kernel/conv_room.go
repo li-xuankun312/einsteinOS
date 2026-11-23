@@ -101,3 +101,29 @@ func ResetConversationRoom() {
 	convRoomMu.Unlock()
 	convRoomCond.Broadcast()
 }
+
+// WaitConversationRoomRunning blocks a running conversation the server refused for the account's
+// concurrency until the conversations running, itself among them, are within the room measured
+// — another has ended or convRoomQuiet gave a place back — so it sends its round again instead
+// of ending. 11/23 02:19:23 the integration's part conversation 56439a80 was refused at its
+// third round with 7 running and ended with an error, its work cut where it stood.
+// It says whether it waited: a refusal with the room not exceeded here (another account's
+// conversations, a count that is off) is waited out by the caller instead.
+func WaitConversationRoomRunning(conv string) bool {
+	convRoomMu.Lock()
+	defer convRoomMu.Unlock()
+	said := false
+	for {
+		widenLocked()
+		if convRoom == 0 || convLive <= convRoom {
+			return said
+		}
+		if !said {
+			said = true
+			log.Printf("conv_room: %s was refused for the account's concurrency — it waits, %d conversations running, the server took %d at once, and sends its round again", conv, convLive, convRoom)
+		}
+		wake := time.AfterFunc(time.Until(convRoomSince.Add(convRoomQuiet)), convRoomCond.Broadcast)
+		convRoomCond.Wait()
+		wake.Stop()
+	}
+}
