@@ -525,6 +525,9 @@ func startIntegrationParts(unitID, parent string, parts []string, body string, f
 					continue
 				}
 				delete(running, addr)
+				if wrote := partWroteOthers(unitID, part, files); len(wrote) > 0 {
+					log.Printf(partWroteOthersFmt, unitID, shortID(addr), part, len(wrote), strings.Join(wrote, "; "))
+				}
 				if why := conversationError(out); why != "" {
 					if !retried[part] {
 						retried[part] = true
@@ -760,4 +763,55 @@ func integrationTreeFiles(tree string) (string, func(string) bool) {
 		}
 		return false
 	}
+}
+
+// %[1]s unit, %[2]s the conversation, %[3]s its part, %[4]d files, %[5]s them with their part
+const partWroteOthersFmt = "dev_from_theorems: integration unit %[1]s: part conversation %[2]s (%[3]s) wrote %[4]d file(s) of other parts: %[5]s"
+
+// partMirrorBase: per unit, the mirror's files as they were when its parts were started.
+var (
+	partMirrorMu   sync.Mutex
+	partMirrorBase = map[string]fileDigest{}
+	partMirrorPath = map[string]string{} // unit -> its mirror
+)
+
+// notePartMirrorBase records the mirror as it is before the parts are started.
+func notePartMirrorBase(unitID, mirror string) {
+	d, err := snapshotTree(mirror)
+	if err != nil {
+		return
+	}
+	partMirrorMu.Lock()
+	partMirrorBase[unitID] = d
+	partMirrorPath[unitID] = mirror
+	partMirrorMu.Unlock()
+}
+
+// partWroteOthers: the files of other parts that changed in the mirror since the parts were
+// started — measured, not asked of the conversation, which cannot be taken at its word for it.
+func partWroteOthers(unitID, part string, files map[string][]string) []string {
+	name, _, _ := strings.Cut(part, ":")
+	name = strings.TrimSpace(name)
+	partMirrorMu.Lock()
+	base, ok := partMirrorBase[unitID]
+	mirror := partMirrorPath[unitID]
+	partMirrorMu.Unlock()
+	if !ok || mirror == "" || len(files) == 0 {
+		return nil
+	}
+	var out []string
+	for other, fs := range files {
+		if other == name {
+			continue
+		}
+		for _, f := range fs {
+			now, err := digestFile(filepath.Join(mirror, filepath.FromSlash(f)))
+			was, had := base[f]
+			if (err == nil) != had || (had && now != was) {
+				out = append(out, fmt.Sprintf("%s (%s)", f, other))
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
 }

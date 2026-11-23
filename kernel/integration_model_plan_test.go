@@ -426,3 +426,33 @@ func TestEachPartIsGivenItsOwnFilesAndTheOthers(t *testing.T) {
 		t.Fatal("no files named, and a block given")
 	}
 }
+
+// a part that writes a file of another part is measured from the mirror, not asked of it
+func TestAPartWritingAnothersFileIsMeasured(t *testing.T) {
+	mirror := t.TempDir()
+	put := func(p, s string) {
+		os.MkdirAll(filepath.Join(mirror, filepath.Dir(p)), 0o755)
+		os.WriteFile(filepath.Join(mirror, p), []byte(s), 0o644)
+	}
+	put("src/rt/embed_head.cpp", "v1")
+	put("src/kernels/gpu/gdn_layer.cu", "v1")
+	files := map[string][]string{"embed": {"src/rt/embed_head.cpp"}, "gdn": {"src/kernels/gpu/gdn_layer.cu"}}
+	notePartMirrorBase("uint_pf", mirror)
+	defer func() {
+		partMirrorMu.Lock()
+		delete(partMirrorBase, "uint_pf")
+		delete(partMirrorPath, "uint_pf")
+		partMirrorMu.Unlock()
+	}()
+	if got := partWroteOthers("uint_pf", "gdn: the linear attention", files); len(got) != 0 {
+		t.Fatalf("nothing written, and files reported: %v", got)
+	}
+	put("src/rt/embed_head.cpp", "v2 written by the gdn part")
+	got := partWroteOthers("uint_pf", "gdn: the linear attention", files)
+	if len(got) != 1 || got[0] != "src/rt/embed_head.cpp (embed)" {
+		t.Fatalf("%v", got)
+	}
+	if own := partWroteOthers("uint_pf", "embed: gathers the rows", files); len(own) != 0 {
+		t.Fatalf("a part's own file was taken for another's: %v", own)
+	}
+}
