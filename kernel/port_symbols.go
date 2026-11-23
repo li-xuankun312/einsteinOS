@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -159,4 +160,80 @@ func redefinedFuncs(sites []funcSite) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// headerExts: the sources a declaration is read from.
+var headerExts = map[string]bool{".h": true, ".hpp": true, ".cuh": true}
+
+// undefinedFuncs: the functions a header declares, not static or inline, that some source
+// calls and no source of the tree defines — "name: the header (called in N place(s))" — which
+// no build of the tree links. 11/23 16:11 the GDN functions were declared in kg_kernels.hpp and
+// called in gdn_layer_parity.cu and e2e_all_check.cu, their two definitions both deleted.
+func undefinedFuncs(tree string, sites []funcSite) []string {
+	defined := map[string]bool{}
+	for _, s := range sites {
+		if s.Def {
+			defined[s.Name] = true
+			defined[lastName(s.Name)] = true
+		}
+	}
+	declared := map[string]string{} // name -> the first header declaring it
+	declCount := map[string]int{}
+	for _, s := range sites {
+		if s.Def || s.Static || !headerExts[strings.ToLower(filepath.Ext(s.File))] {
+			continue
+		}
+		if defined[s.Name] || defined[lastName(s.Name)] {
+			continue
+		}
+		if _, ok := declared[s.Name]; !ok {
+			declared[s.Name] = s.File
+		}
+		declCount[lastName(s.Name)]++
+	}
+	if len(declared) == 0 {
+		return nil
+	}
+	uses := map[string]int{}
+	filepath.WalkDir(tree, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case ".git", ".einsteinOS", "build", "_build":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !portSourceExts[strings.ToLower(filepath.Ext(p))] {
+			return nil
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return nil
+		}
+		for _, m := range callRe.FindAllStringSubmatch(string(b), -1) {
+			uses[m[1]]++
+		}
+		return nil
+	})
+	var out []string
+	for q, h := range declared {
+		n := lastName(q)
+		if calls := uses[n] - declCount[n]; calls > 0 {
+			out = append(out, q+": declared in "+h+", called "+strconv.Itoa(calls)+" time(s), defined in no source")
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+var callRe = regexp.MustCompile(`\b([A-Za-z_]\w*)\s*(?:<<<[^>]*>>>)?\s*\(`)
+
+func lastName(q string) string {
+	if i := strings.LastIndex(q, "::"); i >= 0 {
+		return q[i+2:]
+	}
+	return q
 }
