@@ -158,24 +158,23 @@ func judgeEnvFor(modelDir, arch string) (python, versions string, err error) {
 }
 
 // evalTeacherForcedFn runs the model's named implementation (a variable for tests): the
-// first-ranked token at each generated position, the class run, and why it could not be run —
-// in this machine's python3, and when that cannot load the class, in the judge environment
-// built for it. 11/20 on cc-1c97a71e python3's transformers 4.51.3 has no
-// Qwen3_5MoeForCausalLM.
+// first-ranked token at each generated position, the class run, and why it could not be run.
+// It runs only in the judge environment built for it (eval_judge.go), a venv of the kernel's
+// own under its home: never this machine's python3, whose packages the conversations write to.
+// 11/22 23:47 the integration's conversation wrote pytools/patch_import_utils.py into e2e.sh to
+// change this machine's transformers until it loaded the model on torch 2.1 — the judge, which
+// tried this machine's python3 first, would have checked the port against what the
+// conversation had made of the model's implementation.
 var evalTeacherForcedFn = func(modelDir, arch string, prompt, generated []int) (argmax []int, class, unavailable string) {
-	argmax, class, unavailable = teacherForcedWith("python3", modelDir, arch, prompt, generated)
-	if unavailable == "" {
-		return argmax, class, ""
-	}
 	python, versions, err := judgeEnvForFn(modelDir, arch)
 	if err != nil {
-		return nil, "", fmt.Sprintf("python3: %s; the judge environment: %v", unavailable, err)
+		return nil, "", fmt.Sprintf("the judge environment: %v", err)
 	}
-	log.Printf("eval_correct: python3 cannot run %s (%s); the judge runs in %s (%s)", arch, tailText(unavailable, 200), python, versions)
 	argmax, class, un := teacherForcedWith(python, modelDir, arch, prompt, generated)
 	if un != "" {
-		return nil, "", fmt.Sprintf("python3: %s; %s (%s): %s", unavailable, python, versions, un)
+		return nil, "", fmt.Sprintf("%s (%s): %s", python, versions, un)
 	}
+	log.Printf("eval_correct: the judge ran %s in %s (%s)", arch, python, versions)
 	return argmax, fmt.Sprintf("%s (%s, on the CPU)", class, versions), ""
 }
 
