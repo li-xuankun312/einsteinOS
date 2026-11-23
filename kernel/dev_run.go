@@ -858,6 +858,13 @@ func (r *devRun) reviewUnit(unit DevPlanNode, idx, total int, convID string, st 
 func (r *devRun) unitPrompt(unit DevPlanNode, idx, total, attempt int, fail DevFailure, baseRef string) string {
 	plan := r.plan
 	var c strings.Builder
+	// a gate outside the unit (the machine's, the kernel's judge) is not the unit's failure:
+	// 11/22 23:29 dev_fix_7 was given integration_reference_impl_missing — the judge's
+	// environment could not be built — as its last failure, and at 23:47 wrote
+	// pytools/patch_import_utils.py to change this machine's transformers
+	if gateOutsideUnit(fail.Kind) {
+		fail.Text, fail.Kind, fail.Copies = "", "", ""
+	}
 	if attempt > 1 {
 		if fail.Text != "" {
 			c.WriteString(truncStr(fail.Text, 3500) + "\n")
@@ -915,7 +922,7 @@ func (r *devRun) unitPrompt(unit DevPlanNode, idx, total, attempt int, fail DevF
 	c.WriteString("\n" + BudgetBlock(devWorkLoad(len(unit.Modules), bytes), RoundBudgetOf(devUnitCondition())))
 
 	what := fmt.Sprintf(devWhatFmt, passed, idx+1, total, unit.ID, attempt)
-	if attempt > 1 {
+	if attempt > 1 && fail.Kind != "" {
 		what += fmt.Sprintf(devWhatFailFmt, fail.Kind)
 	}
 	commits := devCommitsEstimate(devUnitMirrorDir(r.devRepo, unit.ID), unit.ID, r.shown(unit).Symbols, len(unit.Modules))
