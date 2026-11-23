@@ -147,6 +147,12 @@ func forgetSpawn(parentConv, kind, prompt string) {
 }
 
 func SpawnConv(parentConv, kind, prompt string) (SpawnResult, error) {
+	return spawnConvWith(parentConv, kind, prompt, DefaultSpawnPolicy)
+}
+
+// spawnConvWith is SpawnConv under the policy pol gives for the parent at the moment of the
+// request (read under spawnMu).
+func spawnConvWith(parentConv, kind, prompt string, pol func() SpawnPolicy) (SpawnResult, error) {
 	spawnMu.Lock()
 	defer spawnMu.Unlock()
 	key := spawnKey(parentConv, kind, prompt)
@@ -154,7 +160,7 @@ func SpawnConv(parentConv, kind, prompt string) (SpawnResult, error) {
 		r.Note = "already started by this exact request"
 		return r, nil
 	}
-	if err := CheckSpawn(parentConv, kind, DefaultSpawnPolicy()); err != nil {
+	if err := CheckSpawn(parentConv, kind, pol()); err != nil {
 		return SpawnResult{}, err
 	}
 	role := spawnKinds[kind]
@@ -559,3 +565,23 @@ const spawnScopeFmt = "[SCOPE] %[1]s — other conversations edit the same tree.
 
 // what happens to a spawned conversation's files
 const spawnPushFact = "the kernel verifies the tree and pushes it; a push from this conversation is not used.\n"
+
+// kernelPartPolicy: the policy for a conversation the kernel starts under parentConv for one of
+// the planner's parts (integration_model_plan.go) — the default's depth, and room for one more
+// child and one more in the tree: how many run at once is bounded by the kernel's scheduling of
+// the parts, and how many there are by the planner's parts. The default's counts are of the
+// conversations a conversation starts itself. 11/23 06:29:35 the four queued parts and the
+// errored ones were refused with "this conversation already started 6 (limit 6)".
+func kernelPartPolicy(parentConv string) func() SpawnPolicy {
+	return func() SpawnPolicy {
+		p := DefaultSpawnPolicy()
+		children := len(ConvManifest(parentConv).Children)
+		if children+1 > p.MaxChildren {
+			p.MaxChildren = children + 1
+		}
+		if n := len(ConvManifest(convTreeRoot(parentConv)).Flatten()); n+1 > p.MaxTree {
+			p.MaxTree = n + 1
+		}
+		return p
+	}
+}
