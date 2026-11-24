@@ -583,6 +583,9 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 			if o.Result.GateText != "" {
 				log.Printf(preVerifyGateTextLogFmt, r.repo, unit.ID, truncStr(o.Result.GateText, preVerifyGateTextLogMax))
 			}
+			if o.Result.Compile == "fail" {
+				log.Printf(preVerifyCompileLogFmt, r.repo, unit.ID, tailText(o.Status["compile_error"]+"\n"+o.Result.BuildOut, preVerifyGateTextLogMax))
+			}
 			if end {
 				endWhy = preVerifyReport(o)
 				return true, ""

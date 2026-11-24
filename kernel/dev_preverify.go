@@ -245,3 +245,7 @@ const preVerifyGateTextLogFmt = "dev_preverify: %[1]s unit %[2]s: the gates' tex
 // said gate="kernel_unported" (also failed: toolchain_unused, port_ref_file_unknown, port_extra,
 // port_incomplete) and not which rows, kernels or files any of them named.
 const preVerifyGateTextLogMax = 3000
+
+// %[1]s repo, %[2]s unit, %[3]s the compile's output — 11/24 03:24:38 and 03:25:36 compile=fail
+// (exit 1) in 12s was logged with gate="" and nothing of what the compiler said
+const preVerifyCompileLogFmt = "dev_preverify: %[1]s unit %[2]s: the failed compile's output sent back (its end): %[3]s"
