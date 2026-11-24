@@ -567,15 +567,19 @@ func runUnitTestStage(ws, unitID, gpuUsable string, req UnitRequirements, change
 	if req.GPU() || req.RequireGPU {
 		if lib, err := launchProbeLib(); err != nil {
 			probeErr = err.Error()
-		} else if f, err := os.CreateTemp("", "einsteinos-launch-*.log"); err != nil {
+		} else if f, err := os.CreateTemp(crashDir(), "einsteinos-launch-*.log"); err != nil {
 			probeErr = err.Error()
 		} else {
 			probeLog = f.Name()
 			f.Close()
 			defer os.Remove(probeLog)
 			testEnv += launchProbeEnv(lib, probeLog)
+			if crashDir() != "" {
+				testEnv += "export EINSTEINOS_LAUNCH_SYNC=1; "
+			}
 		}
 	}
+	noteCrashStage(unitID, test, probeLog)
 	tstart := time.Now()
 	code, out, ttrace, err := runWatched(testEnv+"bash "+test+" 2>&1", ws, testTimeout)
 	log.Printf(verifyProcTimesFmt, unitID, test, time.Since(tstart).Round(time.Second), procTimesByExe(ttrace.Processes), e2eProcTimes(ttrace.Processes, e2eProcTimesMin))
@@ -1126,4 +1130,35 @@ func compileErrorLines(out string, max int) string {
 		i += 2
 	}
 	return b.String()
+}
+
+// crashDir: EINSTEINOS_CRASH_DIR, a directory that outlives the machine (a network disk), where a
+// GPU test's launch log is written line by line as each kernel launches, and each test stage is
+// noted before it runs ("" when unset or absent). 11/24 04:46, 09:46 and 12:14 the machine went
+// down — 12:24 its uptime was 8 minutes — right after a build and before its test.sh had been
+// measured, and the launch log, in /tmp, went with it.
+func crashDir() string {
+	d := os.Getenv("EINSTEINOS_CRASH_DIR")
+	if d == "" {
+		return ""
+	}
+	if st, err := os.Stat(d); err != nil || !st.IsDir() {
+		return ""
+	}
+	return d
+}
+
+// noteCrashStage writes, and syncs, a line saying a unit's test.sh starts, in crashDir.
+func noteCrashStage(unitID, test, probeLog string) {
+	d := crashDir()
+	if d == "" {
+		return
+	}
+	f, err := os.OpenFile(filepath.Join(d, "einsteinos-stages.log"), os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	fmt.Fprintf(f, "%s unit %s: %s starts; its kernel launches go to %s\n", time.Now().Format("2006/01/02 15:04:05"), unitID, test, probeLog)
+	f.Sync()
 }

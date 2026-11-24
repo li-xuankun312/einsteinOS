@@ -50,7 +50,10 @@ static void probe_write(const char *s) {
 __attribute__((constructor)) static void probe_init(void) {
   const char *p = getenv("EINSTEINOS_LAUNCH_LOG");
   if (!p || !*p) return;
-  probe_fd = open(p, O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC, 0644);
+  /* EINSTEINOS_LAUNCH_SYNC: each line on the disk before the launch it names runs, so that a
+     machine that goes down with a kernel keeps the line of the kernel it went down with */
+  const char *sy = getenv("EINSTEINOS_LAUNCH_SYNC");
+  probe_fd = open(p, O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC | ((sy && *sy) ? O_DSYNC : 0), 0644);
   char exe[1024];
   ssize_t n = readlink("/proc/self/exe", exe, sizeof exe - 1);
   if (n < 0) n = 0;
