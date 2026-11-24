@@ -97,7 +97,31 @@ func fetchTarball(u, proxy, dir string) (int, error) {
 	if resp.StatusCode != 200 {
 		return 0, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
-	return unpackTarGz(resp.Body, dir)
+	// the archive is kept beside its unpacked files: the blobless clone's blobs are taken from
+	// it too (ref_archive.go), not fetched in a second download of the same archive
+	part := dir + ".tar.gz.part"
+	f, err := os.Create(part)
+	if err != nil {
+		return unpackTarGz(resp.Body, dir)
+	}
+	n, err := unpackTarGz(io.TeeReader(resp.Body, f), dir)
+	io.Copy(f, resp.Body) // what the unpacking did not read
+	f.Close()
+	if err == nil {
+		os.Rename(part, dir+".tar.gz")
+	} else {
+		os.Remove(part)
+	}
+	return n, err
+}
+
+// refTarballArchive: the commit's archive as fetched for its files, when it was ("" when not).
+func refTarballArchive(owner, name, sha string) string {
+	p := fmt.Sprintf(refTarballDirFmt, owner, name, sha) + ".tar.gz"
+	if st, err := os.Stat(p); err == nil && st.Size() > 0 {
+		return p
+	}
+	return ""
 }
 
 // unpackTarGz writes a tar.gz's regular files under dir, the archive's top directory left out,

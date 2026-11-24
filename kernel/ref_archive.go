@@ -26,6 +26,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
 	"regexp"
 	"strings"
@@ -131,6 +132,17 @@ func prefetchViaArchive(cloneDir, sha string, oids []string) error {
 	want := make(map[string]bool, len(oids))
 	for _, o := range oids {
 		want[o] = true
+	}
+	// the archive ref_tarball.go fetched for the commit's files serves first: 11/24 14:15:06 it
+	// had come in 1m14s and the same archive was then downloaded again for the blobs
+	if p := refTarballArchive(owner, name, sha); p != "" {
+		if f, err := os.Open(p); err == nil {
+			_, ierr := importArchiveBlobs(cloneDir, f, want)
+			f.Close()
+			if ierr == nil && len(want) == 0 {
+				return nil
+			}
+		}
 	}
 	var lastErr error
 	for _, proxy := range refFetchRoutes() {

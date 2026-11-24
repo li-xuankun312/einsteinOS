@@ -57,4 +57,8 @@ func TestTheReferencesFilesAreReadFromOneArchive(t *testing.T) {
 	if hits != 1 {
 		t.Fatalf("%d archive request(s) for one commit", hits)
 	}
+	// 11/24 14:15:06 the same archive was downloaded again for the blobs: it is kept for them
+	if refTarballArchive("Niko1221", "Strata", sha) == "" {
+		t.Fatal("the archive is not kept beside its files")
+	}
 }
