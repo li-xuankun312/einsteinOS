@@ -550,10 +550,16 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 		r.whileWaiting(func() { waitRoleEnded(role, r.repo, unit.ID) })
 		unchanged := 0
 		endWhy := "" // why the last check let the conversation end, as the mirror's verification reports it
-		check := func() (bool, string) {
+		checkFrom := func(fromMirror bool) (bool, string) {
 			r.mu.Lock() // the conversation's goroutine; the unit's waits on it with the lock let go
 			defer r.mu.Unlock()
 			if changed, removed, err := treeDelta(mirror, base); err == nil && pre.sameRejected(deltaDigest(mirror, changed, removed)) {
+				if fromMirror {
+					// a change of the mirror that left its delta that of the last verification is not a
+					// done line: it is not verified again and does not count toward ending the attempt
+					log.Printf(preVerifyMirrorSameFmt, r.repo, unit.ID, pre.out.Result.Gate)
+					return false, ""
+				}
 				unchanged++
 				if pre.unchangedEnd(unchanged) {
 					log.Printf("dev_preverify: %s unit %s (%s): the files are those of the last rejected verification (gate=%q) for the %d%s time — the conversation ends and the tree is judged",
@@ -621,12 +627,13 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 			}
 			return false, report
 		}
+		check := func() (bool, string) { return checkFrom(false) }
 		RegisterPreVerify(role, check)
 		if unit.Integration {
 			// a change of the mirror by any of the unit's conversations is verified too
 			// (mirror_verify.go)
 			registerMirrorVerify(unit.ID, func() (bool, string) {
-				end, rep := check()
+				end, rep := checkFrom(true)
 				if end && rep == "" {
 					rep = endWhy
 				}

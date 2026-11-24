@@ -115,3 +115,8 @@ func mirrorVerifyNews(unitID, conv string) string {
 	v.heard[conv] = v.seq
 	return v.report
 }
+
+// %[1]s repo, %[2]s unit, %[3]s the last gate — 11/24 09:11:01 a change of the mirror that left its
+// delta as the last verification had it counted as a done line with nothing changed (1 of 3),
+// the third of which ends the attempt
+const preVerifyMirrorSameFmt = "dev_preverify: %[1]s unit %[2]s: the mirror changed but its files are those of the last rejected verification (gate=%[3]q) — not verified again, and not a done line"
