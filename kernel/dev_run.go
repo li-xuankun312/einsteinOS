@@ -549,7 +549,8 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 		var ferr error
 		r.whileWaiting(func() { waitRoleEnded(role, r.repo, unit.ID) })
 		unchanged := 0
-		RegisterPreVerify(role, func() (bool, string) {
+		endWhy := "" // why the last check let the conversation end, as the mirror's verification reports it
+		check := func() (bool, string) {
 			r.mu.Lock() // the conversation's goroutine; the unit's waits on it with the lock let go
 			defer r.mu.Unlock()
 			if changed, removed, err := treeDelta(mirror, base); err == nil && pre.sameRejected(deltaDigest(mirror, changed, removed)) {
@@ -557,6 +558,7 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 				if pre.unchangedEnd(unchanged) {
 					log.Printf("dev_preverify: %s unit %s (%s): the files are those of the last rejected verification (gate=%q) for the %d%s time — the conversation ends and the tree is judged",
 						r.repo, unit.ID, role, pre.out.Result.Gate, unchanged, ordinalSuffix(unchanged))
+					endWhy = fmt.Sprintf(mirrorEndUnchangedFmt, pre.out.Result.Gate)
 					return true, ""
 				}
 				log.Printf("dev_preverify: %s unit %s (%s): the files are those of the last rejected verification (gate=%q) — the conversation is told nothing changed (%d of %d)",
@@ -569,6 +571,7 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 			unchanged = 0
 			o := devVerifyOnly(cloneDir, mirror, r.branch, baseRef, unit.ID, r.gpuUsable(), base, r.shown(unit))
 			if errors.Is(o.Err, errBranchMoved) {
+				endWhy = mirrorEndBranchMovedFmt
 				return true, "" // nothing it writes now can be verified: the unit runs again, alone
 			}
 			passed := o.Err == nil && o.Verified && o.Result.Passed()
@@ -578,6 +581,7 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 			log.Printf("dev_preverify: %s unit %s (%s): %s — %s", r.repo, unit.ID, role,
 				preVerifyLogFields(o), map[bool]string{true: "the conversation may end", false: "sent back to the conversation"}[end])
 			if end {
+				endWhy = preVerifyReport(o)
 				return true, ""
 			}
 			// what it rejected is parked, so a run stopped before this attempt ends starts the
@@ -597,10 +601,23 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 				}
 			}
 			return false, preVerifyReport(o) + compileSymbolFacts(o.Result.Compile, mirror)
-		})
+		}
+		RegisterPreVerify(role, check)
+		if unit.Integration {
+			// a change of the mirror by any of the unit's conversations is verified too
+			// (mirror_verify.go)
+			registerMirrorVerify(unit.ID, func() (bool, string) {
+				end, rep := check()
+				if end && rep == "" {
+					rep = endWhy
+				}
+				return end, rep
+			})
+		}
 		r.whileWaiting(func() { child, ferr = ForkWithTermination(prompt, ".", role, cond) })
 		if ferr != nil {
 			UnregisterPreVerify(role)
+			registerMirrorVerify(unit.ID, nil)
 			log.Printf("dev_from_theorems: %s unit %s fork failed (try %d/5): %v", r.repo, unit.ID, try, ferr)
 			continue
 		}
@@ -618,6 +635,7 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 			Wait(child)
 			waitAbandoned(child, r.repo, unit.ID)
 		})
+		registerMirrorVerify(unit.ID, nil)
 		UnregisterPreVerify(role)
 		if m := getMeta(child); m != nil && m.ConvID != "" {
 			convID = m.ConvID

@@ -62,6 +62,7 @@ type mirrorWrite struct {
 // mirrorUnit: the conversations working on one unit's mirror and what their commands wrote.
 type mirrorUnit struct {
 	mu     sync.Mutex // one command at a time on the mirror
+	unit   string
 	dir    string
 	part   map[string]string // conv -> its part ("" for the unit's own conversation)
 	owner  map[string]string // file -> the conversation that first wrote it in this attempt
@@ -118,7 +119,7 @@ func noteMirrorConv(unitID, dir, conv, part string) {
 	defer mirrorUnitsMu.Unlock()
 	u := mirrorUnits[unitID]
 	if u == nil || u.dir != dir {
-		u = &mirrorUnit{dir: dir, part: map[string]string{}, owner: map[string]string{}, named: map[string]string{}, heard: map[string]int{}, content: map[string][]byte{}}
+		u = &mirrorUnit{unit: unitID, dir: dir, part: map[string]string{}, owner: map[string]string{}, named: map[string]string{}, heard: map[string]int{}, content: map[string][]byte{}}
 		var all []string
 		for f := range statMirror(dir) {
 			all = append(all, f)
@@ -180,7 +181,9 @@ func MirrorCommand(conv string, run func() string) string {
 	u.keep(kept)
 	if len(said) > 0 {
 		log.Printf(mirrorWroteFmt, shortID(conv), partName(u.part[conv]), len(said), strings.Join(said, " "))
+		mirrorChanged(u.unit)
 	}
+	out += mirrorVerifyNews(u.unit, conv)
 	out += u.sinceHeard(conv)
 	if len(others) > 0 {
 		log.Printf(mirrorOthersLogFmt, shortID(conv), partName(u.part[conv]), len(others), strings.Join(others, "; "))
