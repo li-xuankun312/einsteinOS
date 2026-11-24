@@ -171,7 +171,12 @@ func MirrorCommand(conv string, run func() string) string {
 		out += fmt.Sprintf(mirrorUndoneFmt, len(back), "  "+strings.Join(back, "\n  ")+"\n")
 		after = statMirror(u.dir)
 	}
-	others := u.othersTouched(conv, before, after)
+	var others []string
+	for _, o := range u.othersTouched(conv, before, after) {
+		if f, _, _ := strings.Cut(o, " "); !undone[f] {
+			others = append(others, o) // a file written back is told once, as written back
+		}
+	}
 	var said []string
 	var kept []string
 	for _, w := range mirrorDiff(before, after) {
@@ -246,7 +251,11 @@ func (u *mirrorUnit) undo(conv string, before, after map[string]mirrorStat) []st
 				continue
 			}
 			whose := ""
-			if u.base[w.File] {
+			named, isNamed := u.named[w.File]
+			if isNamed && named == partName(mine) {
+				continue // the planner gave this part the file: its own to change
+			}
+			if u.base[w.File] && !isNamed {
 				whose = mirrorSharedFmt
 			} else if o, ok := u.owner[w.File]; ok && o != conv {
 				whose = fmt.Sprintf(mirrorOwnedByFmt, partName(u.part[o]), shortID(o))

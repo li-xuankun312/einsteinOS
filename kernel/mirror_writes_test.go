@@ -113,7 +113,7 @@ func TestACommandTouchingAnothersFileIsToldSo(t *testing.T) {
 		os.WriteFile(filepath.Join(dir, "include/baloon/rt_native.hpp"), []byte("yy"), 0o644)
 		return "ok"
 	})
-	for _, w := range []string{"wrote back 2 file(s)", "src/kernels/gpu/gdn_layer.cu (the file of gdn, conversation 0ea8884d, which wrote it first)", "include/baloon/rt_native.hpp (a file the mirror held when the unit's conversations began"} {
+	for _, w := range []string{"wrote back 2 file(s)", "src/kernels/gpu/gdn_layer.cu (the file of gdn, conversation 0ea8884d, which wrote it first)", "include/baloon/rt_native.hpp (the file the planner gave gdn)"} {
 		if !strings.Contains(out, w) {
 			t.Fatalf("missing %q in %q", w, out)
 		}
@@ -323,5 +323,35 @@ func TestAPartIsSaidToHaveWrittenOnlyWhatItsCommandsWrote(t *testing.T) {
 	})
 	if got := partWroteOthersBy("uint", "826ed16e", "loader: x", files); len(got) != 1 || got[0] != f+" (the unit's conversation)" {
 		t.Fatalf("%v", got)
+	}
+}
+
+// 11/24 03:43:56 the qsa part's edit of qsa_layer_parity.cu — a file the tree held, and one the
+// planner gave the qsa part — was undone as a shared file's: a file the planner gave a part is
+// that part's to change, and another part's to add lines to only
+func TestAFileThePlannerGaveAPartIsItsToChange(t *testing.T) {
+	resetMirrorUnits()
+	defer resetMirrorUnits()
+	dir := t.TempDir()
+	f := "tests/k39_integration/qsa_layer_parity.cu"
+	putTree(t, dir, map[string]string{f: "old line\n"})
+	noteMirrorConv("uint", dir, "1be9d73f", "qsa: x")
+	noteMirrorConv("uint", dir, "46fd9bb0", "moe: y")
+	noteMirrorPartFiles("uint", map[string][]string{"qsa": {f}})
+	if out := MirrorCommand("1be9d73f", func() string { os.WriteFile(filepath.Join(dir, f), []byte("new line\n"), 0o644); return "" }); strings.Contains(out, "wrote back") {
+		t.Fatalf("the qsa part's own file was undone: %q", out)
+	}
+	out := MirrorCommand("46fd9bb0", func() string { os.WriteFile(filepath.Join(dir, f), []byte("moe's\n"), 0o644); return "" })
+	if b, _ := os.ReadFile(filepath.Join(dir, f)); string(b) != "new line\n" || !strings.Contains(out, "the file the planner gave qsa") {
+		t.Fatalf("%q %q", b, out)
+	}
+}
+
+// 11/24 03:34:27 and 03:47:50 the parts refused for the account's concurrency ended with this
+// error; it is told apart from a part's own failure
+func TestAPartRefusedForConcurrencyIsToldApart(t *testing.T) {
+	out := `... [Error] {"type":"error","error":{"type":"rate_limit_error","message":"{\"type\":\"exceeded_limit\",\"representativeClaim\":\"concurrents\"}","details":{"error_code":"concurrent_limit_reached","message":"x"}}}`
+	if why := conversationError(out); !strings.Contains(why, concurrentLimitCode) {
+		t.Fatalf("%q", why)
 	}
 }
