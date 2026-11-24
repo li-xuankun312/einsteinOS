@@ -564,6 +564,8 @@ func runUnitTestStage(ws, unitID, gpuUsable string, req UnitRequirements, change
 	if _, err := os.Stat(filepath.Join(ws, filepath.FromSlash(test))); err != nil {
 		return finish() // Smoke stays "missing"
 	}
+	// the crash notes of this unit's last test.sh, when the machine went down in it (test_down.go)
+	noteTestDown(ws, unitID)
 	// a GPU unit's test runs with the launch probe preloaded: which kernels ran is measured
 	testEnv, probeLog, probeErr := env, "", ""
 	if req.GPU() || req.RequireGPU {

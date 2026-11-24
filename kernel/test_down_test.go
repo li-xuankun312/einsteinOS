@@ -1,0 +1,108 @@
+package kernel
+
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+// downFixture: a unit workspace whose build/fake_test ran under the probe with the crash
+// directory set, as 11/24 17:40 router_top10_parity did, and whose test.sh was noted as started.
+func downFixture(t *testing.T) (ws, crash, logPath, prog string) {
+	t.Helper()
+	withProbeDir(t)
+	ws, crash = t.TempDir(), t.TempDir()
+	t.Setenv("EINSTEINOS_CRASH_DIR", crash)
+	os.MkdirAll(filepath.Join(ws, "build"), 0o755)
+	os.MkdirAll(filepath.Join(ws, "src"), 0o755)
+	os.WriteFile(filepath.Join(ws, "src", "other.cu"), []byte("#include \"decl.hpp\"\n__global__ void\nother_kernel(int* p) { (void)p; }\n"), 0o644)
+	os.WriteFile(filepath.Join(ws, "src", "decl.hpp"), []byte("__global__ void other_kernel(int* p);\n"), 0o644)
+	os.WriteFile(filepath.Join(ws, "src", "caller.cu"), []byte("void run() { other_kernel<<<1,1>>>(0); }\n"), 0o644)
+	prog = fakeCudaProgram(t, filepath.Join(ws, "build"))
+	lib, err := launchProbeLib()
+	if err != nil {
+		t.Fatalf("launchProbeLib: %v", err)
+	}
+	logPath = filepath.Join(crash, "einsteinos-launch-198570202.log")
+	noteCrashStage("uint", ".einsteinOS/verify/uint/test.sh", logPath)
+	if out, err := exec.Command("bash", "-c", launchProbeEnv(lib, logPath)+"export EINSTEINOS_LAUNCH_SYNC=1; "+shq(prog)).CombinedOutput(); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	return ws, crash, logPath, prog
+}
+
+func bootAt(t *testing.T, at time.Time) {
+	t.Helper()
+	old := machineBootTimeFn
+	machineBootTimeFn = func() time.Time { return at }
+	t.Cleanup(func() { machineBootTimeFn = old })
+}
+
+// 11/24 17:40:14 test.sh started, no end was noted and the node booted again: the last launch the
+// probe noted is named from the executable the next build makes at the same path, with the files
+// that define that kernel, kept on the crash directory and logged once
+func TestTheTestTheMachineWentDownInIsMeasured(t *testing.T) {
+	ws, crash, logPath, prog := downFixture(t)
+	os.Remove(prog) // /tmp went with the machine
+	bootAt(t, time.Now().Add(time.Minute))
+	fakeCudaProgram(t, filepath.Join(ws, "build")) // the next verification's build
+
+	d, r, first := noteTestDown(ws, "uint")
+	if d == nil || !first {
+		t.Fatalf("no down test read: %+v %v", d, first)
+	}
+	if d.Exe != prog || d.Kernels != 2 || d.LaunchLog != logPath || d.Test != ".einsteinOS/verify/uint/test.sh" {
+		t.Fatalf("down: %+v", d)
+	}
+	if r.Kernel != "other_kernel" || len(r.Sources) != 1 || r.Sources["src/other.cu"] == "" || r.ExeSHA == "" {
+		t.Fatalf("record: %+v", r)
+	}
+	if fact := testDownFact(d, r); !strings.Contains(fact, "the 2nd distinct kernel of "+prog) || !strings.Contains(fact, "other_kernel, defined in src/other.cu") {
+		t.Fatalf("fact: %s", fact)
+	}
+	if _, err := os.Stat(filepath.Join(crash, "einsteinos-down-198570202.json")); err != nil {
+		t.Fatalf("record not kept: %v", err)
+	}
+	// the next verification reads the record kept, measured once
+	if d2, r2, again := noteTestDown(ws, "uint"); d2 == nil || again || r2.Kernel != "other_kernel" {
+		t.Fatalf("second read: %+v %+v %v", d2, r2, again)
+	}
+}
+
+// a test whose end was noted, or a machine that has not booted since it started, is not down
+func TestATestThatEndedOrStillRunsIsNotDown(t *testing.T) {
+	_, crash, _, _ := downFixture(t)
+	bootAt(t, time.Now().Add(-time.Hour))
+	if d := lastTestDown(crash, "uint"); d != nil {
+		t.Fatalf("the machine has not booted since the test started: %+v", d)
+	}
+	bootAt(t, time.Now().Add(time.Minute))
+	if d := lastTestDown(crash, "uother"); d != nil {
+		t.Fatalf("another unit's test: %+v", d)
+	}
+	CrashNote("unit uint: .einsteinOS/verify/uint/test.sh ended (exit 0)")
+	if d := lastTestDown(crash, "uint"); d != nil {
+		t.Fatalf("its end was noted: %+v", d)
+	}
+	t.Setenv("EINSTEINOS_CRASH_DIR", "")
+	if d, _, _ := noteTestDown(t.TempDir(), "uint"); d != nil {
+		t.Fatal("no crash directory, nothing read")
+	}
+}
+
+// the executable gone and not made again: the launch is said to be unresolved, with why
+func TestAnUnresolvedLastLaunchSaysWhy(t *testing.T) {
+	ws, _, _, prog := downFixture(t)
+	os.Remove(prog)
+	bootAt(t, time.Now().Add(time.Minute))
+	d, r, _ := noteTestDown(ws, "uint")
+	if d == nil || r.Kernel != "" || r.Why == "" {
+		t.Fatalf("%+v %+v", d, r)
+	}
+	if fact := testDownFact(d, r); !strings.Contains(fact, "unresolved") {
+		t.Fatalf("fact: %s", fact)
+	}
+}
