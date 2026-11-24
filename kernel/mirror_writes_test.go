@@ -111,7 +111,7 @@ func TestACommandTouchingAnothersFileIsToldSo(t *testing.T) {
 		os.WriteFile(filepath.Join(dir, "include/baloon/rt_native.hpp"), []byte("yy"), 0o644)
 		return "ok"
 	})
-	for _, w := range []string{"changed or removed 2 file(s)", "src/kernels/gpu/gdn_layer.cu removed (written by gdn, conversation 0ea8884d)", "include/baloon/rt_native.hpp changed (the planner gave it to gdn)"} {
+	for _, w := range []string{"wrote back 2 file(s)", "src/kernels/gpu/gdn_layer.cu (the file of gdn, conversation 0ea8884d, which wrote it first)", "include/baloon/rt_native.hpp (the file the planner gave gdn)"} {
 		if !strings.Contains(out, w) {
 			t.Fatalf("missing %q in %q", w, out)
 		}
@@ -203,5 +203,38 @@ func TestAFileACommandLeftEmptyIsWrittenBack(t *testing.T) {
 	MirrorCommand("25f1be30", func() string { os.WriteFile(filepath.Join(dir, build), nil, 0o644); return "" })
 	if b, _ := os.ReadFile(filepath.Join(dir, build)); string(b) != "make\n" {
 		t.Fatalf("%q", b)
+	}
+}
+
+// 11/23 21:00-23:05 the moe, embed, loader and qsa parts each rewrote gdn_bf16_layer.cu, the gdn
+// part's, and were only told: a part's command that changes or removes another's file is undone
+// for it; the unit's own conversation, which puts the parts together, is told and not undone
+func TestAPartsCommandOnAnothersFileIsUndone(t *testing.T) {
+	resetMirrorUnits()
+	defer resetMirrorUnits()
+	dir := t.TempDir()
+	f := "src/kernels/gpu/gdn_bf16_layer.cu"
+	putTree(t, dir, map[string]string{"src/kernels/gpu/.keep": ""})
+	noteMirrorConv("uint", dir, "8c680f2c", "")
+	noteMirrorConv("uint", dir, "25f1be30", "gdn: x")
+	noteMirrorConv("uint", dir, "a6d47c28", "moe: y")
+	MirrorCommand("25f1be30", func() string { os.WriteFile(filepath.Join(dir, f), []byte("gdn's"), 0o644); return "" })
+	out := MirrorCommand("a6d47c28", func() string { os.WriteFile(filepath.Join(dir, f), []byte("moe's"), 0o644); return "" })
+	if b, _ := os.ReadFile(filepath.Join(dir, f)); string(b) != "gdn's" || !strings.Contains(out, f+" (the file of gdn, conversation 25f1be30") {
+		t.Fatalf("%q %q", b, out)
+	}
+	if out := MirrorCommand("a6d47c28", func() string {
+		os.WriteFile(filepath.Join(dir, f), []byte("gdn's\n// moe's declaration\n"), 0o644)
+		return ""
+	}); strings.Contains(out, "wrote back") {
+		t.Fatalf("lines added to another's file were undone: %q", out)
+	}
+	MirrorCommand("a6d47c28", func() string { os.Remove(filepath.Join(dir, f)); return "" })
+	if b, _ := os.ReadFile(filepath.Join(dir, f)); string(b) != "gdn's\n// moe's declaration\n" {
+		t.Fatalf("a removal stands: %q", b)
+	}
+	out = MirrorCommand("8c680f2c", func() string { os.WriteFile(filepath.Join(dir, f), []byte("joined"), 0o644); return "" })
+	if b, _ := os.ReadFile(filepath.Join(dir, f)); string(b) != "joined" || !strings.Contains(out, "changed or removed 1 file(s)") {
+		t.Fatalf("the unit's conversation: %q %q", b, out)
 	}
 }

@@ -221,8 +221,77 @@ func (u *mirrorUnit) undo(conv string, before, after map[string]mirrorStat) []st
 			out = append(out, f+" ("+fmt.Sprintf(mirrorEmptiedFmt, b.size)+")")
 		}
 	}
+	// a part's conversation does not take out or change lines of another's file (it may add
+	// lines: a declaration in a shared header, a row of the port map): 11/23 21:00-23:05 the moe, embed,
+	// loader and qsa parts each rewrote gdn_bf16_layer.cu, the gdn part's, and were only told
+	if mine := u.part[conv]; mine != "" {
+		for _, w := range mirrorDiff(before, after) {
+			if hasPrefixAny(out, w.File+" (") {
+				continue
+			}
+			whose := ""
+			if o, ok := u.owner[w.File]; ok && o != conv {
+				whose = fmt.Sprintf(mirrorOwnedByFmt, partName(u.part[o]), shortID(o))
+			} else if p, ok := u.named[w.File]; ok && p != partName(mine) {
+				whose = fmt.Sprintf(mirrorNamedForFmt, p)
+			}
+			if whose == "" {
+				continue
+			}
+			if !w.Removed && u.onlyAdded(w.File) {
+				continue // lines added to another's file, none of its own taken out
+			}
+			if w.Removed || before[w.File].size > 0 {
+				if u.writeBack(w.File) {
+					out = append(out, w.File+" ("+whose+")")
+				}
+			}
+		}
+	}
 	sort.Strings(out)
 	return out
+}
+
+const (
+	// %[1]s the part, %[2]s its conversation
+	mirrorOwnedByFmt = "the file of %[1]s, conversation %[2]s, which wrote it first"
+	// %[1]s the part
+	mirrorNamedForFmt = "the file the planner gave %[1]s"
+)
+
+// onlyAdded: whether the file as it is now holds every line of the kept one, in order — lines
+// were added to it (a declaration in a shared header, a row in the port map) and none of its own
+// removed or changed.
+func (u *mirrorUnit) onlyAdded(f string) bool {
+	was, ok := u.content[f]
+	if !ok {
+		return false
+	}
+	now, err := os.ReadFile(filepath.Join(u.dir, filepath.FromSlash(f)))
+	if err != nil {
+		return false
+	}
+	nl := strings.Split(string(now), "\n")
+	j := 0
+	for _, l := range strings.Split(string(was), "\n") {
+		for j < len(nl) && nl[j] != l {
+			j++
+		}
+		if j == len(nl) {
+			return false
+		}
+		j++
+	}
+	return true
+}
+
+func hasPrefixAny(l []string, p string) bool {
+	for _, s := range l {
+		if strings.HasPrefix(s, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // othersTouched: the files conv's command changed or removed that are another's — another
