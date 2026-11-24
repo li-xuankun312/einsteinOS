@@ -599,6 +599,9 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 					log.Printf("dev_preverify: %s unit %s: the rejected tree was not parked on %s: %v", r.repo, unit.ID, wip, err)
 				} else {
 					plan.NoteInProgress(unit.ID, DevFailure{Kind: o.Result.Gate, BaseRef: wip, BaseSHA: KernelPushed(r.devRepo, wip)})
+					if err := mirrorKnowsPark(mirror, cloneDir, wip, KernelPushed(r.devRepo, wip)); err != nil {
+						log.Printf("dev_preverify: %s unit %s: the mirror was not given %s: %v", r.repo, unit.ID, wip, err)
+					}
 					devPlanSave(r.repo, r.devRepo, r.branch, plan, fmt.Sprintf("plan: %s rejected tree parked on %s", unit.ID, wip))
 					log.Printf("dev_preverify: %s unit %s: the rejected tree is parked on %s — a run stopped before this attempt ends continues from it", r.repo, unit.ID, wip)
 				}
