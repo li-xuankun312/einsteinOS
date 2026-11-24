@@ -37,11 +37,48 @@ func ConcurrentLimitReached() {
 	if took < 1 {
 		took = 1
 	}
+	now := time.Now()
+	// a refusal within the wait after a place was given back: the place was not there — it is
+	// taken back and the next is given only after twice the wait. 11/24 03:47:50 and 04:32:52
+	// each place given back after 10m was followed by the refusal of a running part (layer_norm,
+	// moe), whose conversation ended for it
+	if !convRoomWidened.IsZero() && now.Sub(convRoomWidened) < convRoomQuietNow() {
+		if took >= convRoom && convRoom > 1 {
+			took = convRoom - 1
+		}
+		if convRoomQuietCur < convRoomQuietMax {
+			convRoomQuietCur = 2 * convRoomQuietNow()
+			if convRoomQuietCur > convRoomQuietMax {
+				convRoomQuietCur = convRoomQuietMax
+			}
+		}
+		log.Printf(convRoomBackFmt, convLive, took, convRoomQuietCur)
+	}
 	if convRoom == 0 || took < convRoom {
-		log.Printf("conv_room: the server refused a conversation for the account's concurrency with %d running — no more than %d run at once until %v pass without a refusal", convLive, took, convRoomQuiet)
+		log.Printf("conv_room: the server refused a conversation for the account's concurrency with %d running — no more than %d run at once until %v pass without a refusal", convLive, took, convRoomQuietNow())
 		convRoom = took
 	}
-	convRoomSince = time.Now()
+	convRoomSince = now
+	convRoomRefused = now
+}
+
+// %[1]d running, %[2]d the room, %[3]v the wait now
+const convRoomBackFmt = "conv_room: refused again with %[1]d running within the wait after a place was given back — %[2]d run at once, and the next place is given after %[3]v"
+
+var (
+	convRoomQuietCur time.Duration // the wait now (0: convRoomQuiet)
+	convRoomWidened  time.Time     // when a place was last given back
+	convRoomRefused  time.Time     // the last refusal
+)
+
+// convRoomQuietMax: the longest wait before a place is given back.
+const convRoomQuietMax = 2 * time.Hour
+
+func convRoomQuietNow() time.Duration {
+	if convRoomQuietCur <= 0 {
+		return convRoomQuiet
+	}
+	return convRoomQuietCur
 }
 
 // ConversationRoom: how many conversations may run at once now (0: no bound measured).
@@ -53,10 +90,15 @@ func ConversationRoom() int {
 }
 
 func widenLocked() {
-	for convRoom > 0 && time.Since(convRoomSince) >= convRoomQuiet {
+	for convRoom > 0 && time.Since(convRoomSince) >= convRoomQuietNow() {
+		// a place given back that held a whole wait without a refusal: the wait is the base again
+		if !convRoomWidened.IsZero() && convRoomRefused.Before(convRoomWidened) {
+			convRoomQuietCur = 0
+		}
 		convRoom++
-		convRoomSince = convRoomSince.Add(convRoomQuiet)
-		log.Printf("conv_room: %v without a refusal — %d conversations may run at once", convRoomQuiet, convRoom)
+		convRoomSince = convRoomSince.Add(convRoomQuietNow())
+		convRoomWidened = time.Now()
+		log.Printf("conv_room: %v without a refusal — %d conversations may run at once", convRoomQuietNow(), convRoom)
 	}
 }
 
@@ -98,6 +140,7 @@ func convEnded() {
 func ResetConversationRoom() {
 	convRoomMu.Lock()
 	convRoom, convRoomSince = 0, time.Time{}
+	convRoomQuietCur, convRoomWidened, convRoomRefused = 0, time.Time{}, time.Time{}
 	convRoomMu.Unlock()
 	convRoomCond.Broadcast()
 }
