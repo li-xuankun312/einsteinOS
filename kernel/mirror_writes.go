@@ -17,6 +17,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -433,4 +434,63 @@ func mirrorOwners(unitID string) map[string][]string {
 		sort.Strings(out[k])
 	}
 	return out
+}
+
+// compileErrPathRe: a source file and line a compiler names in an error.
+var compileErrPathRe = regexp.MustCompile(`([A-Za-z0-9_./+-]+\.(?:cu|cuh|cpp|cc|c|hpp|h))[:(](\d+)`)
+
+const (
+	// %[1]d files, %[2]s them with whose they are
+	compileOwnersFmt = "[WHOSE FILES THE COMPILER NAMED — measured from its output and the unit's mirror]\n%[1]d file(s):\n%[2]s"
+	// %[1]s the file, %[2]d errors, %[3]s whose
+	compileOwnerLineFmt = "  %[1]s: %[2]d line(s) named — %[3]s\n"
+)
+
+// compileErrorOwners: the files a failed compile's output names, each with the part whose file it
+// is in the unit's mirror (first written by its conversation, or given it by the planner). 11/23
+// 21:00-23:05 four parts each went to fix the GDN files, which were the gdn part's, as each
+// part's own build failed on them.
+func compileErrorOwners(unitID, out string) string {
+	mirrorUnitsMu.Lock()
+	u := mirrorUnits[unitID]
+	mirrorUnitsMu.Unlock()
+	if u == nil || out == "" {
+		return ""
+	}
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	count := map[string]int{}
+	var order []string
+	for _, m := range compileErrPathRe.FindAllStringSubmatch(out, -1) {
+		p := filepath.ToSlash(m[1])
+		var file string
+		for f := range u.content {
+			if p == f || strings.HasSuffix(p, "/"+f) {
+				file = f
+				break
+			}
+		}
+		if file == "" {
+			continue
+		}
+		if count[file] == 0 {
+			order = append(order, file)
+		}
+		count[file]++
+	}
+	if len(order) == 0 {
+		return ""
+	}
+	sort.Strings(order)
+	var b strings.Builder
+	for _, f := range order {
+		whose := "no part's (no conversation of the unit has written it)"
+		if o, ok := u.owner[f]; ok {
+			whose = fmt.Sprintf(mirrorOwnedByFmt, partName(u.part[o]), shortID(o))
+		} else if p, ok := u.named[f]; ok {
+			whose = fmt.Sprintf(mirrorNamedForFmt, p)
+		}
+		b.WriteString(fmt.Sprintf(compileOwnerLineFmt, f, count[f], whose))
+	}
+	return fmt.Sprintf(compileOwnersFmt, len(order), b.String())
 }

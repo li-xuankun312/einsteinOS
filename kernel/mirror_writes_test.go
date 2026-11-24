@@ -238,3 +238,27 @@ func TestAPartsCommandOnAnothersFileIsUndone(t *testing.T) {
 		t.Fatalf("the unit's conversation: %q %q", b, out)
 	}
 }
+
+// 11/23 21:00-23:05 four parts each went to fix the GDN files their own builds failed on: the
+// files a failed compile names go back with whose they are
+func TestTheFilesACompileErrorNamesGoBackWithWhoseTheyAre(t *testing.T) {
+	resetMirrorUnits()
+	defer resetMirrorUnits()
+	dir := t.TempDir()
+	noteMirrorConv("uint", dir, "25f1be30", "gdn: x")
+	noteMirrorConv("uint", dir, "a6d47c28", "moe: y")
+	MirrorCommand("25f1be30", func() string {
+		os.MkdirAll(filepath.Join(dir, "src/kernels/gpu"), 0o755)
+		os.WriteFile(filepath.Join(dir, "src/kernels/gpu/gdn_bf16_layer.cu"), []byte("x"), 0o644)
+		return ""
+	})
+	out := "/tmp/einsteinos_verify_uint/src/kernels/gpu/gdn_bf16_layer.cu:12:3: error: use of undeclared identifier 'kgc'\n" +
+		"/tmp/einsteinos_verify_uint/src/kernels/gpu/gdn_bf16_layer.cu(40): error: x\n/usr/include/stdio.h:3: note\n"
+	got := compileErrorOwners("uint", out)
+	if !strings.Contains(got, "1 file(s):\n  src/kernels/gpu/gdn_bf16_layer.cu: 2 line(s) named — the file of gdn, conversation 25f1be30") {
+		t.Fatalf("%q", got)
+	}
+	if compileErrorOwners("uint", "ld: undefined reference to foo") != "" {
+		t.Fatal("no file named, something said")
+	}
+}

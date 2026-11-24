@@ -600,7 +600,11 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 					log.Printf("dev_preverify: %s unit %s: the rejected tree is parked on %s — a run stopped before this attempt ends continues from it", r.repo, unit.ID, wip)
 				}
 			}
-			return false, preVerifyReport(o) + compileSymbolFacts(o.Result.Compile, mirror)
+			report := preVerifyReport(o) + compileSymbolFacts(o.Result.Compile, mirror)
+			if o.Result.Compile == "fail" {
+				report += compileErrorOwners(unit.ID, o.Status["compile_error"]+"\n"+o.Result.BuildOut)
+			}
+			return false, report
 		}
 		RegisterPreVerify(role, check)
 		if unit.Integration {
