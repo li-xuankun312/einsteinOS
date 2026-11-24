@@ -101,7 +101,7 @@ func gitFetchCmd(dir, ownerRepo string, ssh bool) string {
 		return fmt.Sprintf("GIT_SSH_COMMAND=%q git -C %q fetch --progress %q '+refs/heads/*:refs/remotes/origin/*'",
 			gitSSHCommand(), dir, sshRemoteURL(ownerRepo))
 	}
-	return fmt.Sprintf("git -C %q fetch --progress origin", dir)
+	return fmt.Sprintf("%sgit -C %q fetch --progress origin", gitHTTPSEnv(), dir)
 }
 
 // gitSSHFetchFailuresBeforeHTTPS: consecutive SSH fetch failures before this call goes
@@ -134,7 +134,7 @@ func GitCloneOrReuse(ownerRepo, dir string) error {
 		if _, err := os.Stat(dir + "/.git"); err == nil {
 			// .git exists — fetch, then reset locally.
 			// do NOT rm -rf: the local repo is valid, only the network failed.
-			transport := map[bool]string{true: "SSH", false: "HTTPS"}[useSSH]
+			transport := gitTransport(useSSH)
 			r := gitGuardFn(gitFetchCmd(dir, ownerRepo, useSSH), dir, gitStartWindow, gitMaxRun, 0, nil)
 			switch {
 			case !r.Started:
@@ -175,8 +175,8 @@ func GitCloneOrReuse(ownerRepo, dir string) error {
 		// no new --progress line for gitPushStallTimeout → new process. origin is set to
 		// the HTTPS URL afterwards, as an HTTPS clone leaves it, for the HTTPS fallback.
 		os.RemoveAll(dir)
-		transport := map[bool]string{true: "SSH", false: "HTTPS"}[useSSH]
-		cloneCmd := fmt.Sprintf("git clone --progress %q %q", CloneURL(ownerRepo), dir)
+		transport := gitTransport(useSSH)
+		cloneCmd := fmt.Sprintf("%sgit clone --progress %q %q", gitHTTPSEnv(), CloneURL(ownerRepo), dir)
 		if useSSH {
 			url, env := gitRemoteFn(ownerRepo, true)
 			cloneCmd = fmt.Sprintf("%sgit clone --progress %q %q && git -C %q remote set-url origin %q", env, url, dir, dir, CloneURL(ownerRepo))
@@ -454,7 +454,7 @@ func GitPushRetry(repoDir, ownerRepo, branch string, maxRetry int) error {
 		if usingSSH {
 			return sshRemoteURL(ownerRepo), fmt.Sprintf("GIT_SSH_COMMAND=%q ", gitSSHCommand())
 		}
-		return CloneURL(ownerRepo), ""
+		return CloneURL(ownerRepo), gitHTTPSEnv()
 	}
 	failed := func(attempt int) {
 		gitRouteNote(usingSSH, false)

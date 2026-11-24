@@ -31,7 +31,7 @@ var gitRemoteFn = func(ownerRepo string, ssh bool) (url, env string) {
 	if ssh {
 		return sshRemoteURL(ownerRepo), fmt.Sprintf("GIT_SSH_COMMAND=%q ", gitSSHCommand())
 	}
-	return CloneURL(ownerRepo), ""
+	return CloneURL(ownerRepo), gitHTTPSEnv()
 }
 
 // gitSSHFn: whether the deploy key is there (a variable for tests).
@@ -61,7 +61,7 @@ func gitFetchRefs(repoDir, ownerRepo string, branches ...string) (missing []stri
 			specs = append(specs, shq(fmt.Sprintf("+refs/heads/%s:refs/remotes/origin/%s", b, b)))
 		}
 		url, env := gitRemoteFn(ownerRepo, useSSH)
-		transport := map[bool]string{true: "SSH", false: "HTTPS"}[useSSH]
+		transport := gitTransport(useSSH)
 		cmd := fmt.Sprintf(gitFetchRefsFmt, env, repoDir, url, strings.Join(specs, " "))
 		started := time.Now()
 		r := gitGuardFn(cmd, repoDir, gitStartWindow, gitPushMaxRun, gitPushStallTimeout, func(el time.Duration, line string) {
@@ -139,7 +139,7 @@ func gitLsRemoteHeads(repoDir, ownerRepo string, patterns ...string) (string, er
 		if local {
 			url, env = "origin", ""
 		}
-		transport := map[bool]string{true: "SSH", false: "HTTPS"}[useSSH]
+		transport := gitTransport(useSSH)
 		cmd := fmt.Sprintf("%sGIT_TRACE_PACKET=1 git -C %q ls-remote --heads %q %s", env, repoDir, url, strings.Join(quoted, " "))
 		r := gitGuardFn(cmd, repoDir, gitStartWindow, gitMaxRun, 0, nil)
 		if r.Started && !r.TimedOut && r.Code == 0 {

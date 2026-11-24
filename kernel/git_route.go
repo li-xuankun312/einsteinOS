@@ -11,6 +11,7 @@ package kernel
 import (
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -70,6 +71,7 @@ func gitRouteNote(ssh, ok bool) {
 	case !ssh && ok:
 		gitRoutes.httpsStreak = 0
 	case !ssh && !ok:
+		defer gitHTTPSFailed()
 		gitRoutes.httpsStreak++
 		if gitRoutes.httpsStreak >= gitRouteHTTPSFailStreak && now.Before(gitRoutes.httpsUntil) {
 			log.Printf("git_route: HTTPS failed %d times in a row too — calls start on SSH again", gitRoutes.httpsStreak)
@@ -117,4 +119,63 @@ func sshDenialNote() string {
 		return "GitHub refused the deploy key (not accepted yet in this run: if this persists, check the key is added to the repo with write access)"
 	}
 	return fmt.Sprintf("GitHub refused the deploy key it accepted at %s — a GitHub-side failure, not the key", at.Format("15:04:05"))
+}
+
+// gitHTTPSDirect: whether HTTPS git goes around the environment's proxy now; it turns over after
+// each failed HTTPS attempt while a proxy is set, and stays on the route that last worked.
+// 11/24 08:39:15 the rebuilt machine's HTTPS fetch of the dev repo hung through its proxy
+// (attempt 1/30, no output for 10 s), where at 06:5x the same clone had gone through only
+// directly after failing through the proxy — every attempt had taken the proxy.
+var gitHTTPS struct {
+	sync.Mutex
+	direct bool
+}
+
+// gitProxySet: whether the environment sends git's HTTP through a proxy.
+func gitProxySet() bool {
+	for _, k := range []string{"ALL_PROXY", "all_proxy", "HTTPS_PROXY", "https_proxy"} {
+		if os.Getenv(k) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// gitHTTPSEnv: the command prefix that takes HTTPS git around the proxy ("" through it).
+func gitHTTPSEnv() string {
+	gitHTTPS.Lock()
+	defer gitHTTPS.Unlock()
+	if gitHTTPS.direct && gitProxySet() {
+		return "env -u ALL_PROXY -u all_proxy -u HTTPS_PROXY -u https_proxy -u HTTP_PROXY -u http_proxy "
+	}
+	return ""
+}
+
+// gitTransport: the transport's name for the log ("SSH", "HTTPS", "HTTPS directly", "HTTPS
+// through the proxy").
+func gitTransport(ssh bool) string {
+	if ssh {
+		return "SSH"
+	}
+	if !gitProxySet() {
+		return "HTTPS"
+	}
+	gitHTTPS.Lock()
+	defer gitHTTPS.Unlock()
+	if gitHTTPS.direct {
+		return "HTTPS directly"
+	}
+	return "HTTPS through the proxy"
+}
+
+// gitHTTPSFailed turns HTTPS git to the other route.
+func gitHTTPSFailed() {
+	if !gitProxySet() {
+		return
+	}
+	gitHTTPS.Lock()
+	gitHTTPS.direct = !gitHTTPS.direct
+	d := gitHTTPS.direct
+	gitHTTPS.Unlock()
+	log.Printf("git_route: an HTTPS attempt failed — the next goes %s", map[bool]string{true: "directly", false: "through the proxy"}[d])
 }
