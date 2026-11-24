@@ -1,7 +1,10 @@
 package kernel
 
 import (
+	"encoding/json"
 	"log"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -60,6 +63,60 @@ func ConcurrentLimitReached() {
 	}
 	convRoomSince = now
 	convRoomRefused = now
+	saveConvRoomLocked()
+}
+
+// convRoomFile: where the room measured is kept across restarts — 11/24 09:35:11 a restart began
+// with no room known, started six parts beside the unit's conversation, and the server refused
+// two of them at once (09:41:15, 09:41:36), each ending with its first round
+var convRoomFile = func() string {
+	h, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(h, ".einsteinos", "conv_room.json")
+}
+
+// convRoomKeep: how long a room measured before a restart still holds after it.
+const convRoomKeep = 2 * time.Hour
+
+type convRoomSaved struct {
+	Room    int       `json:"room"`
+	Refused time.Time `json:"refused"`
+}
+
+func saveConvRoomLocked() {
+	p := convRoomFile()
+	if p == "" || convRoom <= 0 {
+		return
+	}
+	b, _ := json.Marshal(convRoomSaved{Room: convRoom, Refused: convRoomRefused})
+	os.MkdirAll(filepath.Dir(p), 0o700)
+	os.WriteFile(p, b, 0o600)
+}
+
+var convRoomLoaded bool
+
+// loadConvRoomLocked: the room measured before a restart, when it was measured within convRoomKeep.
+func loadConvRoomLocked() {
+	if convRoomLoaded {
+		return
+	}
+	convRoomLoaded = true
+	p := convRoomFile()
+	if p == "" || convRoom != 0 {
+		return
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return
+	}
+	var sv convRoomSaved
+	if json.Unmarshal(b, &sv) != nil || sv.Room <= 0 || time.Since(sv.Refused) > convRoomKeep {
+		return
+	}
+	convRoom, convRoomSince, convRoomRefused = sv.Room, sv.Refused, sv.Refused
+	log.Printf("conv_room: %d conversations at once, as the server refused more %v ago before this restart", sv.Room, time.Since(sv.Refused).Round(time.Minute))
 }
 
 // %[1]d running, %[2]d the room, %[3]v the wait now
@@ -85,6 +142,7 @@ func convRoomQuietNow() time.Duration {
 func ConversationRoom() int {
 	convRoomMu.Lock()
 	defer convRoomMu.Unlock()
+	loadConvRoomLocked()
 	widenLocked()
 	return convRoom
 }
@@ -141,6 +199,7 @@ func ResetConversationRoom() {
 	convRoomMu.Lock()
 	convRoom, convRoomSince = 0, time.Time{}
 	convRoomQuietCur, convRoomWidened, convRoomRefused = 0, time.Time{}, time.Time{}
+	convRoomLoaded = true
 	convRoomMu.Unlock()
 	convRoomCond.Broadcast()
 }

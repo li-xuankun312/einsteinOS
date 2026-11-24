@@ -43,3 +43,24 @@ func TestAPlaceGivenBackAndRefusedAgainDoublesTheWait(t *testing.T) {
 	convLive = 0
 	convRoomMu.Unlock()
 }
+
+// 11/24 09:35:11 a restart began with no room known and the server refused two of its six parts
+// at once: the room measured is kept across a restart for two hours
+func TestTheRoomMeasuredHoldsAcrossARestart(t *testing.T) {
+	old := convRoomFile
+	p := t.TempDir() + "/conv_room.json"
+	convRoomFile = func() string { return p }
+	defer func() { convRoomFile = old; ResetConversationRoom() }()
+	ResetConversationRoom()
+	convRoomMu.Lock()
+	convLive = 7
+	convRoomMu.Unlock()
+	ConcurrentLimitReached()
+	// a restart: nothing in memory
+	convRoomMu.Lock()
+	convRoom, convRoomSince, convRoomRefused, convRoomLoaded, convLive = 0, time.Time{}, time.Time{}, false, 0
+	convRoomMu.Unlock()
+	if r := ConversationRoom(); r != 6 {
+		t.Fatalf("after a restart the room is %d", r)
+	}
+}
