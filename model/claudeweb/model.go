@@ -415,7 +415,11 @@ var (
 func (m *Model) shadowExecute(convID, toolName, inputJSON string) string {
 	// a conversation sharing an integration unit's mirror with others runs its commands there
 	// one at a time, and what each changes is set down as its (kernel/mirror_writes.go)
+	// each command run here is noted where it outlives the machine, when that is set: 11/24 13:22:04
+	// the node rebooted with a conversation's command started at 13:21:32 and not logged further
+	kernel.CrashNote(fmt.Sprintf("conversation %s runs %s here: %.300s", shortConv(convID), toolName, inputJSON))
 	out := kernel.MirrorCommand(convID, func() string { return m.shadowExecuteRaw(convID, toolName, inputJSON) })
+	kernel.CrashNote(fmt.Sprintf("conversation %s: its %s here ended", shortConv(convID), toolName))
 	// what this machine prints is shown to a conversation whose prompt is masked the way its
 	// prompt is: 11/18 a "ls /tmp" here names the reference's clone (/tmp/ref_<owner>_<name>.git)
 	if kernel.RoleSeesMasked(convRole(convID)) {

@@ -462,6 +462,7 @@ func onTheRealMachine(unitID string, f func() VerifyResult) VerifyResult {
 }
 
 func runUnitVerifyAlone(ws, unitID, gpuUsable string, req UnitRequirements, changed []string, buildTimeout, testTimeout time.Duration) VerifyResult {
+	CrashNote(fmt.Sprintf("unit %s: verification of %s starts", unitID, ws))
 	if len(req.Tests) > 0 {
 		// the integration unit's test.sh is the reference's registered tests, written here
 		_, test := devVerifyScripts(unitID)
@@ -553,6 +554,7 @@ func runUnitVerifyAlone(ws, unitID, gpuUsable string, req UnitRequirements, chan
 			}
 		}
 	}
+	CrashNote(fmt.Sprintf("unit %s: build.sh ended (exit %d)", unitID, res.BuildExit))
 	return runUnitTestStage(ws, unitID, gpuUsable, req, changed, buildTimeout, testTimeout, env, build, test, res, start)
 }
 
@@ -582,6 +584,7 @@ func runUnitTestStage(ws, unitID, gpuUsable string, req UnitRequirements, change
 	noteCrashStage(unitID, test, probeLog)
 	tstart := time.Now()
 	code, out, ttrace, err := runWatched(testEnv+"bash "+test+" 2>&1", ws, testTimeout)
+	CrashNote(fmt.Sprintf("unit %s: %s ended (exit %d)", unitID, test, code))
 	log.Printf(verifyProcTimesFmt, unitID, test, time.Since(tstart).Round(time.Second), procTimesByExe(ttrace.Processes), e2eProcTimes(ttrace.Processes, e2eProcTimesMin))
 	ttrace.ProbeErr = probeErr
 	if probeLog != "" {
@@ -1150,15 +1153,26 @@ func crashDir() string {
 
 // noteCrashStage writes, and syncs, a line saying a unit's test.sh starts, in crashDir.
 func noteCrashStage(unitID, test, probeLog string) {
+	CrashNote(fmt.Sprintf("unit %s: %s starts; its kernel launches go to %s", unitID, test, probeLog))
+}
+
+var crashNoteOnce sync.Once
+
+// CrashNote appends a line to crashDir's einsteinos-stages.log and syncs it — what was under way
+// when the machine went down. 11/24 13:22:04 the node rebooted after a build's last line and no
+// test stage had been noted: the build's end, the verification's start and each command the
+// conversations run here are noted too.
+func CrashNote(line string) {
 	d := crashDir()
 	if d == "" {
 		return
 	}
+	crashNoteOnce.Do(func() { log.Printf("crash notes: %s", filepath.Join(d, "einsteinos-stages.log")) })
 	f, err := os.OpenFile(filepath.Join(d, "einsteinos-stages.log"), os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o644)
 	if err != nil {
 		return
 	}
 	defer f.Close()
-	fmt.Fprintf(f, "%s unit %s: %s starts; its kernel launches go to %s\n", time.Now().Format("2006/01/02 15:04:05"), unitID, test, probeLog)
+	fmt.Fprintf(f, "%s %s\n", time.Now().Format("2006/01/02 15:04:05.000"), line)
 	f.Sync()
 }
