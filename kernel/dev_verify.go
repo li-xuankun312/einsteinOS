@@ -499,6 +499,11 @@ func runUnitVerifyAlone(ws, unitID, gpuUsable string, req UnitRequirements, chan
 				res.Compile, res.Smoke = "fail", "skipped"
 				return finish()
 			}
+			if why := builtNothing(m, build); why != "" {
+				res.Compile, res.Smoke, res.BuildOut = "fail", "skipped", why+"\n"+res.BuildOut
+				log.Printf("dev_verify: unit %s: %s", unitID, why)
+				return finish()
+			}
 			res.Compile = "pass"
 			return runUnitTestStage(ws, unitID, gpuUsable, req, changed, buildTimeout, testTimeout, env, build, test, res, start)
 		}
@@ -536,7 +541,13 @@ func runUnitVerifyAlone(ws, unitID, gpuUsable string, req UnitRequirements, chan
 
 	// what the build read and wrote, kept before test.sh can change anything it wrote
 	if blog != "" {
-		if m := memoFromBuild(ws, key, readProbeLog(blog), res.BuildExit, res.BuildOut, res.Build, res.NoToolchain); len(m.Inputs) > 0 {
+		m := memoFromBuild(ws, key, readProbeLog(blog), res.BuildExit, res.BuildOut, res.Build, res.NoToolchain)
+		if why := builtNothing(m, build); why != "" {
+			res.Compile, res.Smoke, res.BuildOut = "fail", "skipped", why+"\n"+res.BuildOut
+			log.Printf("dev_verify: unit %s: %s", unitID, why)
+			return finish()
+		}
+		if len(m.Inputs) > 0 {
 			if serr := saveBuildMemo(unitID, ws, m); serr == nil {
 				log.Printf(buildMemoSavedFmt, unitID, build, len(m.Inputs), len(m.Dirs), len(m.Outputs))
 			}
@@ -1038,6 +1049,26 @@ const (
 	// %[1]s unit, %[2]s build.sh, %[3]d files read, %[4]d directories listed, %[5]d files written
 	buildMemoReusedFmt = "dev_verify: unit %[1]s: %[2]s not run — the %[3]d workspace file(s) its last run read and the %[4]d director(ies) it listed are what they were; the %[5]d file(s) it wrote are put back"
 	// %[1]s unit, %[2]s build.sh, %[3]s what changed
-	buildMemoMissFmt  = "dev_verify: unit %[1]s: %[2]s runs — since its last run %[3]s"
-	buildMemoSavedFmt = "dev_verify: unit %[1]s: %[2]s read %[3]d workspace file(s), listed %[4]d director(ies) and wrote %[5]d file(s) — kept, for a verification whose inputs are the same"
+	buildMemoMissFmt = "dev_verify: unit %[1]s: %[2]s runs — since its last run %[3]s"
+	// %[1]s build.sh
+	buildBuiltNothingFmt = "compile: %[1]s read no file of the workspace but itself and wrote none — it built nothing, and what test.sh would run is what an earlier verification left in the build directory"
+	buildMemoSavedFmt    = "dev_verify: unit %[1]s: %[2]s read %[3]d workspace file(s), listed %[4]d director(ies) and wrote %[5]d file(s) — kept, for a verification whose inputs are the same"
 )
+
+// builtNothing: why a build that read no workspace file but its own script and wrote no file is
+// not a compile ("" when it built something). 11/23 20:43:10 and 11/24 00:56:46 the integration's
+// build.sh was 0 bytes — a command had written an empty file over it — and compile=pass went
+// with a test.sh that ran the 29 executables the 20:25 verification had left in the build
+// directory.
+func builtNothing(m buildMemo, build string) string {
+	// a probe that recorded nothing (no read of the script itself) measured nothing
+	if len(m.Outputs) > 0 || len(m.Inputs) == 0 {
+		return ""
+	}
+	for f := range m.Inputs {
+		if filepath.ToSlash(f) != filepath.ToSlash(build) {
+			return ""
+		}
+	}
+	return fmt.Sprintf(buildBuiltNothingFmt, build)
+}
