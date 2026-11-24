@@ -202,6 +202,9 @@ func portExtra(ws, unitID string, syms []RefSymbol) []string {
 	var out []string
 	lines, nums := readPortLines(ws, unitID)
 	for i, e := range lines {
+		if plannerMissingRow(unitID, e.refFile) {
+			continue // the integration unit's own kernel, checked by kernel_unported
+		}
 		k := e.refFile + "\t" + e.refName
 		switch {
 		case !own[k]:
@@ -293,6 +296,9 @@ func portRefFiles(ws, unitID string, syms []RefSymbol) []string {
 	var out []string
 	lines, _ := readPortLines(ws, unitID)
 	for _, e := range lines {
+		if plannerMissingRow(unitID, e.refFile) {
+			continue // the integration unit's own kernel, checked by kernel_unported
+		}
 		if !refFiles[e.refFile] && !seen[e.refFile] {
 			seen[e.refFile] = true
 			out = append(out, fmt.Sprintf(portRefFileFmt, e.refFile, e.refName, e.file, e.name))
@@ -392,4 +398,21 @@ func integrationPortFiles(ws, unitID string, pm map[string]portEntry) (map[strin
 	}
 	sort.Strings(refused)
 	return out, refused
+}
+
+// plannerMissingRow: a port map row of the integration unit whose first column is
+// missing:<group> for a group the planner's missing lines give it — a kernel with no reference
+// counterpart, which port_extra and port_ref_file_unknown do not judge. 11/23 20:32:26 and
+// 20:43:15 both failed on the rows that kernel_unported asked for.
+func plannerMissingRow(unitID, refFile string) bool {
+	if !strings.HasPrefix(refFile, integrationMissingPrefix) {
+		return false
+	}
+	g := strings.TrimPrefix(refFile, integrationMissingPrefix)
+	for _, o := range integrationAnswerOf(unitID).Ops {
+		if o.Unit == "" && o.Group == g {
+			return true
+		}
+	}
+	return false
 }
