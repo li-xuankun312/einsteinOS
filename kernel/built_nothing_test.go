@@ -21,6 +21,15 @@ func TestABuildThatBuiltNothingIsNotACompile(t *testing.T) {
 	}
 }
 
+// the executables of the workspace a test ran are what an empty build's verification is judged on
+func TestTheWorkspacesExecutablesATestRanAreMeasured(t *testing.T) {
+	ws := "/tmp/einsteinos_verify_uint"
+	got := workspaceExes(ws, []ProcSeen{{Exe: "/usr/bin/bash"}, {Exe: ws + "/build/pool_test"}, {Exe: ws + "/build/gr_parity"}, {Exe: ws + "/build/pool_test"}})
+	if strings.Join(got, " ") != "build/gr_parity build/pool_test" {
+		t.Fatalf("%v", got)
+	}
+}
+
 // 11/23 20:32:26 and 20:43:15 port_extra and port_ref_file_unknown failed on the missing:<group>
 // rows kernel_unported asks of the integration unit: a row for a group of the planner's missing
 // lines is not theirs to judge; one for another group, or of another unit, still is

@@ -290,9 +290,11 @@ func gateLogText(r VerifyResult) string {
 
 // VerifyResult is the kernel's own measurement of a unit.
 type VerifyResult struct {
-	Compile   string // pass | fail | missing
-	Smoke     string // pass | fail | skipped | missing
-	BuildExit int
+	// BuiltNothing: why build.sh built nothing (builtNothing), for the test stage to judge
+	BuiltNothing string `json:"-"`
+	Compile      string // pass | fail | missing
+	Smoke        string // pass | fail | skipped | missing
+	BuildExit    int
 	// BuildReused: build.sh was not run — the unit's last build read what this one would
 	// (verify_build_memo.go) and its record and outputs were put back
 	BuildReused bool `json:"build_reused,omitempty"`
@@ -499,11 +501,7 @@ func runUnitVerifyAlone(ws, unitID, gpuUsable string, req UnitRequirements, chan
 				res.Compile, res.Smoke = "fail", "skipped"
 				return finish()
 			}
-			if why := builtNothing(m, build); why != "" {
-				res.Compile, res.Smoke, res.BuildOut = "fail", "skipped", why+"\n"+res.BuildOut
-				log.Printf("dev_verify: unit %s: %s", unitID, why)
-				return finish()
-			}
+			res.BuiltNothing = builtNothing(m, build)
 			res.Compile = "pass"
 			return runUnitTestStage(ws, unitID, gpuUsable, req, changed, buildTimeout, testTimeout, env, build, test, res, start)
 		}
@@ -542,11 +540,7 @@ func runUnitVerifyAlone(ws, unitID, gpuUsable string, req UnitRequirements, chan
 	// what the build read and wrote, kept before test.sh can change anything it wrote
 	if blog != "" {
 		m := memoFromBuild(ws, key, readProbeLog(blog), res.BuildExit, res.BuildOut, res.Build, res.NoToolchain)
-		if why := builtNothing(m, build); why != "" {
-			res.Compile, res.Smoke, res.BuildOut = "fail", "skipped", why+"\n"+res.BuildOut
-			log.Printf("dev_verify: unit %s: %s", unitID, why)
-			return finish()
-		}
+		res.BuiltNothing = builtNothing(m, build)
 		if len(m.Inputs) > 0 {
 			if serr := saveBuildMemo(unitID, ws, m); serr == nil {
 				log.Printf(buildMemoSavedFmt, unitID, build, len(m.Inputs), len(m.Dirs), len(m.Outputs))
@@ -588,6 +582,16 @@ func runUnitTestStage(ws, unitID, gpuUsable string, req UnitRequirements, change
 	}
 	res.Test = ttrace
 	res.TestExit, res.TestOut = code, tailText(out, 3000)
+	// a build that built nothing, and a test that ran executables of the workspace it did not
+	// write: what ran is what an earlier verification left (builtNothing)
+	if res.BuiltNothing != "" {
+		if stale := workspaceExes(ws, ttrace.Processes); len(stale) > 0 {
+			why := res.BuiltNothing + ": " + shortList(stale, 12)
+			res.Compile, res.Smoke, res.BuildOut = "fail", "skipped", why+"\n"+res.BuildOut
+			log.Printf("dev_verify: unit %s: %s", unitID, why)
+			return finish()
+		}
+	}
 	// what build.sh and test.sh changed of this machine's Python packages: the unit's when no
 	// command but the verification's ran here meanwhile (fork_runs.go); when conversations'
 	// commands ran beside it, a change cannot be laid on the unit and is logged
@@ -1071,4 +1075,22 @@ func builtNothing(m buildMemo, build string) string {
 		}
 	}
 	return fmt.Sprintf(buildBuiltNothingFmt, build)
+}
+
+// workspaceExes: the executables of the workspace the processes ran (relative paths).
+func workspaceExes(ws string, procs []ProcSeen) []string {
+	root, _ := filepath.Abs(ws)
+	seen := map[string]bool{}
+	var out []string
+	for _, p := range procs {
+		if root != "" && strings.HasPrefix(p.Exe, root+"/") {
+			rel := strings.TrimPrefix(p.Exe, root+"/")
+			if !seen[rel] {
+				seen[rel] = true
+				out = append(out, rel)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
 }
