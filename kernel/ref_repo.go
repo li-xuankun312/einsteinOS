@@ -263,6 +263,17 @@ func prefetchCommitBlobs(cloneDir, sha string) {
 		if end > len(oids) {
 			end = len(oids)
 		}
+		// the commit's archive first, one request for every blob: 11/24 10:30:09-10:34:40 the archive
+		// came in 27s, and the fetch of the same blobs by id failed on each route for 2 minutes
+		// before the archive was asked for again
+		if i == 0 {
+			if aerr := prefetchViaArchive(cloneDir, sha, oids); aerr == nil {
+				log.Printf("ref_prefetch: %s: %d blob(s) taken from the commit's archive in %s", short_sha(sha), len(oids), time.Since(start).Round(time.Millisecond))
+				return
+			} else {
+				log.Printf("ref_prefetch: %s: the commit's archive did not give them (%v) — fetched by id", short_sha(sha), aerr)
+			}
+		}
 		// --filter=blob:none makes it a promisor fetch: the pack is kept as a promisor pack and
 		// the connectivity check accepts what it does not hold (11/06 git 2.25 without it:
 		// "bad revision … did not send all necessary objects")
