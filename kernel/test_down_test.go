@@ -106,3 +106,70 @@ func TestAnUnresolvedLastLaunchSaysWhy(t *testing.T) {
 		t.Fatalf("fact: %s", fact)
 	}
 }
+
+// while the files defining the kernel the machine went down with are as they were, the unit's
+// test.sh is not run: the verification says so with what was measured; once one of them changes
+// it runs again
+func TestATestTheMachineWentDownInIsNotRunAgainUnchanged(t *testing.T) {
+	ws, _, _, prog := downFixture(t)
+	os.Remove(prog)
+	bootAt(t, time.Now().Add(time.Minute))
+	fakeCudaProgram(t, filepath.Join(ws, "build"))
+	test := ".einsteinOS/verify/uint/test.sh"
+	os.MkdirAll(filepath.Join(ws, filepath.Dir(test)), 0o755)
+	os.WriteFile(filepath.Join(ws, test), []byte("true\n"), 0o755)
+	ran := withRunner(t, func(string) (int, string) { return 0, "" })
+	verify := func() VerifyResult {
+		return runUnitTestStage(ws, "uint", "", UnitRequirements{}, nil, time.Minute, time.Minute, "", ".einsteinOS/verify/uint/build.sh", test,
+			VerifyResult{Compile: "pass", Smoke: "missing", BuildExit: 0, TestExit: -1}, time.Now())
+	}
+	for i := 0; i < 2; i++ {
+		res := verify()
+		if res.Smoke != "skipped" || res.Gate != "machine_down_during_test" || !strings.Contains(res.GateText, "other_kernel, defined in src/other.cu") ||
+			!strings.Contains(res.GateText, "src/other.cu, defining other_kernel, are as they were") {
+			t.Fatalf("verification %d: %+v", i+1, res)
+		}
+		if len(*ran) != 0 {
+			t.Fatalf("verification %d ran test.sh: %v", i+1, *ran)
+		}
+		if res.Passed() {
+			t.Fatal("a held test passed")
+		}
+	}
+	os.WriteFile(filepath.Join(ws, "src", "other.cu"), []byte("__global__ void other_kernel(int* p) { if (p) *p = 0; }\n"), 0o644)
+	if res := verify(); res.Gate == "machine_down_during_test" {
+		t.Fatalf("its source changed and it was held: %+v", res)
+	}
+	if len(*ran) != 1 || !strings.Contains((*ran)[0], test) {
+		t.Fatalf("its source changed and test.sh did not run: %v", *ran)
+	}
+}
+
+func TestWhatTheMachineWentDownWithIsComparedByWhatIsKnown(t *testing.T) {
+	dir := t.TempDir()
+	exe := filepath.Join(dir, "x")
+	os.WriteFile(exe, []byte("one"), 0o755)
+	h, _ := fileSHA256(exe)
+	d := &testDown{Exe: exe}
+	if same, why := testDownSame(dir, d, &testDownRecord{ExeSHA: h}, false); !same || !strings.Contains(why, "builds the same") {
+		t.Fatalf("%v %s", same, why)
+	}
+	os.WriteFile(exe, []byte("two"), 0o755)
+	if same, _ := testDownSame(dir, d, &testDownRecord{ExeSHA: h}, false); same {
+		t.Fatal("a different executable was held")
+	}
+	if same, _ := testDownSame(dir, d, &testDownRecord{}, true); !same {
+		t.Fatal("nothing known: the first verification is held")
+	}
+	if same, _ := testDownSame(dir, d, &testDownRecord{}, false); same {
+		t.Fatal("nothing known: later verifications run")
+	}
+}
+
+// the gate's text, not an empty smoke error, is what the unit's attempt fails with
+func TestAHeldTestFailsTheAttemptWithItsGate(t *testing.T) {
+	v := VerifyResult{Compile: "pass", Smoke: "skipped", Gate: "machine_down_during_test", GateText: "machine_down_during_test: x"}
+	if st := v.Status(); st["gate_error"] != v.GateText {
+		t.Fatalf("%v", st)
+	}
+}

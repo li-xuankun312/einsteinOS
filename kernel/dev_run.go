@@ -789,6 +789,10 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 				truncStr(strings.Join(strings.Fields(tailText(stdout, 600)), " "), 600))
 		case out.Result.Compile == "pass" && out.Result.Smoke != "pass":
 			kind, text = "smoke_fail", st["smoke_error"]
+			if out.Result.Gate != "" {
+				// test.sh was not run, for a measured reason (test_down.go)
+				kind, text = out.Result.Gate, out.Result.GateText
+			}
 		case out.Result.Gate != "":
 			// the scripts passed; a measured requirement did not (unit_gates.go)
 			kind, text = out.Result.Gate, out.Result.GateText

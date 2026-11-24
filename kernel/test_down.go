@@ -299,3 +299,33 @@ func noteTestDown(ws, unitID string) (*testDown, *testDownRecord, bool) {
 	log.Printf("dev_verify: unit %s: the machine went down in its test.sh — %s", unitID, testDownFact(d, r))
 	return d, r, true
 }
+
+// gateMachineDownFmt: the verification's gate when test.sh is not run because the machine went
+// down in the last one and what it went down with is as it was.
+const gateMachineDownFmt = "machine_down_during_test: %[1]s — test.sh is not run again while %[2]s"
+
+// testDownSame: whether what the machine went down with is as it was — the files defining the
+// kernel its probe noted last, else that executable as the build makes it — and what was compared.
+// With neither known, only the verification that first read the crash notes is held.
+func testDownSame(ws string, d *testDown, r *testDownRecord, first bool) (bool, string) {
+	switch {
+	case len(r.Sources) > 0:
+		var changed []string
+		for _, p := range sourcePaths(r.Sources) {
+			if h, ok := fileSHA256(filepath.Join(ws, p)); !ok || h != r.Sources[p] {
+				changed = append(changed, p)
+			}
+		}
+		if len(changed) > 0 {
+			return false, fmt.Sprintf("%s changed since the machine went down", strings.Join(changed, ", "))
+		}
+		return true, fmt.Sprintf("%s, defining %s, are as they were", strings.Join(sourcePaths(r.Sources), ", "), r.Kernel)
+	case r.ExeSHA != "":
+		if h, ok := fileSHA256(d.Exe); !ok || h != r.ExeSHA {
+			return false, d.Exe + " differs from the one built after the machine went down"
+		}
+		return true, fmt.Sprintf("%s builds the same (sha256 %s)", d.Exe, r.ExeSHA[:12])
+	default:
+		return first, "the program it went down with is not known; only this verification is held"
+	}
+}

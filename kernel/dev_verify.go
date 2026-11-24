@@ -564,8 +564,19 @@ func runUnitTestStage(ws, unitID, gpuUsable string, req UnitRequirements, change
 	if _, err := os.Stat(filepath.Join(ws, filepath.FromSlash(test))); err != nil {
 		return finish() // Smoke stays "missing"
 	}
-	// the crash notes of this unit's last test.sh, when the machine went down in it (test_down.go)
-	noteTestDown(ws, unitID)
+	// the crash notes of this unit's last test.sh, when the machine went down in it: while what it
+	// went down with is as it was, it is not run again (test_down.go)
+	if d, r, first := noteTestDown(ws, unitID); d != nil {
+		if same, why := testDownSame(ws, d, r, first); same {
+			text := fmt.Sprintf(gateMachineDownFmt, testDownFact(d, r), why)
+			res.Smoke = "skipped"
+			res.Gates, res.Gate, res.GateText = []string{"machine_down_during_test"}, "machine_down_during_test", text
+			log.Printf("dev_verify: unit %s: %s", unitID, text)
+			return finish()
+		} else {
+			log.Printf("dev_verify: unit %s: its test.sh runs again, though the machine went down in the last one: %s", unitID, why)
+		}
+	}
 	// a GPU unit's test runs with the launch probe preloaded: which kernels ran is measured
 	testEnv, probeLog, probeErr := env, "", ""
 	if req.GPU() || req.RequireGPU {
