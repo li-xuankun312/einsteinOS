@@ -74,6 +74,8 @@ type mirrorUnit struct {
 	// content: each file's bytes as the last command left them (at most mirrorKeepMax each),
 	// which a file a command must not have changed is written back from
 	content map[string][]byte
+	// base: the files the mirror held when its conversations began — shared, no part's own
+	base map[string]bool
 }
 
 // mirrorKeepMax: a file larger than this is not kept and cannot be written back.
@@ -120,10 +122,11 @@ func noteMirrorConv(unitID, dir, conv, part string) {
 	defer mirrorUnitsMu.Unlock()
 	u := mirrorUnits[unitID]
 	if u == nil || u.dir != dir {
-		u = &mirrorUnit{unit: unitID, dir: dir, part: map[string]string{}, owner: map[string]string{}, named: map[string]string{}, heard: map[string]int{}, content: map[string][]byte{}}
+		u = &mirrorUnit{unit: unitID, dir: dir, part: map[string]string{}, owner: map[string]string{}, named: map[string]string{}, heard: map[string]int{}, content: map[string][]byte{}, base: map[string]bool{}}
 		var all []string
 		for f := range statMirror(dir) {
 			all = append(all, f)
+			u.base[f] = true
 		}
 		u.keep(all)
 		mirrorUnits[unitID] = u
@@ -157,7 +160,13 @@ func MirrorCommand(conv string, run func() string) string {
 	out := run()
 	after := statMirror(u.dir)
 	// what the command must not have done is undone first, and told
-	if back := u.undo(conv, before, after); len(back) > 0 {
+	back := u.undo(conv, before, after)
+	undone := map[string]bool{}
+	for _, b := range back {
+		f, _, _ := strings.Cut(b, " (")
+		undone[f] = true
+	}
+	if len(back) > 0 {
 		log.Printf(mirrorUndoneLogFmt, shortID(conv), partName(u.part[conv]), len(back), strings.Join(back, "; "))
 		out += fmt.Sprintf(mirrorUndoneFmt, len(back), "  "+strings.Join(back, "\n  ")+"\n")
 		after = statMirror(u.dir)
@@ -166,11 +175,14 @@ func MirrorCommand(conv string, run func() string) string {
 	var said []string
 	var kept []string
 	for _, w := range mirrorDiff(before, after) {
+		if undone[w.File] {
+			continue // written back: not this command's
+		}
 		kept = append(kept, w.File)
 		u.seq++
 		w.Conv, w.Seq = conv, u.seq
 		u.writes = append(u.writes, w)
-		if _, ok := u.owner[w.File]; !ok && !w.Removed {
+		if _, ok := u.owner[w.File]; !ok && !w.Removed && !u.base[w.File] {
 			u.owner[w.File] = conv
 		}
 		if w.Removed {
@@ -234,7 +246,9 @@ func (u *mirrorUnit) undo(conv string, before, after map[string]mirrorStat) []st
 				continue
 			}
 			whose := ""
-			if o, ok := u.owner[w.File]; ok && o != conv {
+			if u.base[w.File] {
+				whose = mirrorSharedFmt
+			} else if o, ok := u.owner[w.File]; ok && o != conv {
 				whose = fmt.Sprintf(mirrorOwnedByFmt, partName(u.part[o]), shortID(o))
 			} else if p, ok := u.named[w.File]; ok && p != partName(mine) {
 				whose = fmt.Sprintf(mirrorNamedForFmt, p)
@@ -255,6 +269,12 @@ func (u *mirrorUnit) undo(conv string, before, after map[string]mirrorStat) []st
 	sort.Strings(out)
 	return out
 }
+
+// mirrorSharedFmt: why a part does not take lines out of a file the mirror held when the unit's
+// conversations began. 11/23 the port map (168 rows the units had written) was first touched in
+// the attempt by the layer_norm part, which made it its own and cut it to one row, and at
+// 20:27:45 the gdn part overwrote 14 files the tree had held all along.
+const mirrorSharedFmt = "a file the mirror held when the unit's conversations began, shared by all its parts: a part adds lines to it and takes none out"
 
 const (
 	// %[1]s the part, %[2]s its conversation

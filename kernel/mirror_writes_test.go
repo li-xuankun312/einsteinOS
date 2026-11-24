@@ -43,7 +43,9 @@ func TestEachMirrorWriteIsSetDownAsTheConversations(t *testing.T) {
 	for _, w := range u.writes {
 		got = append(got, w.File+"|"+shortID(w.Conv)+"|"+map[bool]string{true: "removed", false: "written"}[w.Removed])
 	}
-	want := "src/kernels/gpu/gdn_new.cu|0ea8884d|written src/kernels/gpu/gdn_qwen.cu|ffdec91c|removed src/kernels/gpu/qsa_layer.cu|ffdec91c|written"
+	// the removal of gdn_qwen.cu, a file the mirror held, was the qsa part's to make no more:
+	// it was undone and is not a write of its
+	want := "src/kernels/gpu/gdn_new.cu|0ea8884d|written src/kernels/gpu/qsa_layer.cu|ffdec91c|written"
 	if strings.Join(got, " ") != want {
 		t.Fatalf("got %v", got)
 	}
@@ -111,7 +113,7 @@ func TestACommandTouchingAnothersFileIsToldSo(t *testing.T) {
 		os.WriteFile(filepath.Join(dir, "include/baloon/rt_native.hpp"), []byte("yy"), 0o644)
 		return "ok"
 	})
-	for _, w := range []string{"wrote back 2 file(s)", "src/kernels/gpu/gdn_layer.cu (the file of gdn, conversation 0ea8884d, which wrote it first)", "include/baloon/rt_native.hpp (the file the planner gave gdn)"} {
+	for _, w := range []string{"wrote back 2 file(s)", "src/kernels/gpu/gdn_layer.cu (the file of gdn, conversation 0ea8884d, which wrote it first)", "include/baloon/rt_native.hpp (a file the mirror held when the unit's conversations began"} {
 		if !strings.Contains(out, w) {
 			t.Fatalf("missing %q in %q", w, out)
 		}
@@ -128,9 +130,14 @@ func TestEachCommandIsToldWhatTheOthersChangedSince(t *testing.T) {
 	resetMirrorUnits()
 	defer resetMirrorUnits()
 	dir := t.TempDir()
-	putTree(t, dir, map[string]string{"src/kernels/gpu/gdn_qwen.cu": "a"})
+	putTree(t, dir, map[string]string{"src/kernels/gpu/.keep": ""})
 	noteMirrorConv("uint", dir, "92e537ed", "")
 	noteMirrorConv("uint", dir, "0ea8884d", "gdn: runs one GDN sub-layer")
+	MirrorCommand("0ea8884d", func() string {
+		os.WriteFile(filepath.Join(dir, "src/kernels/gpu/gdn_qwen.cu"), []byte("a"), 0o644)
+		return "ok"
+	})
+	MirrorCommand("92e537ed", func() string { return "" }) // told of the write
 	MirrorCommand("0ea8884d", func() string {
 		os.Remove(filepath.Join(dir, "src/kernels/gpu/gdn_qwen.cu"))
 		return "ok"
@@ -187,6 +194,7 @@ func TestAFileACommandLeftEmptyIsWrittenBack(t *testing.T) {
 	build := ".einsteinOS/verify/uint/build.sh"
 	putTree(t, dir, map[string]string{build: "#!/bin/bash\nnvcc a.cu\n", "src/empty.cu": ""})
 	noteMirrorConv("uint", dir, "25f1be30", "gdn: x")
+	noteMirrorConv("uint", dir, "8c680f2c", "")
 	out := MirrorCommand("25f1be30", func() string {
 		os.WriteFile(filepath.Join(dir, build), nil, 0o644)
 		os.WriteFile(filepath.Join(dir, "src/empty.cu"), nil, 0o644)
@@ -199,8 +207,8 @@ func TestAFileACommandLeftEmptyIsWrittenBack(t *testing.T) {
 		t.Fatalf("%q", out)
 	}
 	// a file it writes with bytes stays as written, and the next empty-making is undone from it
-	MirrorCommand("25f1be30", func() string { os.WriteFile(filepath.Join(dir, build), []byte("make\n"), 0o644); return "" })
-	MirrorCommand("25f1be30", func() string { os.WriteFile(filepath.Join(dir, build), nil, 0o644); return "" })
+	MirrorCommand("8c680f2c", func() string { os.WriteFile(filepath.Join(dir, build), []byte("make\n"), 0o644); return "" })
+	MirrorCommand("8c680f2c", func() string { os.WriteFile(filepath.Join(dir, build), nil, 0o644); return "" })
 	if b, _ := os.ReadFile(filepath.Join(dir, build)); string(b) != "make\n" {
 		t.Fatalf("%q", b)
 	}
@@ -260,5 +268,32 @@ func TestTheFilesACompileErrorNamesGoBackWithWhoseTheyAre(t *testing.T) {
 	}
 	if compileErrorOwners("uint", "ld: undefined reference to foo") != "" {
 		t.Fatal("no file named, something said")
+	}
+}
+
+// 11/23 the port map's 168 rows were cut to one by the layer_norm part, first to touch it in the
+// attempt, and at 20:27:45 the gdn part overwrote 14 files the tree had held all along: a file
+// the mirror held when the conversations began is no part's own — a part adds lines to it, and
+// a part's command taking lines out is undone; the unit's conversation may
+func TestAFileTheMirrorHeldIsSharedByTheParts(t *testing.T) {
+	resetMirrorUnits()
+	defer resetMirrorUnits()
+	dir := t.TempDir()
+	pm := ".einsteinOS/port/uint.tsv"
+	putTree(t, dir, map[string]string{pm: "a\tb\tc\td\ne\tf\tg\th\n"})
+	noteMirrorConv("uint", dir, "8c680f2c", "")
+	noteMirrorConv("uint", dir, "c845b59f", "layer_norm: x")
+	noteMirrorConv("uint", dir, "41b9095a", "loader: y")
+	MirrorCommand("c845b59f", func() string {
+		os.WriteFile(filepath.Join(dir, pm), []byte("a\tb\tc\td\ne\tf\tg\th\nmissing:n\tk\tf\tk\n"), 0o644)
+		return ""
+	})
+	out := MirrorCommand("41b9095a", func() string { os.WriteFile(filepath.Join(dir, pm), []byte("only\n"), 0o644); return "" })
+	if b, _ := os.ReadFile(filepath.Join(dir, pm)); !strings.HasSuffix(string(b), "missing:n\tk\tf\tk\n") || !strings.Contains(out, "shared by all its parts") {
+		t.Fatalf("%q %q", b, out)
+	}
+	MirrorCommand("8c680f2c", func() string { os.WriteFile(filepath.Join(dir, pm), []byte("joined\n"), 0o644); return "" })
+	if b, _ := os.ReadFile(filepath.Join(dir, pm)); string(b) != "joined\n" {
+		t.Fatalf("the unit's conversation: %q", b)
 	}
 }
