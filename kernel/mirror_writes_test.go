@@ -176,3 +176,32 @@ func TestWithoutPartfileLinesThePartsAreGivenTheFilesMeasured(t *testing.T) {
 		t.Fatalf("the planner's files give way: %s", planned)
 	}
 }
+
+// 11/23 20:27:45 a command of the gdn part read 14 files out of a remote branch the mirror's
+// clone did not have and left each of them 0 bytes here, build.sh among them: a file a command
+// leaves empty that had bytes is written back and the command is told
+func TestAFileACommandLeftEmptyIsWrittenBack(t *testing.T) {
+	resetMirrorUnits()
+	defer resetMirrorUnits()
+	dir := t.TempDir()
+	build := ".einsteinOS/verify/uint/build.sh"
+	putTree(t, dir, map[string]string{build: "#!/bin/bash\nnvcc a.cu\n", "src/empty.cu": ""})
+	noteMirrorConv("uint", dir, "25f1be30", "gdn: x")
+	out := MirrorCommand("25f1be30", func() string {
+		os.WriteFile(filepath.Join(dir, build), nil, 0o644)
+		os.WriteFile(filepath.Join(dir, "src/empty.cu"), nil, 0o644)
+		return "ok"
+	})
+	if b, _ := os.ReadFile(filepath.Join(dir, build)); string(b) != "#!/bin/bash\nnvcc a.cu\n" {
+		t.Fatalf("not written back: %q", b)
+	}
+	if !strings.Contains(out, "wrote back 1 file(s)") || !strings.Contains(out, build+" (left empty here, 22 bytes before)") {
+		t.Fatalf("%q", out)
+	}
+	// a file it writes with bytes stays as written, and the next empty-making is undone from it
+	MirrorCommand("25f1be30", func() string { os.WriteFile(filepath.Join(dir, build), []byte("make\n"), 0o644); return "" })
+	MirrorCommand("25f1be30", func() string { os.WriteFile(filepath.Join(dir, build), nil, 0o644); return "" })
+	if b, _ := os.ReadFile(filepath.Join(dir, build)); string(b) != "make\n" {
+		t.Fatalf("%q", b)
+	}
+}

@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -68,6 +69,38 @@ type mirrorUnit struct {
 	writes []mirrorWrite
 	seq    int
 	heard  map[string]int // conv -> the last write it was told of
+	// content: each file's bytes as the last command left them (at most mirrorKeepMax each),
+	// which a file a command must not have changed is written back from
+	content map[string][]byte
+}
+
+// mirrorKeepMax: a file larger than this is not kept and cannot be written back.
+const mirrorKeepMax = 4 << 20
+
+// keep reads the files' current bytes into the unit's record (removed ones dropped).
+func (u *mirrorUnit) keep(files []string) {
+	for _, f := range files {
+		p := filepath.Join(u.dir, filepath.FromSlash(f))
+		info, err := os.Stat(p)
+		if err != nil || !info.Mode().IsRegular() || info.Size() > mirrorKeepMax {
+			delete(u.content, f)
+			continue
+		}
+		if b, err := os.ReadFile(p); err == nil {
+			u.content[f] = b
+		}
+	}
+}
+
+// writeBack puts a file back as it was kept; false when it was not kept.
+func (u *mirrorUnit) writeBack(f string) bool {
+	b, ok := u.content[f]
+	if !ok {
+		return false
+	}
+	p := filepath.Join(u.dir, filepath.FromSlash(f))
+	os.MkdirAll(filepath.Dir(p), 0o755)
+	return os.WriteFile(p, b, 0o644) == nil
 }
 
 var (
@@ -85,7 +118,12 @@ func noteMirrorConv(unitID, dir, conv, part string) {
 	defer mirrorUnitsMu.Unlock()
 	u := mirrorUnits[unitID]
 	if u == nil || u.dir != dir {
-		u = &mirrorUnit{dir: dir, part: map[string]string{}, owner: map[string]string{}, named: map[string]string{}, heard: map[string]int{}}
+		u = &mirrorUnit{dir: dir, part: map[string]string{}, owner: map[string]string{}, named: map[string]string{}, heard: map[string]int{}, content: map[string][]byte{}}
+		var all []string
+		for f := range statMirror(dir) {
+			all = append(all, f)
+		}
+		u.keep(all)
 		mirrorUnits[unitID] = u
 	}
 	u.part[conv] = part
@@ -116,9 +154,17 @@ func MirrorCommand(conv string, run func() string) string {
 	before := statMirror(u.dir)
 	out := run()
 	after := statMirror(u.dir)
+	// what the command must not have done is undone first, and told
+	if back := u.undo(conv, before, after); len(back) > 0 {
+		log.Printf(mirrorUndoneLogFmt, shortID(conv), partName(u.part[conv]), len(back), strings.Join(back, "; "))
+		out += fmt.Sprintf(mirrorUndoneFmt, len(back), "  "+strings.Join(back, "\n  ")+"\n")
+		after = statMirror(u.dir)
+	}
 	others := u.othersTouched(conv, before, after)
 	var said []string
+	var kept []string
 	for _, w := range mirrorDiff(before, after) {
+		kept = append(kept, w.File)
 		u.seq++
 		w.Conv, w.Seq = conv, u.seq
 		u.writes = append(u.writes, w)
@@ -131,6 +177,7 @@ func MirrorCommand(conv string, run func() string) string {
 			said = append(said, w.File)
 		}
 	}
+	u.keep(kept)
 	if len(said) > 0 {
 		log.Printf(mirrorWroteFmt, shortID(conv), partName(u.part[conv]), len(said), strings.Join(said, " "))
 	}
@@ -148,6 +195,35 @@ const (
 	// %[1]d files, %[2]s them with whose they were
 	mirrorOthersFmt = "\n[THE UNIT'S MIRROR — measured on this machine]\nthis command changed or removed %[1]d file(s) that another conversation of the unit wrote or the planner gave another part:\n%[2]s"
 )
+
+const (
+	// %[1]s the conversation, %[2]s its part, %[3]d files, %[4]s them and why
+	mirrorUndoneLogFmt = "mirror: a command of %[1]s (%[2]s) was undone for %[3]d file(s), written back as they were: %[4]s"
+	// %[1]d files, %[2]s them and why
+	mirrorUndoneFmt = "\n[THE UNIT'S MIRROR — measured on this machine]\nthe kernel wrote back %[1]d file(s) this command changed, as they were before it:\n%[2]s"
+	// %[1]d the bytes it had
+	mirrorEmptiedFmt = "left empty here, %[1]d bytes before"
+)
+
+// undo writes back the files conv's command must not have changed: a file it left empty that
+// had bytes — 11/23 20:27:45 a command of the gdn part read 14 files out of a remote branch
+// this machine's clone does not have (git show $CONT:path > path) and left each of them 0 bytes
+// here, build.sh among them, and every verification after it ran an empty build.sh. Called with
+// u.mu held; it returns each file written back and why.
+func (u *mirrorUnit) undo(conv string, before, after map[string]mirrorStat) []string {
+	var out []string
+	for f, a := range after {
+		b, had := before[f]
+		if !had || b.size == 0 || a.size != 0 {
+			continue
+		}
+		if u.writeBack(f) {
+			out = append(out, f+" ("+fmt.Sprintf(mirrorEmptiedFmt, b.size)+")")
+		}
+	}
+	sort.Strings(out)
+	return out
+}
 
 // othersTouched: the files conv's command changed or removed that are another's — another
 // conversation was first to write them in this attempt, or the planner gave them to another
