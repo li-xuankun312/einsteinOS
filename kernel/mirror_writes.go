@@ -242,8 +242,11 @@ func (u *mirrorUnit) undo(conv string, before, after map[string]mirrorStat) []st
 			out = append(out, f+" ("+fmt.Sprintf(mirrorEmptiedFmt, b.size)+")")
 		}
 	}
-	// a part's conversation does not take out or change lines of another's file (it may add
-	// lines: a declaration in a shared header, a row of the port map): 11/23 21:00-23:05 the moe, embed,
+	// a part's conversation does not change another part's file at all, and adds lines only to a
+	// shared one (a declaration in a shared header, a row of the port map): 11/24 04:38:52-04:39:37
+	// the gdn, layer_norm and loader parts each added to moe_parity.cu, the file the planner gave
+	// the moe part, to mend its call of test_ix_moe_combine while the moe part waited for a place;
+	// 11/23 21:00-23:05 the moe, embed,
 	// loader and qsa parts each rewrote gdn_bf16_layer.cu, the gdn part's, and were only told
 	if mine := u.part[conv]; mine != "" {
 		for _, w := range mirrorDiff(before, after) {
@@ -265,8 +268,8 @@ func (u *mirrorUnit) undo(conv string, before, after map[string]mirrorStat) []st
 			if whose == "" {
 				continue
 			}
-			if !w.Removed && u.onlyAdded(w.File) {
-				continue // lines added to another's file, none of its own taken out
+			if whose == mirrorSharedFmt && !w.Removed && u.onlyAdded(w.File) {
+				continue // lines added to a shared file, none of its own taken out
 			}
 			if w.Removed || before[w.File].size > 0 {
 				if u.writeBack(w.File) {

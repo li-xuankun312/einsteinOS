@@ -231,14 +231,16 @@ func TestAPartsCommandOnAnothersFileIsUndone(t *testing.T) {
 	if b, _ := os.ReadFile(filepath.Join(dir, f)); string(b) != "gdn's" || !strings.Contains(out, f+" (the file of gdn, conversation 25f1be30") {
 		t.Fatalf("%q %q", b, out)
 	}
+	// 11/24 04:38:52-04:39:37 three parts each added to moe_parity.cu, the moe part's: lines added
+	// to another part's own file are undone too
 	if out := MirrorCommand("a6d47c28", func() string {
 		os.WriteFile(filepath.Join(dir, f), []byte("gdn's\n// moe's declaration\n"), 0o644)
 		return ""
-	}); strings.Contains(out, "wrote back") {
-		t.Fatalf("lines added to another's file were undone: %q", out)
+	}); !strings.Contains(out, "wrote back") {
+		t.Fatalf("lines added to another part's file stood: %q", out)
 	}
 	MirrorCommand("a6d47c28", func() string { os.Remove(filepath.Join(dir, f)); return "" })
-	if b, _ := os.ReadFile(filepath.Join(dir, f)); string(b) != "gdn's\n// moe's declaration\n" {
+	if b, _ := os.ReadFile(filepath.Join(dir, f)); string(b) != "gdn's" {
 		t.Fatalf("a removal stands: %q", b)
 	}
 	out = MirrorCommand("8c680f2c", func() string { os.WriteFile(filepath.Join(dir, f), []byte("joined"), 0o644); return "" })
