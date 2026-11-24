@@ -1,6 +1,8 @@
 package kernel
 
 import (
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -37,5 +39,46 @@ func TestAWipBranchHoldsWhatTheKernelPushed(t *testing.T) {
 	}
 	if keepKernelWip(clone, "o/r", wip, sha) {
 		t.Fatal("a wip branch at the kernel's commit is left alone")
+	}
+}
+
+// 11/24 02:41:15 the operator's commit on top of the kernel's, made on this machine to restore
+// 13 emptied files, was set back: commits on top of the kernel's push, each committed here, are
+// kept; one committed elsewhere (a conversation's sandbox) is still set back
+func TestTheOperatorsCommitOnTheKernelsIsKept(t *testing.T) {
+	bare, clone := setupRemote(t)
+	wip := devWipBranch("einsteinOS/dev-7", "u2")
+	mirror := t.TempDir()
+	write(t, mirror, "src/unit.cu", "x")
+	if err := commitDelta(clone, "o/r", "einsteinOS/dev-7", wip, mirror, []string{"src/unit.cu"}, nil, "unit u2"); err != nil {
+		t.Fatal(err)
+	}
+	sha := KernelPushed("o/r", wip)
+	old := machineHost
+	machineHost = func() string { return "cc-1c97a71e-0" }
+	defer func() { machineHost = old }()
+	op := filepath.Join(t.TempDir(), "op")
+	git(t, filepath.Dir(op), "clone", "-q", "--branch", wip, bare, op)
+	commitAs := func(email, msg string) {
+		write(t, op, "src/unit.cu", msg)
+		c := exec.Command("git", "commit", "-qam", msg)
+		c.Dir = op
+		c.Env = append(os.Environ(), "GIT_AUTHOR_NAME=root", "GIT_AUTHOR_EMAIL="+email, "GIT_COMMITTER_NAME=root", "GIT_COMMITTER_EMAIL="+email)
+		if out, err := c.CombinedOutput(); err != nil {
+			t.Fatalf("%v %s", err, out)
+		}
+		git(t, op, "push", "-q", "origin", "HEAD:refs/heads/"+wip)
+	}
+	commitAs("root@cc-1c97a71e-0.cc-1c97a71e.svc.cluster.local", "restore")
+	tip := strings.TrimSpace(git(t, op, "rev-parse", "HEAD"))
+	if keepKernelWip(clone, "o/r", wip, sha) {
+		t.Fatal("the operator's commit was set back")
+	}
+	if KernelPushed("o/r", wip) != tip {
+		t.Fatal("the kept commit is not what the next check compares with")
+	}
+	commitAs("claude@sandbox-1234", "a conversation's")
+	if !keepKernelWip(clone, "o/r", wip, tip) {
+		t.Fatal("a commit made elsewhere was kept")
 	}
 }
