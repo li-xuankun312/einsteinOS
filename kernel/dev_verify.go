@@ -519,6 +519,12 @@ func runUnitVerifyAlone(ws, unitID, gpuUsable string, req UnitRequirements, chan
 	log.Printf(verifyProcTimesFmt, unitID, build, time.Since(bstart).Round(time.Second), procTimesByExe(btrace.Processes), e2eProcTimes(btrace.Processes, e2eProcTimesMin))
 	res.Build = btrace
 	res.BuildExit, res.BuildOut = code, tailText(out, 3000)
+	if code != 0 {
+		// the compiler's errors wherever they are in the output, not only in its last 3000 bytes
+		if errs := compileErrorLines(out, compileErrorLinesMax); errs != "" && !strings.Contains(res.BuildOut, errs) {
+			res.BuildOut = fmt.Sprintf(compileErrorsFmt, strings.Count(errs, "\n"), errs) + res.BuildOut
+		}
+	}
 	if err != nil {
 		res.Compile, res.BuildOut = "fail", "could not run build.sh: "+err.Error()
 		res.Smoke = "skipped"
@@ -1093,4 +1099,31 @@ func workspaceExes(ws string, procs []ProcSeen) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// compileErrorLinesMax: how many lines of the compiler's errors a failed build keeps.
+const compileErrorLinesMax = 80
+
+// %[1]d lines, %[2]s them
+const compileErrorsFmt = "[THE COMPILER'S ERRORS — every 'error:' line of build.sh's whole output, each with the two lines after it]\n%[2]s[THE END OF build.sh'S OUTPUT]\n"
+
+// compileErrorLines: each line of out with "error:" (a compiler's or a linker's), with the two lines
+// after it, at most max lines in all. 11/24 04:27:49 a build of 844 compiles failed on one error in
+// moe_parity.cu, and its last 3000 bytes — all that was kept and sent — were mostly the -Wformat
+// warnings of test_kg.cu around it; an error earlier in a build would not have been sent at all.
+func compileErrorLines(out string, max int) string {
+	ls := strings.Split(out, "\n")
+	var b strings.Builder
+	n := 0
+	for i := 0; i < len(ls) && n < max; i++ {
+		if !strings.Contains(ls[i], "error:") && !strings.Contains(ls[i], "undefined reference") {
+			continue
+		}
+		for j := i; j < len(ls) && j <= i+2 && n < max; j++ {
+			b.WriteString(ls[j] + "\n")
+			n++
+		}
+		i += 2
+	}
+	return b.String()
 }
