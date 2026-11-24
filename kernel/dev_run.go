@@ -580,6 +580,9 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 			end := preverifyMayEnd(passed, o.Result.Gate)
 			log.Printf("dev_preverify: %s unit %s (%s): %s — %s", r.repo, unit.ID, role,
 				preVerifyLogFields(o), map[bool]string{true: "the conversation may end", false: "sent back to the conversation"}[end])
+			if o.Result.GateText != "" {
+				log.Printf(preVerifyGateTextLogFmt, r.repo, unit.ID, truncStr(o.Result.GateText, preVerifyGateTextLogMax))
+			}
 			if end {
 				endWhy = preVerifyReport(o)
 				return true, ""

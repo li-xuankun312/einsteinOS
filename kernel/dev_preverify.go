@@ -237,3 +237,11 @@ func preVerifyLogFields(o UnitVerifyOutcome) string {
 	}
 	return fmt.Sprintf("compile=%s smoke=%s gate=%q", o.Result.Compile, o.Result.Smoke, o.Result.Gate)
 }
+
+// %[1]s repo, %[2]s unit, %[3]s the gate's text
+const preVerifyGateTextLogFmt = "dev_preverify: %[1]s unit %[2]s: the gates' text sent back: %[3]s"
+
+// preVerifyGateTextLogMax: how much of it the log keeps. 11/23 20:43:15 and 11/24 00:56:50 the log
+// said gate="kernel_unported" (also failed: toolchain_unused, port_ref_file_unknown, port_extra,
+// port_incomplete) and not which rows, kernels or files any of them named.
+const preVerifyGateTextLogMax = 3000
