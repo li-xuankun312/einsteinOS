@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func resetMirrorUnits() {
@@ -356,4 +357,33 @@ func TestAPartRefusedForConcurrencyIsToldApart(t *testing.T) {
 	if why := conversationError(out); !strings.Contains(why, concurrentLimitCode) {
 		t.Fatalf("%q", why)
 	}
+}
+
+// 11/24 09:39:46 a replayed `bash build.sh` held the mirror 7 minutes and every other command
+// waited: a command waits at most mirrorTurnWait for another's, then runs beside it
+func TestALongCommandDoesNotHoldTheMirrorFromTheOthers(t *testing.T) {
+	resetMirrorUnits()
+	defer resetMirrorUnits()
+	dir := t.TempDir()
+	noteMirrorConv("uint", dir, "117e9977", "")
+	noteMirrorConv("uint", dir, "1ea83d67", "moe: x")
+	release := make(chan bool)
+	started := make(chan bool)
+	go MirrorCommand("117e9977", func() string { started <- true; <-release; return "" })
+	<-started
+	done := make(chan time.Duration)
+	go func() {
+		t0 := time.Now()
+		MirrorCommand("1ea83d67", func() string { return "" })
+		done <- time.Since(t0)
+	}()
+	select {
+	case d := <-done:
+		if d < mirrorTurnWait-time.Second {
+			t.Fatalf("ran beside a running command after %v, before the wait", d)
+		}
+	case <-time.After(mirrorTurnWait + 5*time.Second):
+		t.Fatal("waited past mirrorTurnWait for a command still running")
+	}
+	close(release)
 }

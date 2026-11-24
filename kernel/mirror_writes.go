@@ -21,6 +21,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 type mirrorStat struct {
@@ -62,7 +63,9 @@ type mirrorWrite struct {
 
 // mirrorUnit: the conversations working on one unit's mirror and what their commands wrote.
 type mirrorUnit struct {
-	mu     sync.Mutex // one command at a time on the mirror
+	mu     sync.Mutex    // the record below
+	turn   chan struct{} // one command at a time on the mirror, waited for at most mirrorTurnWait
+	busy   string        // the conversation whose command holds the turn
 	unit   string
 	dir    string
 	part   map[string]string // conv -> its part ("" for the unit's own conversation)
@@ -122,7 +125,7 @@ func noteMirrorConv(unitID, dir, conv, part string) {
 	defer mirrorUnitsMu.Unlock()
 	u := mirrorUnits[unitID]
 	if u == nil || u.dir != dir {
-		u = &mirrorUnit{unit: unitID, dir: dir, part: map[string]string{}, owner: map[string]string{}, named: map[string]string{}, heard: map[string]int{}, content: map[string][]byte{}, base: map[string]bool{}}
+		u = &mirrorUnit{turn: make(chan struct{}, 1), unit: unitID, dir: dir, part: map[string]string{}, owner: map[string]string{}, named: map[string]string{}, heard: map[string]int{}, content: map[string][]byte{}, base: map[string]bool{}}
 		var all []string
 		for f := range statMirror(dir) {
 			all = append(all, f)
@@ -154,11 +157,30 @@ func MirrorCommand(conv string, run func() string) string {
 	if u == nil {
 		return run()
 	}
-	u.mu.Lock()
-	defer u.mu.Unlock()
+	// one command at a time, but none waits on another longer than mirrorTurnWait: 11/24 09:39:46
+	// a conversation's replayed `bash build.sh` held the mirror 7 minutes and every other
+	// conversation's command waited behind it
+	held := false
+	select {
+	case u.turn <- struct{}{}:
+		held = true
+	case <-time.After(mirrorTurnWait):
+		u.mu.Lock()
+		other := u.busy
+		u.mu.Unlock()
+		log.Printf(mirrorTurnFmt, shortID(conv), mirrorTurnWait, shortID(other))
+	}
+	if held {
+		u.mu.Lock()
+		u.busy = conv
+		u.mu.Unlock()
+		defer func() { <-u.turn }()
+	}
 	before := statMirror(u.dir)
 	out := run()
 	after := statMirror(u.dir)
+	u.mu.Lock()
+	defer u.mu.Unlock()
 	// what the command must not have done is undone first, and told
 	back := u.undo(conv, before, after)
 	undone := map[string]bool{}
@@ -216,6 +238,12 @@ const (
 	// %[1]d files, %[2]s them with whose they were
 	mirrorOthersFmt = "\n[THE UNIT'S MIRROR — measured on this machine]\nthis command changed or removed %[1]d file(s) that another conversation of the unit wrote or the planner gave another part:\n%[2]s"
 )
+
+// mirrorTurnWait: the longest a command waits for another's turn on the mirror.
+const mirrorTurnWait = 20 * time.Second
+
+// %[1]s the conversation, %[2]v the wait, %[3]s the one whose command runs
+const mirrorTurnFmt = "mirror: a command of %[1]s waited %[2]v for one of %[3]s still running and runs beside it — what either changes meanwhile is set down to the one that saw it change"
 
 const (
 	// %[1]s the conversation, %[2]s its part, %[3]d files, %[4]s them and why
