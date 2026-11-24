@@ -205,6 +205,12 @@ func RefFileAt(owner, name, sha, path string) (string, error) {
 	// come directly — and fileSurvey counted 207 files of 212. A blob that does not come
 	// directly is asked for through the machine's proxy, and a stalled transfer is given up
 	// after 20 s below 1 KB/s rather than at the timeout.
+	// the commit's archive first: one request for all its files (ref_tarball.go)
+	if len(sha) == 40 {
+		if s, ok := refTarballFile(owner, name, sha, path); ok {
+			return s, nil
+		}
+	}
 	var err error
 	for _, proxy := range refFetchRoutes() {
 		ctx, cancel := context.WithTimeout(context.Background(), refFileTimeout)
