@@ -260,6 +260,8 @@ func (u *mirrorUnit) undo(conv string, before, after map[string]mirrorStat) []st
 			}
 			if u.base[w.File] && !isNamed {
 				whose = mirrorSharedFmt
+			} else if o, ok := u.owner[w.File]; ok && o != conv && u.part[o] == "" && !isNamed {
+				whose = mirrorUnitsOwnFmt // the unit's own conversation's file: the parts' to add to
 			} else if o, ok := u.owner[w.File]; ok && o != conv {
 				whose = fmt.Sprintf(mirrorOwnedByFmt, partName(u.part[o]), shortID(o))
 			} else if p, ok := u.named[w.File]; ok && p != partName(mine) {
@@ -268,7 +270,7 @@ func (u *mirrorUnit) undo(conv string, before, after map[string]mirrorStat) []st
 			if whose == "" {
 				continue
 			}
-			if whose == mirrorSharedFmt && !w.Removed && u.onlyAdded(w.File) {
+			if (whose == mirrorSharedFmt || whose == mirrorUnitsOwnFmt) && !w.Removed && u.onlyAdded(w.File) {
 				continue // lines added to a shared file, none of its own taken out
 			}
 			if w.Removed || before[w.File].size > 0 {
@@ -286,6 +288,8 @@ func (u *mirrorUnit) undo(conv string, before, after map[string]mirrorStat) []st
 // conversations began. 11/23 the port map (168 rows the units had written) was first touched in
 // the attempt by the layer_norm part, which made it its own and cut it to one row, and at
 // 20:27:45 the gdn part overwrote 14 files the tree had held all along.
+const mirrorUnitsOwnFmt = "a file the unit's own conversation wrote, shared by all its parts: a part adds lines to it and takes none out"
+
 const mirrorSharedFmt = "a file the mirror held when the unit's conversations began, shared by all its parts: a part adds lines to it and takes none out"
 
 const (
