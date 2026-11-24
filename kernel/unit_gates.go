@@ -662,20 +662,28 @@ func isaSourceList(req UnitRequirements) string {
 // toolchainDirs, its command line starts there, or it is a CUDA compile (which on this machine
 // only the toolchain can do; /proc's exe of a compiler driver may be a resolved symlink).
 func toolchainRan(t ProcTrace) bool {
-	if ranFrom(t.Exes, toolchainDirs) {
-		return true
+	// a process of the toolchain counts when it compiled a source — its arguments name one:
+	// 11/24 00:5x the integration conversation added "$CLANG" --version to build.sh, after
+	// toolchain_unused, to a build.sh that compiled nothing
+	for _, p := range t.Processes {
+		if ranFrom([]string{p.Exe}, toolchainDirs) && sourceArgRe.MatchString(p.Cmdline) {
+			return true
+		}
 	}
 	for _, c := range t.Cmdlines {
 		f := strings.Fields(c)
 		if len(f) == 0 {
 			continue
 		}
-		if ranFrom(f[:1], toolchainDirs) || cudaCompileRe.MatchString(c) {
+		if (ranFrom(f[:1], toolchainDirs) && sourceArgRe.MatchString(c)) || cudaCompileRe.MatchString(c) {
 			return true
 		}
 	}
 	return false
 }
+
+// sourceArgRe: an argument naming a C/C++/CUDA source.
+var sourceArgRe = regexp.MustCompile(`\S+\.(cu|cpp|cc|cxx|c)(\s|$)`)
 
 // ranFrom: some program in exes lives in one of dirs.
 func ranFrom(exes, dirs []string) bool {

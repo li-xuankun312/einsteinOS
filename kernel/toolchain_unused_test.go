@@ -12,8 +12,15 @@ func TestAGPUUnitWhoseBuildNeverRanTheToolchainFails(t *testing.T) {
 	if kind, text := unitGates(in); !strings.Contains(text, "toolchain_unused") {
 		t.Fatalf("%s %s", kind, text)
 	}
-	in.Build.Exes = append(in.Build.Exes, toolchainDirs[0]+"/clang++")
+	// 11/24 00:5x "$CLANG" --version in build.sh, a build that compiled nothing: not a use
+	clang := toolchainDirs[0] + "/clang++"
+	in.Build.Exes = append(in.Build.Exes, clang)
+	in.Build.Processes = []ProcSeen{{Exe: clang, Cmdline: clang + " --version"}}
+	if _, text := unitGates(in); !strings.Contains(text, "toolchain_unused") {
+		t.Fatalf("clang++ --version counted as the toolchain's use: %s", text)
+	}
+	in.Build.Processes = append(in.Build.Processes, ProcSeen{Exe: clang, Cmdline: clang + " -O2 -c src/x.cu -o build/x.o"})
 	if _, text := unitGates(in); strings.Contains(text, "toolchain_unused") {
-		t.Fatalf("the toolchain ran: %s", text)
+		t.Fatalf("the toolchain compiled src/x.cu: %s", text)
 	}
 }
