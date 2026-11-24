@@ -115,3 +115,28 @@ func TestAFailedCompileCarriesTheTreesFunctions(t *testing.T) {
 		t.Fatal("a compile that passed carries the facts")
 	}
 }
+
+// 11/24 the measures named main in 30 programs and run_test in each tests/unitN/test_main.cpp as
+// defined twice, and block_layer and session_zero, each a one-line body, as defined nowhere; a
+// definition in a C++17 nested namespace or written qualified is a definition too
+func TestTheFunctionMeasuresLeaveOutProgramsAndReadOneLineBodies(t *testing.T) {
+	tree := t.TempDir()
+	putTree(t, tree, map[string]string{
+		"include/baloon/core_layer.hpp": "namespace baloon {\nnamespace core {\nBlockResult block_layer(const BlockCall& c, const BlockHooks& h);\nvoid session_zero(Session& s);\nint map_kind(int k);\n}\n}\n",
+		"src/core/layer.cpp":            "namespace baloon {\nnamespace core {\nBlockResult block_layer(const BlockCall& c, const BlockHooks& h) { return block_layer_post(c, h, block_layer_pre(c, h)); }\n}\n}\n",
+		"src/core/session.cpp":          "namespace baloon::core {\nvoid session_zero(Session& s) { std::fill(s.arena.begin(), s.arena.end(), (uint8_t)0); }\n}\n",
+		"src/core/weights.cpp":          "int baloon::core::map_kind(int k) {\n  return k;\n}\n",
+		"src/use.cpp":                   "void use() { baloon::core::block_layer(c, h); baloon::core::session_zero(s); baloon::core::map_kind(1); }\n",
+		"src/a_main.cpp":                "int human(int x) { return x; }\nint main() { return 0; }\n",
+		"src/b_main.cpp":                "int human(int x) { return x; }\nint main() { return 0; }\n",
+		"tests/unit1/test_main.cpp":     "int run_test() {\n  return 0;\n}\n",
+		"tests/unit2/test_main.cpp":     "int run_test() {\n  return 0;\n}\n",
+	})
+	sites := treeFuncSites(tree)
+	if re := redefinedFuncs(sites); len(re) != 0 {
+		t.Fatalf("redefined %q", re)
+	}
+	if un := undefinedFuncs(tree, sites); len(un) != 0 {
+		t.Fatalf("undefined %q", un)
+	}
+}

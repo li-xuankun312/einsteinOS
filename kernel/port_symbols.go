@@ -24,9 +24,9 @@ import (
 var symbolSourceExts = map[string]bool{".c": true, ".cc": true, ".cpp": true, ".cu": true}
 
 var (
-	nsOpenRe = regexp.MustCompile(`^\s*namespace\s+([A-Za-z_]\w*)\s*\{`)
+	nsOpenRe = regexp.MustCompile(`^\s*(?:inline\s+)?namespace\s+([A-Za-z_][\w:]*)\s*\{`)
 	// a function's head at namespace scope: return type and name, its parameters open
-	funcHeadRe = regexp.MustCompile(`^((?:[A-Za-z_][\w:<>,\*&]*\s+|[\*&]+\s*)+)([A-Za-z_]\w*)\s*\(`)
+	funcHeadRe = regexp.MustCompile(`^((?:[A-Za-z_][\w:<>,\*&]*\s+|[\*&]+\s*)+)((?:[A-Za-z_]\w*::)*[A-Za-z_]\w*)\s*\(`)
 	// what a head's leading words must not be (a statement, a type's definition, a macro)
 	notFuncHead = map[string]bool{"return": true, "if": true, "for": true, "while": true, "switch": true, "else": true,
 		"typedef": true, "using": true, "class": true, "struct": true, "enum": true, "union": true, "template": true,
@@ -67,7 +67,7 @@ func scanFuncSites(rel, src string) []funcSite {
 						j++
 						head += " " + strings.TrimSpace(stripLineComment(ls[j]))
 					}
-					rest := head[strings.LastIndex(head, ")")+1:]
+					rest := afterParams(head, len(m[0])-1)
 					k := j
 					for strings.TrimSpace(rest) == "" && k+1 < len(ls) && k-j < 2 {
 						k++
@@ -98,6 +98,25 @@ func scanFuncSites(rel, src string) []funcSite {
 		}
 	}
 	return out
+}
+
+// afterParams: the text after the parameter list whose '(' is at open — 11/24 a one-line body
+// ("BlockResult block_layer(...) { return block_layer_post(c, h, ...); }") was read from its
+// last ')' and taken for a declaration, and block_layer was measured as defined nowhere.
+func afterParams(head string, open int) string {
+	depth := 0
+	for i := open; i < len(head); i++ {
+		switch head[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return head[i+1:]
+			}
+		}
+	}
+	return ""
 }
 
 // stripLineComment drops a // comment and the text of string literals that could hold braces.
@@ -143,9 +162,17 @@ func treeFuncSites(tree string) []funcSite {
 // redefinedFuncs: the functions defined, not static or inline, in more than one source file —
 // "name: a.cu, b.cu" — which no build of the tree links.
 func redefinedFuncs(sites []funcSite) []string {
+	// a program's sources and the tests are linked each on its own: 11/24 the measure named main
+	// in 30 programs and run_test in each tests/unitN/test_main.cpp
+	programs := map[string]bool{}
+	for _, s := range sites {
+		if s.Def && lastName(s.Name) == "main" {
+			programs[s.File] = true
+		}
+	}
 	files := map[string][]string{}
 	for _, s := range sites {
-		if !s.Def || s.Static || !symbolSourceExts[strings.ToLower(filepath.Ext(s.File))] {
+		if !s.Def || s.Static || !symbolSourceExts[strings.ToLower(filepath.Ext(s.File))] || programs[s.File] || isTestPath(s.File) {
 			continue
 		}
 		if !hasString(files[s.Name], s.File) {
