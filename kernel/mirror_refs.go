@@ -12,7 +12,9 @@ package kernel
 import (
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -20,6 +22,13 @@ import (
 // kernel's clone that made it (no network).
 func mirrorKnowsPark(mirror, cloneDir, branch, sha string) error {
 	if mirror == "" || cloneDir == "" || branch == "" || sha == "" {
+		return nil
+	}
+	// a mirror that is no clone has no refs to give: 11/24 03:24:47 the fetch into the integration's
+	// mirror failed with "not a git repository" — a git command reading a branch there fails as
+	// it did at 11/23 20:27:45, and what such a command leaves empty is written back
+	// (mirror_writes.go)
+	if _, err := os.Stat(filepath.Join(mirror, ".git")); err != nil {
 		return nil
 	}
 	tmp := "refs/einsteinos/park/" + strings.ReplaceAll(branch, "/", "_")

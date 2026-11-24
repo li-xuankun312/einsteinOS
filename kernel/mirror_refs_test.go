@@ -38,3 +38,11 @@ func TestTheMirrorHasTheParkedCommitByItsRemoteName(t *testing.T) {
 		t.Fatalf("%q", got)
 	}
 }
+
+// 11/24 03:24:47 the integration's mirror is no git clone and the fetch into it failed with "not
+// a git repository" after every park: a mirror without .git is not given refs, and that is no error
+func TestAMirrorThatIsNoCloneIsNotGivenRefs(t *testing.T) {
+	if err := mirrorKnowsPark(t.TempDir(), t.TempDir(), "einsteinOS/x", "abc"); err != nil {
+		t.Fatal(err)
+	}
+}
