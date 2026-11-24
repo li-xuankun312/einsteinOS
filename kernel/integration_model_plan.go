@@ -604,7 +604,13 @@ func startIntegrationParts(unitID, parent string, parts []string, body string, f
 					log.Printf(partWroteOthersFmt, unitID, shortID(addr), part, len(wrote), strings.Join(wrote, "; "))
 				}
 				if why := conversationError(out); why != "" {
-					if !retried[part] {
+					if strings.Contains(why, concurrentLimitCode) {
+						// the account's concurrency, not the part: started again once a place is free,
+						// its one retry kept (conv_room.go waits for the place)
+						forgetSpawn(parent, "work", prompts[addr])
+						queue = append(queue, part)
+						log.Printf(integrationPartsRoomFmt, unitID, shortID(addr), partName(part))
+					} else if !retried[part] {
 						retried[part] = true
 						forgetSpawn(parent, "work", prompts[addr])
 						queue = append(queue, part)
@@ -637,6 +643,13 @@ const (
 	// %[1]s unit, %[2]s the conversation, %[3]s its part, %[4]d still queued
 	integrationPartsNextFmt = "dev_from_theorems: integration unit %[1]s: part conversation %[2]s started for %[3]s; %[4]d part(s) still queued"
 )
+
+// concurrentLimitCode: the server's word for a conversation refused for the account's concurrency.
+const concurrentLimitCode = "concurrent_limit_reached"
+
+// %[1]s unit, %[2]s the conversation, %[3]s its part — 11/24 03:34:27 and 03:47:50 the loader and
+// layer_norm parts were refused for the account's concurrency and each used its one retry on it
+const integrationPartsRoomFmt = "dev_from_theorems: integration unit %[1]s: part conversation %[2]s (%[3]s) was refused for the account's concurrency — started again when a place is free, its retry kept"
 
 // integrationPartsPoll: how often the started parts' conversations are looked at (a variable
 // for tests).
