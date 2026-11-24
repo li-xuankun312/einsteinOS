@@ -297,3 +297,31 @@ func TestAFileTheMirrorHeldIsSharedByTheParts(t *testing.T) {
 		t.Fatalf("the unit's conversation: %q", b)
 	}
 }
+
+// 11/24 03:34:27 the loader part was said to have written elementwise_parity.cu, layer_norm's,
+// which the unit's own conversation had changed: only the part's own commands count
+func TestAPartIsSaidToHaveWrittenOnlyWhatItsCommandsWrote(t *testing.T) {
+	resetMirrorUnits()
+	defer resetMirrorUnits()
+	dir := t.TempDir()
+	noteMirrorConv("uint", dir, "fcaad41c", "")
+	noteMirrorConv("uint", dir, "826ed16e", "loader: x")
+	noteMirrorConv("uint", dir, "c845b59f", "layer_norm: y")
+	f := "tests/k39_integration/elementwise_parity.cu"
+	files := map[string][]string{"layer_norm": {f}}
+	MirrorCommand("fcaad41c", func() string {
+		os.MkdirAll(filepath.Join(dir, filepath.Dir(f)), 0o755)
+		os.WriteFile(filepath.Join(dir, f), []byte("joined"), 0o644)
+		return ""
+	})
+	if got := partWroteOthersBy("uint", "826ed16e", "loader: x", files); len(got) != 0 {
+		t.Fatalf("the unit's conversation's write laid on the loader: %v", got)
+	}
+	MirrorCommand("826ed16e", func() string {
+		os.WriteFile(filepath.Join(dir, f), []byte("joined\nloader's line\n"), 0o644)
+		return ""
+	})
+	if got := partWroteOthersBy("uint", "826ed16e", "loader: x", files); len(got) != 1 || got[0] != f+" (the unit's conversation)" {
+		t.Fatalf("%v", got)
+	}
+}

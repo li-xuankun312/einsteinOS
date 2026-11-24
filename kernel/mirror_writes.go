@@ -514,3 +514,44 @@ func compileErrorOwners(unitID, out string) string {
 	}
 	return fmt.Sprintf(compileOwnersFmt, len(order), b.String())
 }
+
+// partWroteOthersBy: the files of other parts that conv's own commands changed in the unit's
+// mirror (what mirror_writes.go set down as its), each with whose it is — and, where the unit
+// has no record of its conversations' commands, what changed since the parts started
+// (partWroteOthers). 11/24 03:34:27 the loader part was said to have written elementwise_parity.cu
+// of layer_norm, which the unit's own conversation had changed at 03:25.
+func partWroteOthersBy(unitID, conv, part string, files map[string][]string) []string {
+	mirrorUnitsMu.Lock()
+	u := mirrorUnits[unitID]
+	mirrorUnitsMu.Unlock()
+	if u == nil {
+		return partWroteOthers(unitID, part, files)
+	}
+	mine := partName(part)
+	whose := map[string]string{}
+	for p, fs := range files {
+		for _, f := range fs {
+			whose[f] = p
+		}
+	}
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	seen := map[string]bool{}
+	var out []string
+	for _, w := range u.writes {
+		if w.Conv != conv || seen[w.File] {
+			continue
+		}
+		p := whose[w.File]
+		if o, ok := u.owner[w.File]; ok && o != conv {
+			p = partName(u.part[o])
+		}
+		if p == "" || p == mine {
+			continue
+		}
+		seen[w.File] = true
+		out = append(out, fmt.Sprintf("%s (%s)", w.File, p))
+	}
+	sort.Strings(out)
+	return out
+}

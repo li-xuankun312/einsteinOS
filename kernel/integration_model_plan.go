@@ -600,7 +600,7 @@ func startIntegrationParts(unitID, parent string, parts []string, body string, f
 					continue
 				}
 				delete(running, addr)
-				if wrote := partWroteOthers(unitID, part, partFilesOr(unitID, files)); len(wrote) > 0 {
+				if wrote := partWroteOthersBy(unitID, addr, part, partFilesOr(unitID, files)); len(wrote) > 0 {
 					log.Printf(partWroteOthersFmt, unitID, shortID(addr), part, len(wrote), strings.Join(wrote, "; "))
 				}
 				if why := conversationError(out); why != "" {
