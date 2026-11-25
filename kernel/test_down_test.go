@@ -260,3 +260,16 @@ func TestAHeldTestNamesEachTimeTheMachineWentDownAtItsKernel(t *testing.T) {
 		t.Fatalf("held, but ran: %v", *ran)
 	}
 }
+
+// the records 8ebc4e62 kept hold no time and no test: they are read from the stages log, by the
+// launch log each record is named after
+func TestARecordKeptWithoutItsTimeIsReadFromTheStagesLog(t *testing.T) {
+	crash := t.TempDir()
+	t.Setenv("EINSTEINOS_CRASH_DIR", crash)
+	noteCrashStage("uint", ".einsteinOS/verify/uint/test.sh", filepath.Join(crash, "einsteinos-launch-882494937.log"))
+	saveTestDownRecord(filepath.Join(crash, "einsteinos-down-882494937.json"), &testDownRecord{Kernel: "k", Sources: map[string]string{"a.cu": "x"}})
+	rs := testDownsOfKernel(crash, "k")
+	if len(rs) != 1 || rs[0].At == "" || rs[0].Test != ".einsteinOS/verify/uint/test.sh" || rs[0].Unit != "uint" {
+		t.Fatalf("%+v", rs)
+	}
+}

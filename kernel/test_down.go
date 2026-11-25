@@ -414,6 +414,14 @@ func testDownsOfKernel(dir, kernel string) []*testDownRecord {
 	var out []*testDownRecord
 	for _, p := range paths {
 		if r, ok := loadTestDownRecord(p); ok && r.Kernel == kernel {
+			if r.At == "" || r.Test == "" {
+				// a record kept before it held when and what ran: read from the stages log, by the
+				// launch log the record is named after
+				key := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(p), "einsteinos-down-"), ".json")
+				if at, test, unit, ok := crashStartOfLaunchLog(dir, "einsteinos-launch-"+key+".log"); ok {
+					r.At, r.Test, r.Unit = at, test, unit
+				}
+			}
 			out = append(out, r)
 		}
 	}
@@ -471,3 +479,22 @@ const (
 	testDownAloneFmt    = "dev_verify: unit %[1]s: %[2]s ran alone on %[3]s before test.sh, %[4]s: exit %[5]d, %[6]d distinct kernel(s) launched, and the machine stayed up — test.sh runs; its output: %[7]s"
 	testDownAloneNotFmt = "dev_verify: unit %[1]s: %[2]s is not run alone before test.sh: %[3]s"
 )
+
+// crashStartOfLaunchLog: the stages log's start line whose launch log is named base — when, what
+// started and the unit.
+func crashStartOfLaunchLog(dir, base string) (at, test, unit string, ok bool) {
+	b, err := os.ReadFile(filepath.Join(dir, "einsteinos-stages.log"))
+	if err != nil {
+		return "", "", "", false
+	}
+	for _, l := range strings.Split(string(b), "\n") {
+		if len(l) <= len(crashStagesTimeLayout)+1 {
+			continue
+		}
+		m := crashTestStartRe.FindStringSubmatch(l[len(crashStagesTimeLayout)+1:])
+		if m != nil && filepath.Base(strings.TrimSpace(m[3])) == base {
+			at, test, unit, ok = l[:len(crashStagesTimeLayout)], m[2], m[1], true
+		}
+	}
+	return at, test, unit, ok
+}
