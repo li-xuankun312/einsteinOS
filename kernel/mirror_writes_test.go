@@ -417,3 +417,28 @@ func TestTheFilesAGateHoldsOnGoBackWithWhoseTheyAre(t *testing.T) {
 		t.Fatal("no mirror or no file, something said")
 	}
 }
+
+// 11/25 04:34:25 the linker named tests/k39_integration/e2e_all_check.cu by its base name and a
+// section: the one file of the mirror with that name is said, with whose it is
+func TestAFileTheLinkerNamesByItsBaseNameGoesBackWithWhoseItIs(t *testing.T) {
+	resetMirrorUnits()
+	defer resetMirrorUnits()
+	dir := t.TempDir()
+	noteMirrorConv("uint", dir, "8c680f2c", "")
+	MirrorCommand("8c680f2c", func() string {
+		os.MkdirAll(filepath.Join(dir, "tests/k39_integration"), 0o755)
+		os.WriteFile(filepath.Join(dir, "tests/k39_integration/e2e_all_check.cu"), []byte("x"), 0o644)
+		os.WriteFile(filepath.Join(dir, "tests/k39_integration/a.cu"), []byte("x"), 0o644)
+		os.MkdirAll(filepath.Join(dir, "src"), 0o755)
+		os.WriteFile(filepath.Join(dir, "src/a.cu"), []byte("x"), 0o644)
+		return ""
+	})
+	out := "e2e_all_check.cu:(.text+0x58d): undefined reference to `e2e_embed_main()'\na.cu:(.text+0x1): undefined reference to `g()'\n"
+	got := compileErrorOwners("uint", out)
+	if !strings.Contains(got, "1 file(s):\n  tests/k39_integration/e2e_all_check.cu: 1 line(s) named") {
+		t.Fatalf("%q", got)
+	}
+	if strings.Contains(got, "a.cu: ") && !strings.Contains(got, "e2e_all_check.cu") {
+		t.Fatalf("a base name two files have was said: %q", got)
+	}
+}

@@ -16,6 +16,7 @@ import (
 	"io/fs"
 	"log"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -501,7 +502,9 @@ func mirrorOwners(unitID string) map[string][]string {
 }
 
 // compileErrPathRe: a source file and line a compiler names in an error.
-var compileErrPathRe = regexp.MustCompile(`([A-Za-z0-9_./+-]+\.(?:cu|cuh|cpp|cc|c|hpp|h))[:(](\d+)`)
+// The linker names the source of an object by its base name and a section — 11/25 04:34:25
+// "e2e_all_check.cu:(.text+0x58d): undefined reference to `e2e_embed_main()'".
+var compileErrPathRe = regexp.MustCompile(`([A-Za-z0-9_./+-]+\.(?:cu|cuh|cpp|cc|c|hpp|h))(?:[:(](\d+)|:\(\.)`)
 
 const (
 	// %[1]d files, %[2]s them with whose they are
@@ -532,6 +535,18 @@ func compileErrorOwners(unitID, out string) string {
 			if p == f || strings.HasSuffix(p, "/"+f) {
 				file = f
 				break
+			}
+		}
+		if file == "" && !strings.Contains(p, "/") {
+			// a base name alone: the one file of the mirror that has it
+			var same []string
+			for f := range u.content {
+				if path.Base(f) == p {
+					same = append(same, f)
+				}
+			}
+			if len(same) == 1 {
+				file = same[0]
 			}
 		}
 		if file == "" {
