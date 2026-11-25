@@ -1,6 +1,7 @@
 package kernel
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -198,7 +199,7 @@ func TestAKernelTheMachineWentDownWithTwiceIsHeldThoughItsFilesChange(t *testing
 		t.Fatalf("downs: %d", n)
 	}
 	same, why := testDownSame(ws, d, r, first)
-	if !same || !strings.Contains(why, "went down at other_kernel 2 times") || !strings.Contains(why, testDownReleaseEnv) {
+	if !same || !strings.Contains(why, "(src/other.cu changed), the machine having gone down at it more than once, until "+testDownReleaseEnv+" names other_kernel") || !strings.Contains(why, testDownReleaseEnv) {
 		t.Fatalf("down twice, its file changed: %v %s", same, why)
 	}
 	t.Setenv(testDownReleaseEnv, "x_kernel, other_kernel")
@@ -288,5 +289,27 @@ func TestAHeldTestNamesTheFilesItHoldsOn(t *testing.T) {
 		VerifyResult{Compile: "pass", Smoke: "missing", TestExit: -1}, time.Now())
 	if len(res.GateFiles) != 1 || res.GateFiles[0] != "src/other.cu" {
 		t.Fatalf("%+v", res.GateFiles)
+	}
+}
+
+// 11/25 05:05:57 the held gate read "test.sh is not run again while src/… changed …, but the
+// machine went down at … 2 times …" and gave the times twice: each reason reads after "test.sh
+// is not run again", and the times are said once
+func TestAHeldGateReadsAsOneSentence(t *testing.T) {
+	ws, crash, _, prog := downFixture(t)
+	os.Remove(prog)
+	bootAt(t, time.Now().Add(time.Minute))
+	fakeCudaProgram(t, filepath.Join(ws, "build"))
+	d, r, first := noteTestDown(ws, "uint")
+	_, why := testDownSame(ws, d, r, first)
+	if text := fmt.Sprintf(gateMachineDownFmt, "f", why, ""); !strings.Contains(text, "test.sh is not run again while src/other.cu, defining other_kernel, are as they were") {
+		t.Fatal(text)
+	}
+	os.WriteFile(filepath.Join(ws, "src", "other.cu"), []byte("__global__ void other_kernel(int* p) { if (p) *p = 1; }\n"), 0o644)
+	saveTestDownRecord(filepath.Join(crash, "einsteinos-down-2.json"), &testDownRecord{At: "2026/11/24 17:40:14.827", Test: "t", Kernel: "other_kernel", Sources: map[string]string{"src/other.cu": "0121"}})
+	_, why = testDownSame(ws, d, r, first)
+	text := fmt.Sprintf(gateMachineDownFmt, "f", why, testDownHistory(ws, r))
+	if !strings.Contains(text, "test.sh is not run again after a change of the files defining other_kernel (src/other.cu changed)") || strings.Count(text, "2 time") != 1 {
+		t.Fatal(text)
 	}
 }

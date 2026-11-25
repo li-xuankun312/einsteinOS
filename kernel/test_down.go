@@ -307,7 +307,7 @@ func noteTestDown(ws, unitID string) (*testDown, *testDownRecord, bool) {
 
 // gateMachineDownFmt: the verification's gate when test.sh is not run because the machine went
 // down in the last one and what it went down with is as it was.
-const gateMachineDownFmt = "machine_down_during_test: %[1]s — test.sh is not run again while %[2]s%[3]s"
+const gateMachineDownFmt = "machine_down_during_test: %[1]s — test.sh is not run again %[2]s%[3]s"
 
 // testDownHistoryFmt: each time the crash notes hold of the machine going down at the kernel —
 // when, in what, the sha256 of the files defining it then — and those files now.
@@ -369,19 +369,19 @@ func testDownSame(ws string, d *testDown, r *testDownRecord, first bool) (bool, 
 			// a kernel the machine went down with more than once is not let run by a change of its
 			// files: 11/25 01:49 src/ix_router_top10_wave.cu had changed and the machine went down
 			// at the same kernel, at the same offset
-			if n := len(testDownsOfKernel(crashDir(), r.Kernel)); n >= testDownRepeatHold && !testDownReleased(r.Kernel) {
-				return true, fmt.Sprintf(testDownRepeatFmt, strings.Join(changed, ", "), r.Kernel, n, testDownReleaseEnv)
+			if len(testDownsOfKernel(crashDir(), r.Kernel)) >= testDownRepeatHold && !testDownReleased(r.Kernel) {
+				return true, fmt.Sprintf(testDownRepeatFmt, strings.Join(changed, ", "), r.Kernel, testDownReleaseEnv)
 			}
 			return false, fmt.Sprintf("%s changed since the machine went down", strings.Join(changed, ", "))
 		}
-		return true, fmt.Sprintf("%s, defining %s, are as they were", strings.Join(sourcePaths(r.Sources), ", "), r.Kernel)
+		return true, fmt.Sprintf("while %s, defining %s, are as they were", strings.Join(sourcePaths(r.Sources), ", "), r.Kernel)
 	case r.ExeSHA != "":
 		if h, ok := fileSHA256(d.Exe); !ok || h != r.ExeSHA {
 			return false, d.Exe + " differs from the one built after the machine went down"
 		}
-		return true, fmt.Sprintf("%s builds the same (sha256 %s)", d.Exe, r.ExeSHA[:12])
+		return true, fmt.Sprintf("while %s builds the same (sha256 %s)", d.Exe, r.ExeSHA[:12])
 	default:
-		return first, "the program it went down with is not known; only this verification is held"
+		return first, "in this verification: the program it went down with is not known, and only this verification is held"
 	}
 }
 
@@ -393,7 +393,9 @@ const testDownRepeatHold = 2
 // their files however many times the machine went down at them — set by whoever runs the kernel.
 const testDownReleaseEnv = "EINSTEINOS_TEST_DOWN_RELEASE"
 
-const testDownRepeatFmt = "%[1]s changed since the machine went down, but the machine went down at %[2]s %[3]d times on the crash notes; test.sh runs again after a change only when %[4]s names %[2]s"
+// %[1]s the files changed, %[2]s the kernel, %[3]s the variable (the times are the history's); it follows "test.sh
+// is not run again" — 11/25 05:05:57 it followed "while", and the times were said twice
+const testDownRepeatFmt = "after a change of the files defining %[2]s (%[1]s changed), the machine having gone down at it more than once, until %[3]s names %[2]s"
 
 func testDownReleased(kernel string) bool {
 	for _, k := range strings.Split(os.Getenv(testDownReleaseEnv), ",") {
