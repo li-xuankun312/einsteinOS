@@ -830,3 +830,50 @@ func mirrorBranchFile(unitID, f string) ([]byte, bool, string, bool) {
 	mirrorBranchAt[unitID][f] = &b
 	return b, true, br[1], true
 }
+
+const (
+	// %[1]s why a part takes no line out of them, %[2]d the shared files written so far, %[3]s
+	// them, %[4]d all the files the mirror held as the conversations began
+	partSharedFmt = "[THE FILES THIS PART SHARES WITH THE UNIT'S OTHER CONVERSATIONS — measured from the unit's mirror]\neach is %[1]s; a command taking a line out of one, or changing one, has it written back as it was.\n%[2]d of them written in this attempt so far:\n%[3]sall %[4]d file(s) the mirror held as the conversations began are shared alike\n"
+	partSharedMax = 24 // shared files named at most
+)
+
+// partSharedBlock: the files a part's conversation shares with the unit's others, as it starts.
+// 11/25 12:11:52 the embed part (b10706e5) took the port map's 5 duplicate rows out and made
+// src/rt/graph.cpp's fail static, both files the mirror held as the conversations began; the
+// two were written back, and the part learned why with its next command's result, its round spent.
+func partSharedBlock(unitID string) string {
+	mirrorUnitsMu.Lock()
+	u := mirrorUnits[unitID]
+	mirrorUnitsMu.Unlock()
+	if u == nil {
+		return ""
+	}
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if len(u.base) == 0 {
+		return ""
+	}
+	seen := map[string]bool{}
+	var files []string
+	add := func(f string) {
+		if u.base[f] && !seen[f] {
+			seen[f] = true
+			files = append(files, f)
+		}
+	}
+	add(PortMapPath(unitID))
+	for _, w := range u.writes {
+		add(w.File)
+	}
+	sort.Strings(files)
+	var b strings.Builder
+	for i, f := range files {
+		if i == partSharedMax {
+			b.WriteString(fmt.Sprintf(mirrorLinesMoreFmt, len(files)-i))
+			break
+		}
+		b.WriteString("  " + f + "\n")
+	}
+	return fmt.Sprintf(partSharedFmt, mirrorSharedFmt, len(files), b.String(), len(u.base))
+}

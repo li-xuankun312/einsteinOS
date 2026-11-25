@@ -575,7 +575,7 @@ func startIntegrationParts(unitID, parent string, parts []string, body string, f
 	retried := map[string]bool{}
 	prompts := map[string]string{} // addr -> the prompt its part was started with
 	start := func(part string) (SpawnResult, bool) {
-		prompt := spawnPrompt(parent, "work", part, body+partFilesOf(unitID, part, files))
+		prompt := spawnPrompt(parent, "work", part, body+partFilesOf(unitID, part, files)+partSharedBlock(unitID))
 		res, err := spawnConvWith(parent, "work", prompt, kernelPartPolicy(parent))
 		if err != nil {
 			log.Printf(integrationPartsLogFmt, unitID, 0, len(parts), shortID(parent), fmt.Sprintf("%q: %v", part, err))

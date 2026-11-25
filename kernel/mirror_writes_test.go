@@ -582,3 +582,39 @@ func TestAFileTheBranchHasNotIsComparedWithTheMirrorsStart(t *testing.T) {
 		t.Fatalf("%q", got)
 	}
 }
+
+// 11/25 12:11:52 the embed part took the port map's duplicate rows out and made graph.cpp's
+// fail static, both written back: a part starting is given the shared files written so far,
+// the port map among them, and why it takes no line out of them
+func TestAPartStartsKnowingTheFilesItShares(t *testing.T) {
+	resetMirrorUnits()
+	defer resetMirrorUnits()
+	dir := t.TempDir()
+	putTree(t, dir, map[string]string{
+		PortMapPath("uint"): "a\tb\tc\n",
+		"src/rt/graph.cpp":  "bool fail(const char* m) { return false; }\n",
+		"src/other.cpp":     "int x;\n",
+	})
+	noteMirrorConv("uint", dir, "a3e69c50", "")
+	MirrorCommand("a3e69c50", func() string {
+		os.WriteFile(filepath.Join(dir, "src/rt/graph.cpp"), []byte("bool fail(const char* m) { return false; }\nint y;\n"), 0o644)
+		os.WriteFile(filepath.Join(dir, "src/new.cu"), []byte("int z;\n"), 0o644)
+		return ""
+	})
+	got := partSharedBlock("uint")
+	for _, want := range []string{
+		"each is " + mirrorSharedFmt + ";",
+		"2 of them written in this attempt so far:\n  " + PortMapPath("uint") + "\n  src/rt/graph.cpp\n",
+		"all 3 file(s) the mirror held as the conversations began are shared alike",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("lacks %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "src/new.cu") || strings.Contains(got, "src/other.cpp") {
+		t.Fatalf("a file of no one's, or not written, named:\n%s", got)
+	}
+	if partSharedBlock("nounit") != "" {
+		t.Fatal("a unit with no mirror given a block")
+	}
+}
