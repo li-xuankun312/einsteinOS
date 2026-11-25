@@ -442,3 +442,31 @@ func TestAFileTheLinkerNamesByItsBaseNameGoesBackWithWhoseItIs(t *testing.T) {
 		t.Fatalf("a base name two files have was said: %q", got)
 	}
 }
+
+// 11/25 06:31-06:48 src/rt/graph.cpp, a file the mirror held when the conversations began, had
+// been made `static bool fail` by a command, and the compiler's files were said to be no part's:
+// a shared file is said to be shared, with the conversations whose commands changed it
+func TestASharedFileTheCompilerNamesSaysWhoChangedIt(t *testing.T) {
+	resetMirrorUnits()
+	defer resetMirrorUnits()
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "src/rt"), 0o755)
+	os.MkdirAll(filepath.Join(dir, "include/baloon"), 0o755)
+	os.WriteFile(filepath.Join(dir, "src/rt/graph.cpp"), []byte("bool fail(const char* m) { return false; }\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "include/baloon/rt_graph.hpp"), []byte("bool fail(const char* msg);\n"), 0o644)
+	noteMirrorConv("uint", dir, "8c680f2c", "")
+	MirrorCommand("8c680f2c", func() string {
+		os.WriteFile(filepath.Join(dir, "src/rt/graph.cpp"), []byte("static bool fail(const char* m) { return false; }\n"), 0o644)
+		return ""
+	})
+	out := "src/rt/graph.cpp:9:13: error: static declaration of 'fail' follows non-static declaration\ninclude/baloon/rt_graph.hpp:56:6: note: previous declaration is here\n"
+	got := compileErrorOwners("uint", out)
+	for _, want := range []string{
+		"  src/rt/graph.cpp: 1 line(s) named — shared — the mirror held it when the conversations began; changed since by the unit's conversation (conversation 8c680f2c) (the last first)",
+		"  include/baloon/rt_graph.hpp: 1 line(s) named — shared — the mirror held it when the conversations began, and no command of theirs has changed it",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("lacks %q:\n%s", want, got)
+		}
+	}
+}

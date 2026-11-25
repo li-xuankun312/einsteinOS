@@ -80,6 +80,8 @@ type mirrorUnit struct {
 	content map[string][]byte
 	// base: the files the mirror held when its conversations began — shared, no part's own
 	base map[string]bool
+	// start: each base file's bytes when the conversations began (at most mirrorKeepMax each)
+	start map[string][]byte
 }
 
 // mirrorKeepMax: a file larger than this is not kept and cannot be written back.
@@ -133,6 +135,10 @@ func noteMirrorConv(unitID, dir, conv, part string) {
 			u.base[f] = true
 		}
 		u.keep(all)
+		u.start = make(map[string][]byte, len(u.content))
+		for f, b := range u.content {
+			u.start[f] = b
+		}
 		mirrorUnits[unitID] = u
 	}
 	u.part[conv] = part
@@ -612,6 +618,25 @@ func partWroteOthersBy(unitID, conv, part string, files map[string][]string) []s
 // whose: the part whose file f is in the unit's mirror — first written by its conversation, or
 // given it by the planner. Called with u.mu held.
 func (u *mirrorUnit) whose(f string) string {
+	if u.base[f] {
+		// shared: who changed it this attempt, not "no conversation has written it" — 11/25
+		// 06:31-06:48 src/rt/graph.cpp, which a command had made `static bool fail`, was said to be
+		// no part's three times
+		var by []string
+		seen := map[string]bool{}
+		for i := len(u.writes) - 1; i >= 0; i-- {
+			w := u.writes[i]
+			if w.File != f || seen[w.Conv] {
+				continue
+			}
+			seen[w.Conv] = true
+			by = append(by, fmt.Sprintf(mirrorChangedByFmt, partName(u.part[w.Conv]), shortID(w.Conv)))
+		}
+		if len(by) == 0 {
+			return mirrorSharedUnchangedFmt
+		}
+		return fmt.Sprintf(mirrorSharedChangedFmt, strings.Join(by, ", "))
+	}
 	if o, ok := u.owner[f]; ok {
 		return fmt.Sprintf(mirrorOwnedByFmt, partName(u.part[o]), shortID(o))
 	}
@@ -620,6 +645,15 @@ func (u *mirrorUnit) whose(f string) string {
 	}
 	return "no part's (no conversation of the unit has written it)"
 }
+
+const (
+	// a file the mirror held when the conversations began that no command of theirs changed
+	mirrorSharedUnchangedFmt = "shared — the mirror held it when the conversations began, and no command of theirs has changed it"
+	// %[1]s the conversations that changed it, the last first
+	mirrorSharedChangedFmt = "shared — the mirror held it when the conversations began; changed since by %[1]s (the last first)"
+	// %[1]s the part, %[2]s the conversation
+	mirrorChangedByFmt = "%[1]s (conversation %[2]s)"
+)
 
 const (
 	// %[1]s the gate, %[2]d files, %[3]s them with whose they are
