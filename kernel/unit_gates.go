@@ -104,8 +104,11 @@ const (
 	gateISAUnmeasuredFmt   = "isa_unmeasured: the reference builds %[1]s with %[2]s, and the binaries could not be disassembled (%[3]s)"
 	gateToolchainUnusedFmt = "toolchain_unused: the unit is GPU work but no process of build.sh ran a program from %[1]s (programs that ran: %[2]s) — a build that skips the toolchain proves nothing"
 	// %[1]d rows, %[2]s them, %[3]s the missing prefix
-	gateKernelUnportedRowsFmt  = "; %[1]d row(s) of the port map do not count: %[2]s — a kernel for a tensor group the planner's missing lines give the integration unit is written in a row whose first column is %[3]s<group>"
-	gateKernelUnportedFmt      = "kernel_unported: %[1]s define __global__ kernels (%[2]s) and are neither test files nor files the unit's port map %[3]s writes a counterpart into"
+	gateKernelUnportedRowsFmt = "; %[1]d row(s) of the port map do not count: %[2]s — a kernel for a tensor group the planner's missing lines give the integration unit is written in a row whose first column is %[3]s<group>"
+	// %[1]d files, %[2]s each with its kernels, %[3]s the port map
+	gateKernelUnportedFmt = "kernel_unported: %[1]d file(s) define __global__ kernels and are neither test files nor files the unit's port map %[3]s writes a counterpart into: %[2]s"
+	// %[1]s the file, %[2]s its kernels
+	gateKernelUnportedFileFmt  = "%[1]s (%[2]s)"
 	gateGPUKernelMissingFmt    = "gpu_kernel_missing: the unit's modules come from CUDA sources in the reference (%[1]s) but its CUDA files define no __global__ kernel: %[2]s — a host header about a kernel is not the kernel; kernels its port map %[3]s names: %[4]d; kernels its test launched: %[5]s"
 	gateKernelNotLaunchedFmt   = "gpu_kernel_not_launched: test.sh exited 0 but launched none of the unit's kernels (%[1]s); kernels its processes launched: %[2]s; executables the launch probe was in: %[3]s — a test that opens the device and checks on the CPU proves nothing about the kernels"
 	gateLaunchUnmeasuredFmt    = "gpu_launch_unmeasured: whether the unit's kernels ran on the device could not be measured: %[1]s"
@@ -175,17 +178,23 @@ func unitGatesAll(in GateInput) (kinds, texts []string) {
 	// 11/09 15:32 unit ucc74f228b9 added src/kernels/cuda/ucc7_geometry.cu and 11/10 unit
 	// u61716a9a8a src/kernels/cuda/verify_commit_dev.cu, each to pass gpu_kernel_missing
 	if in.PortFiles != nil {
-		var files, names []string
+		var files []string
 		for f, ks := range in.Kernels {
 			if len(ks) > 0 && !isTestPath(f) && !in.PortFiles[f] {
 				files = append(files, f)
-				names = append(names, ks...)
 			}
 		}
 		if len(files) > 0 {
 			sort.Strings(files)
-			sort.Strings(names)
-			t := fmt.Sprintf(gateKernelUnportedFmt, strings.Join(files, ", "), shortList(names, 12), PortMapPath(in.UnitID))
+			// each file with every kernel it defines: 11/25 06:27:29 nine files' 38 kernels were
+			// given as one list cut at 12, "(+26 more)", with no file to any of them
+			var each []string
+			for _, f := range files {
+				ks := append([]string(nil), in.Kernels[f]...)
+				sort.Strings(ks)
+				each = append(each, fmt.Sprintf(gateKernelUnportedFileFmt, f, strings.Join(ks, " ")))
+			}
+			t := fmt.Sprintf(gateKernelUnportedFmt, len(files), strings.Join(each, "; "), PortMapPath(in.UnitID))
 			if len(in.PortFilesRefused) > 0 {
 				t += fmt.Sprintf(gateKernelUnportedRowsFmt, len(in.PortFilesRefused), shortList(in.PortFilesRefused, 12), integrationMissingPrefix)
 			}

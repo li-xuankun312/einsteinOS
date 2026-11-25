@@ -1,6 +1,7 @@
 package kernel
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -36,5 +37,21 @@ func TestTheIntegrationUnitsPortRowsAreChecked(t *testing.T) {
 	kinds, texts := unitGatesAll(in)
 	if len(kinds) == 0 || kinds[0] != "kernel_unported" || !strings.Contains(texts[0], "2 row(s) of the port map do not count") {
 		t.Fatalf("%v %v", kinds, texts)
+	}
+}
+
+// 11/25 06:27:29 nine files' 38 kernels were given as one list cut at 12: each file is given
+// with every kernel it defines
+func TestTheUnportedKernelsAreGivenWithTheirFiles(t *testing.T) {
+	ks := map[string][]string{}
+	for i := 0; i < 20; i++ {
+		ks["src/a.cu"] = append(ks["src/a.cu"], fmt.Sprintf("a%02d_kernel", i))
+	}
+	ks["src/b.cu"] = []string{"z_kernel", "b_kernel"}
+	in := GateInput{UnitID: "uint", PortFiles: map[string]bool{}, Kernels: ks}
+	_, texts := unitGatesAll(in)
+	if len(texts) == 0 || !strings.Contains(texts[0], "kernel_unported: 2 file(s) define") || !strings.Contains(texts[0], "a19_kernel)") ||
+		!strings.Contains(texts[0], "; src/b.cu (b_kernel z_kernel)") || strings.Contains(texts[0], "more)") {
+		t.Fatalf("%v", texts)
 	}
 }
