@@ -13,6 +13,7 @@ package kernel
 import (
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 )
@@ -21,7 +22,8 @@ type mirrorVerifier struct {
 	mu      sync.Mutex
 	fn      func() (bool, string) // the unit's done-line check (dev_run.go)
 	running bool
-	dirty   bool // the mirror changed since the running verification began
+	dirty   bool     // the mirror changed since the running verification began
+	during  []string // what was written since the running verification began, with whose and when
 	report  string
 	seq     int
 	heard   map[string]int // conv -> the report it was given
@@ -59,11 +61,16 @@ const (
 	// %[1]s the gate
 	mirrorEndUnchangedFmt   = "the mirror's files are those of the last rejected verification (gate=%[1]s) again; the attempt ends and the tree is judged"
 	mirrorEndBranchMovedFmt = "the branch changed files of the mirror's delta since the unit started; nothing written now can be verified, and the unit runs again"
+	// %[1]s when it began, %[2]d how many, %[3]s the writes
+	mirrorVerifyDuringFmt = "\n[WRITTEN AFTER THIS VERIFICATION BEGAN AT %[1]s — not in what it ran on; another verification follows]\n%[2]d write(s): %[3]s\n"
+	// %[1]s the file, %[2]s whose, %[3]s when
+	mirrorVerifyDuringItemFmt = "%[1]s by %[2]s at %[3]s"
+	mirrorVerifyDuringMax     = 12 // writes named at most
 )
 
 // mirrorChanged starts unitID's verification when none runs, or marks the running one stale so
-// that another follows it.
-func mirrorChanged(unitID string) {
+// that another follows it; wrote is what the change wrote, each "file by whose".
+func mirrorChanged(unitID string, wrote ...string) {
 	v := mirrorVerifierOf(unitID)
 	if v == nil {
 		return
@@ -71,6 +78,11 @@ func mirrorChanged(unitID string) {
 	v.mu.Lock()
 	if v.running {
 		v.dirty = true
+		now := time.Now().UTC().Format("15:04:05")
+		for _, w := range wrote {
+			f, who, _ := strings.Cut(w, " by ")
+			v.during = append(v.during, fmt.Sprintf(mirrorVerifyDuringItemFmt, f, who, now))
+		}
 		v.mu.Unlock()
 		return
 	}
@@ -79,6 +91,7 @@ func mirrorChanged(unitID string) {
 	go func() {
 		for {
 			log.Printf(mirrorVerifyStartFmt, unitID)
+			began := time.Now().UTC().Format("15:04:05")
 			end, report := v.fn()
 			at := time.Now().UTC().Format("15:04:05")
 			if end && report == "" {
@@ -86,9 +99,16 @@ func mirrorChanged(unitID string) {
 			}
 			v.mu.Lock()
 			if report != "" {
+				// what was written while it ran is not in it: 11/25 12:23:44 the verification
+				// begun about 12:16 passed its compile, and embed (b10706e5) had written
+				// embed_parity.cu's second e2e_embed_main since — 12:32:45 failed on it
+				if len(v.during) > 0 {
+					report += fmt.Sprintf(mirrorVerifyDuringFmt, began, len(v.during), shortList(v.during, mirrorVerifyDuringMax))
+				}
 				v.seq++
 				v.report = fmt.Sprintf(mirrorVerifyReportFmt, at, report)
 			}
+			v.during = nil
 			again := v.dirty
 			v.dirty = false
 			if !again {

@@ -76,3 +76,55 @@ func TestADoneLinesVerificationGoesToTheUnitsParts(t *testing.T) {
 		t.Fatalf("the unit's own conversation had it as its done line's answer: %q", own)
 	}
 }
+
+// 11/25 12:23:44 the verification begun about 12:16 passed its compile, and embed (b10706e5)
+// had written embed_parity.cu's second e2e_embed_main since: what was written while a
+// verification ran is named with its report, whose and when, as not in it
+func TestWhatWasWrittenWhileAVerificationRanIsNamedWithIt(t *testing.T) {
+	resetMirrorUnits()
+	defer resetMirrorUnits()
+	dir := t.TempDir()
+	noteMirrorConv("uint", dir, "a3e69c50", "")
+	noteMirrorConv("uint", dir, "b10706e5", "embed: the token embedding")
+	began := make(chan bool, 1)
+	release := make(chan bool, 4)
+	var calls int32
+	registerMirrorVerify("uint", func() (bool, string) {
+		if atomic.AddInt32(&calls, 1) == 1 {
+			began <- true
+		}
+		<-release
+		return false, "compile=pass smoke=pass gate=kernel_unported"
+	})
+	defer registerMirrorVerify("uint", nil)
+	MirrorCommand("a3e69c50", func() string { os.WriteFile(filepath.Join(dir, "a.cu"), []byte("1"), 0o644); return "" })
+	<-began
+	MirrorCommand("b10706e5", func() string {
+		os.MkdirAll(filepath.Join(dir, "tests"), 0o755)
+		os.WriteFile(filepath.Join(dir, "tests/embed_parity.cu"), []byte("int e2e_embed_main() { return 0; }\n"), 0o644)
+		return ""
+	})
+	release <- true
+	deadline := time.Now().Add(5 * time.Second)
+	for mirrorVerifierOf("uint").seq < 1 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	v := mirrorVerifierOf("uint")
+	v.mu.Lock()
+	first := v.report
+	v.mu.Unlock()
+	release <- true
+	if !strings.Contains(first, "[WRITTEN AFTER THIS VERIFICATION BEGAN AT ") ||
+		!strings.Contains(first, "1 write(s): tests/embed_parity.cu by embed (conversation b10706e5) at ") {
+		t.Fatalf("%q", first)
+	}
+	for mirrorVerifierOf("uint").seq < 2 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	v.mu.Lock()
+	second := v.report
+	v.mu.Unlock()
+	if strings.Contains(second, "WRITTEN AFTER") {
+		t.Fatalf("the verification that ran on them still said them: %q", second)
+	}
+}

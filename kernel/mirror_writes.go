@@ -230,7 +230,11 @@ func MirrorCommand(conv string, run func() string) string {
 	u.keep(kept)
 	if len(said) > 0 {
 		log.Printf(mirrorWroteFmt, shortID(conv), partName(u.part[conv]), len(said), strings.Join(said, " "))
-		mirrorChanged(u.unit)
+		var wrote []string
+		for _, f := range said {
+			wrote = append(wrote, fmt.Sprintf("%s by %s (conversation %s)", f, partName(u.part[conv]), shortID(conv)))
+		}
+		mirrorChanged(u.unit, wrote...)
 	}
 	out += mirrorVerifyNews(u.unit, conv)
 	out += u.sinceHeard(conv)
