@@ -568,7 +568,7 @@ func runUnitTestStage(ws, unitID, gpuUsable string, req UnitRequirements, change
 	// went down with is as it was, it is not run again (test_down.go)
 	if d, r, first := noteTestDown(ws, unitID); d != nil {
 		if same, why := testDownSame(ws, d, r, first); same {
-			text := fmt.Sprintf(gateMachineDownFmt, testDownFact(d, r), why)
+			text := fmt.Sprintf(gateMachineDownFmt, testDownFact(d, r), why, testDownHistory(ws, r))
 			res.Smoke = "skipped"
 			res.Gates, res.Gate, res.GateText = []string{"machine_down_during_test"}, "machine_down_during_test", text
 			log.Printf("dev_verify: unit %s: %s", unitID, text)

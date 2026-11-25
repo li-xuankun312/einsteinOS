@@ -230,3 +230,33 @@ func TestTheProgramTheMachineWentDownInRunsAloneOnOneGPUFirst(t *testing.T) {
 		t.Fatalf("down in the program alone: %+v", d2)
 	}
 }
+
+// the gate a held test.sh fails with names each time the crash notes hold of the machine going
+// down at that kernel — when, in what, its files' sha256 then — and those files now
+func TestAHeldTestNamesEachTimeTheMachineWentDownAtItsKernel(t *testing.T) {
+	ws, crash, _, prog := downFixture(t)
+	os.Remove(prog)
+	bootAt(t, time.Now().Add(time.Minute))
+	fakeCudaProgram(t, filepath.Join(ws, "build"))
+	test := ".einsteinOS/verify/uint/test.sh"
+	os.MkdirAll(filepath.Join(ws, filepath.Dir(test)), 0o755)
+	os.WriteFile(filepath.Join(ws, test), []byte("true\n"), 0o755)
+	saveTestDownRecord(filepath.Join(crash, "einsteinos-down-1.json"),
+		&testDownRecord{Unit: "uint", Test: test, At: "2026/11/24 17:40:14.827", Kernel: "other_kernel", Sources: map[string]string{"src/other.cu": "0121486c9eaf9a10d95e"}})
+	ran := withRunner(t, func(string) (int, string) { return 0, "" })
+	res := runUnitTestStage(ws, "uint", "", UnitRequirements{}, nil, time.Minute, time.Minute, "", ".einsteinOS/verify/uint/build.sh", test,
+		VerifyResult{Compile: "pass", Smoke: "missing", TestExit: -1}, time.Now())
+	h, _ := fileSHA256(filepath.Join(ws, "src", "other.cu"))
+	for _, want := range []string{
+		"the machine went down at other_kernel 2 time(s) on the crash notes: ",
+		"2026/11/24 17:40:14.827 in " + test + " (src/other.cu 0121486c9eaf)",
+		"those files now: src/other.cu " + h[:12],
+	} {
+		if !strings.Contains(res.GateText, want) {
+			t.Fatalf("gate lacks %q:\n%s", want, res.GateText)
+		}
+	}
+	if len(*ran) != 0 {
+		t.Fatalf("held, but ran: %v", *ran)
+	}
+}

@@ -307,7 +307,51 @@ func noteTestDown(ws, unitID string) (*testDown, *testDownRecord, bool) {
 
 // gateMachineDownFmt: the verification's gate when test.sh is not run because the machine went
 // down in the last one and what it went down with is as it was.
-const gateMachineDownFmt = "machine_down_during_test: %[1]s — test.sh is not run again while %[2]s"
+const gateMachineDownFmt = "machine_down_during_test: %[1]s — test.sh is not run again while %[2]s%[3]s"
+
+// testDownHistoryFmt: each time the crash notes hold of the machine going down at the kernel —
+// when, in what, the sha256 of the files defining it then — and those files now.
+const (
+	testDownHistoryFmt = "; the machine went down at %[1]s %[2]d time(s) on the crash notes: %[3]s; those files now: %[4]s"
+	testDownOnceFmt    = "%[1]s in %[2]s (%[3]s)"
+)
+
+// testDownHistory: testDownHistoryFmt for r's kernel, "" when no time is kept for it.
+func testDownHistory(ws string, r *testDownRecord) string {
+	if r == nil || r.Kernel == "" {
+		return ""
+	}
+	downs := testDownsOfKernel(crashDir(), r.Kernel)
+	if len(downs) == 0 {
+		return ""
+	}
+	var times []string
+	for _, x := range downs {
+		times = append(times, fmt.Sprintf(testDownOnceFmt, x.At, x.Test, shaList(x.Sources)))
+	}
+	now := map[string]string{}
+	for _, p := range sourcePaths(r.Sources) {
+		h, ok := fileSHA256(filepath.Join(ws, p))
+		if !ok {
+			h = "absent"
+		}
+		now[p] = h
+	}
+	return fmt.Sprintf(testDownHistoryFmt, r.Kernel, len(downs), strings.Join(times, "; "), shaList(now))
+}
+
+// shaList: "path sha256[:12], …" (a value shorter than 12 is given whole).
+func shaList(m map[string]string) string {
+	var out []string
+	for _, p := range sourcePaths(m) {
+		h := m[p]
+		if len(h) > 12 {
+			h = h[:12]
+		}
+		out = append(out, p+" "+h)
+	}
+	return strings.Join(out, ", ")
+}
 
 // testDownSame: whether what the machine went down with is as it was — the files defining the
 // kernel its probe noted last, else that executable as the build makes it — and what was compared.
