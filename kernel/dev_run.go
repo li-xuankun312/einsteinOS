@@ -630,7 +630,14 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 			}
 			return false, report
 		}
-		check := func() (bool, string) { return checkFrom(false) }
+		check := func() (bool, string) {
+			end, rep := checkFrom(false)
+			if unit.Integration && !end {
+				// what the done line was answered goes to the unit's parts too (mirror_verify.go)
+				mirrorVerifyShare(unit.ID, rep)
+			}
+			return end, rep
+		}
 		RegisterPreVerify(role, check)
 		if unit.Integration {
 			// a change of the mirror by any of the unit's conversations is verified too

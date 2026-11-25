@@ -120,3 +120,38 @@ func mirrorVerifyNews(unitID, conv string) string {
 // delta as the last verification had it counted as a done line with nothing changed (1 of 3),
 // the third of which ends the attempt
 const preVerifyMirrorSameFmt = "dev_preverify: %[1]s unit %[2]s: the mirror changed but its files are those of the last rejected verification (gate=%[3]q) — not verified again, and not a done line"
+
+// %[1]s when, %[2]s the report
+const mirrorVerifyDoneReportFmt = "\n[THE KERNEL'S VERIFICATION OF THE UNIT'S MIRROR — run at %[1]s at the done line of the unit's own conversation]\n%[2]s"
+
+// mirrorVerifyShare: the report of a verification run at the done line of the unit's own
+// conversation, carried to the unit's other conversations with their next command's result —
+// the unit's own conversation had it as its done line's answer. 11/25 04:23:56 the verification
+// held test.sh on src/ix_router_top10_wave.cu and its text went to the integration conversation
+// alone; a mirror change's verification went to every conversation of the unit.
+func mirrorVerifyShare(unitID, report string) {
+	v := mirrorVerifierOf(unitID)
+	if v == nil || report == "" {
+		return
+	}
+	var own []string
+	mirrorUnitsMu.Lock()
+	u := mirrorUnits[unitID]
+	mirrorUnitsMu.Unlock()
+	if u != nil {
+		u.mu.Lock()
+		for conv, part := range u.part {
+			if part == "" {
+				own = append(own, conv)
+			}
+		}
+		u.mu.Unlock()
+	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.seq++
+	v.report = fmt.Sprintf(mirrorVerifyDoneReportFmt, time.Now().UTC().Format("15:04:05"), report)
+	for _, c := range own {
+		v.heard[c] = v.seq
+	}
+}

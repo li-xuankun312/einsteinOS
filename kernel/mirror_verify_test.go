@@ -52,3 +52,27 @@ func TestTheMirrorIsVerifiedWhenItChanges(t *testing.T) {
 		t.Fatalf("told twice: %q", out)
 	}
 }
+
+// 11/25 04:23:56 a done line's verification held test.sh on the router part's file and its
+// text reached the integration conversation alone: it goes to the unit's other conversations
+// with their next command's result, and not again to the unit's own
+func TestADoneLinesVerificationGoesToTheUnitsParts(t *testing.T) {
+	resetMirrorUnits()
+	defer resetMirrorUnits()
+	defer registerMirrorVerify("uint", nil)
+	dir := t.TempDir()
+	registerMirrorVerify("uint", func() (bool, string) { return false, "" })
+	noteMirrorConv("uint", dir, "8c680f2c", "")
+	noteMirrorConv("uint", dir, "a6d47c28", "router: z")
+	mirrorVerifyShare("uint", "machine_down_during_test: x")
+	got := mirrorVerifyNews("uint", "a6d47c28")
+	if !strings.Contains(got, "at the done line of the unit's own conversation]\nmachine_down_during_test: x") {
+		t.Fatalf("part: %q", got)
+	}
+	if again := mirrorVerifyNews("uint", "a6d47c28"); again != "" {
+		t.Fatalf("given twice: %q", again)
+	}
+	if own := mirrorVerifyNews("uint", "8c680f2c"); own != "" {
+		t.Fatalf("the unit's own conversation had it as its done line's answer: %q", own)
+	}
+}
