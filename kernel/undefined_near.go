@@ -63,51 +63,9 @@ func undefinedRefNear(ws, out string) string {
 	if len(names) == 0 {
 		return ""
 	}
-	nm, err := exec.LookPath("nm")
-	if err != nil {
+	defs := objectFuncDefs(ws, func(b string) bool { return want[b] != nil })
+	if defs == nil {
 		return ""
-	}
-	var objs []string
-	_ = filepath.WalkDir(ws, func(p string, e fs.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if e.IsDir() && e.Name() == ".git" {
-			return filepath.SkipDir
-		}
-		if !e.IsDir() && strings.HasSuffix(p, ".o") && len(objs) < undefinedNearObjMax {
-			objs = append(objs, p)
-		}
-		return nil
-	})
-	if len(objs) == 0 {
-		return ""
-	}
-	sort.Strings(objs)
-	defs := map[string][]string{} // base name -> "sym\x00object"
-	for i := 0; i < len(objs); i += 200 {
-		j := min(i+200, len(objs))
-		args := append([]string{"-C", "-A", "--defined-only"}, objs[i:j]...)
-		b, _ := exec.Command(nm, args...).Output()
-		sc := bufio.NewScanner(bytes.NewReader(b))
-		sc.Buffer(make([]byte, 64*1024), 1024*1024)
-		for sc.Scan() {
-			// "<object>:<value> <type> <symbol>"
-			l := sc.Text()
-			c := strings.Index(l, ".o:")
-			if c < 0 {
-				continue
-			}
-			obj, rest := l[:c+2], strings.Fields(l[c+3:])
-			if len(rest) < 3 || !strings.ContainsAny(rest[1], "TtWw") {
-				continue
-			}
-			sym := strings.Join(rest[2:], " ")
-			if b := funcBaseName(sym); want[b] != nil {
-				rel, _ := filepath.Rel(ws, obj)
-				defs[b] = append(defs[b], sym+"\x00"+filepath.ToSlash(rel))
-			}
-		}
 	}
 	var lb strings.Builder
 	n := 0
@@ -125,7 +83,8 @@ func undefinedRefNear(ws, out string) string {
 				if n == undefinedNearMax {
 					break
 				}
-				sym, obj, _ := strings.Cut(d, "\x00")
+				sym, rest, _ := strings.Cut(d, "\x00")
+				obj, _, _ := strings.Cut(rest, "\x00")
 				lb.WriteString(fmt.Sprintf(undefinedNearLineFmt, ref, sym, obj))
 				n++
 			}
@@ -225,4 +184,57 @@ func multipleDefNear(ws, out string) string {
 		}
 	}
 	return fmt.Sprintf(multipleDefFmt, b.String())
+}
+
+// objectFuncDefs: the functions the workspace's object files define (nm -C, types T t W w)
+// whose base name keep accepts, by base name, each "symbol\x00object\x00type"; nil when nm is
+// not here or no object file was written.
+func objectFuncDefs(ws string, keep func(base string) bool) map[string][]string {
+	nm, err := exec.LookPath("nm")
+	if err != nil {
+		return nil
+	}
+	var objs []string
+	_ = filepath.WalkDir(ws, func(p string, e fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if e.IsDir() && e.Name() == ".git" {
+			return filepath.SkipDir
+		}
+		if !e.IsDir() && strings.HasSuffix(p, ".o") && len(objs) < undefinedNearObjMax {
+			objs = append(objs, p)
+		}
+		return nil
+	})
+	if len(objs) == 0 {
+		return nil
+	}
+	sort.Strings(objs)
+	defs := map[string][]string{}
+	for i := 0; i < len(objs); i += 200 {
+		j := min(i+200, len(objs))
+		args := append([]string{"-C", "-A", "--defined-only"}, objs[i:j]...)
+		b, _ := exec.Command(nm, args...).Output()
+		sc := bufio.NewScanner(bytes.NewReader(b))
+		sc.Buffer(make([]byte, 64*1024), 1024*1024)
+		for sc.Scan() {
+			// "<object>:<value> <type> <symbol>"
+			l := sc.Text()
+			c := strings.Index(l, ".o:")
+			if c < 0 {
+				continue
+			}
+			obj, rest := l[:c+2], strings.Fields(l[c+3:])
+			if len(rest) < 3 || !strings.ContainsAny(rest[1], "TtWw") {
+				continue
+			}
+			sym := strings.Join(rest[2:], " ")
+			if b := funcBaseName(sym); keep(b) {
+				rel, _ := filepath.Rel(ws, obj)
+				defs[b] = append(defs[b], sym+"\x00"+filepath.ToSlash(rel)+"\x00"+rest[1])
+			}
+		}
+	}
+	return defs
 }

@@ -1,6 +1,9 @@
 package kernel
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -29,5 +32,31 @@ func TestAHeaderStubOfARenamedTestMainIsAGate(t *testing.T) {
 	putTree(t, ws2, map[string]string{"include/a.hpp": "inline int e2e_embed_main() { return 0; }\n"})
 	if s := entryStubs(ws2, unitBuildScript("uint1")); len(s) != 0 {
 		t.Fatalf("%q", s)
+	}
+}
+
+// the object the rename made defines the entry: nm's measurement is given with the stub,
+// where the header's comment said the toolchain did not export it
+func TestWhatTheRenameMadeIsMeasuredBesideTheStub(t *testing.T) {
+	if _, err := exec.LookPath("c++"); err != nil {
+		t.Skip("no C++ compiler")
+	}
+	if _, err := exec.LookPath("nm"); err != nil {
+		t.Skip("no nm")
+	}
+	ws := t.TempDir()
+	putTree(t, ws, map[string]string{
+		".einsteinOS/verify/uint1/build.sh": "cuobj tests/embed_parity.cpp \"$OBJ/e2e_embed.o\" -Dmain=e2e_embed_main\n",
+		"include/kg.hpp":                    "inline int e2e_embed_main() { return 0; }\n",
+		"tests/embed_parity.cpp":            "int main() { return 1; }\n",
+	})
+	obj := filepath.Join(ws, "build", ".obj")
+	os.MkdirAll(obj, 0o755)
+	if out, err := exec.Command("c++", "-c", "-Dmain=e2e_embed_main", "-o", filepath.Join(obj, "e2e_embed.o"), filepath.Join(ws, "tests/embed_parity.cpp")).CombinedOutput(); err != nil {
+		t.Fatalf("%v %s", err, out)
+	}
+	got := entryStubs(ws, unitBuildScript("uint1"))
+	if len(got) != 1 || !strings.HasSuffix(got[0], "; measured with nm -C, the build's object files define it: build/.obj/e2e_embed.o (e2e_embed_main())") {
+		t.Fatalf("%q", got)
 	}
 }

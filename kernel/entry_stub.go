@@ -18,6 +18,8 @@ import (
 	"strings"
 )
 
+var stubNameRe = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_]*)\s*\(`)
+
 // the headers a stub is looked for in
 var stubHeaderExts = map[string]bool{".h": true, ".hh": true, ".hpp": true, ".cuh": true, ".inl": true, ".inc": true}
 
@@ -26,7 +28,11 @@ const (
 	// %[1]s the header, %[2]d its line, %[3]s the definition, %[4]s the script line making the entry
 	entryStubLineFmt = "%[1]s:%[2]d: %[3]s — while %[4]s makes it of a test's main"
 	// %[1]d how many, %[2]s the lines
-	gateEntryStubFmt = "entry_stubbed: %[1]d header definition(s) give, inline and returning a constant, an entry build.sh makes of a test's main by -Dmain=; a source including the header may be compiled to the constant and never run the test:\n%[2]s"
+	// %[1]s the objects
+	entryStubObjsFmt = "; measured with nm -C, the build's object files define it: %[1]s"
+	// what nm found when no object defines it strongly
+	entryStubNoObjText = "; measured with nm -C, no object file of the build defines it but by this header"
+	gateEntryStubFmt   = "entry_stubbed: %[1]d header definition(s) give, inline and returning a constant, an entry build.sh makes of a test's main by -Dmain=; a source including the header may be compiled to the constant and never run the test:\n%[2]s"
 )
 
 // renamedEntries: the names the build scripts' -D<macro>=<name> make of main, each with the
@@ -86,6 +92,31 @@ func entryStubs(ws, build string) []string {
 		}
 		return nil
 	})
+	if len(out) > 0 {
+		// what the rename made, measured: 11/25 the header's comment said COREX clang-16 "does not
+		// reliably export main() renamed via -Dmain=e2e_embed_main", and the embed conversation
+		// (b10706e5) wrote it by hand on that comment alone
+		defs := objectFuncDefs(ws, func(b string) bool { _, ok := entries[b]; return ok })
+		if defs != nil {
+			for i, l := range out {
+				name := l[strings.Index(l, "inline"):]
+				name = stubNameRe.FindStringSubmatch(name)[1]
+				var strong []string
+				for _, d := range defs[name] {
+					parts := strings.SplitN(d, "\x00", 3)
+					if len(parts) == 3 && strings.ContainsAny(parts[2], "Tt") {
+						strong = append(strong, parts[1]+" ("+parts[0]+")")
+					}
+				}
+				if len(strong) > 0 {
+					sort.Strings(strong)
+					out[i] += fmt.Sprintf(entryStubObjsFmt, shortList(strong, 4))
+				} else {
+					out[i] += entryStubNoObjText
+				}
+			}
+		}
+	}
 	sort.Strings(out)
 	if len(out) > entryStubMax {
 		out = out[:entryStubMax]
