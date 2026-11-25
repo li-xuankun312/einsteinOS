@@ -38,6 +38,11 @@ const (
 	// %[1]d the line number, %[2]s the line
 	cmdlineMacroByHandLineFmt = "      %[1]d: %[2]s\n"
 	cmdlineMacroByHandMax     = 6 // lines of the file given at most
+	// %[1]s the macro, %[2]s what it becomes in the end, %[3]s each step with its line
+	cmdlineMacroChainFmt = "    %[1]s becomes %[2]s in the end, each -D's name being itself a macro of the scripts: %[3]s\n"
+	// %[1]s the macro, %[2]s its name, %[3]s the script line
+	cmdlineMacroStepFmt  = "-D%[1]s=%[2]s (%[3]s)"
+	cmdlineMacroChainMax = 4 // steps followed at most
 )
 
 var macroValueRe = regexp.MustCompile(`-D([A-Za-z_][A-Za-z0-9_]*)=([A-Za-z_][A-Za-z0-9_]*)`)
@@ -197,6 +202,12 @@ func cmdlineMacroNear(ws, build, out string) string {
 			}
 			b.WriteString(fmt.Sprintf(cmdlineMacroLineFmt, d.script, d.n, d.text))
 		}
+		// a -D's name that is itself a -D of the scripts: 11/25 16:47:21 -Dmain=e2e_embed_main
+		// (build.sh:147) and -De2e_embed_main=e2e_embed_main_ (build.sh:31) made both main and
+		// the hand-written e2e_embed_main into e2e_embed_main_, and each was given alone
+		if chain := macroChain(ws, scripts, u.macro, defs); chain != "" {
+			b.WriteString(chain)
+		}
 		// the name the rename makes, written in the file by hand as well: 11/25 12:32:45
 		// embed_parity.cu:133 wrote e2e_embed_main() beside the main -Dmain= renamed into it
 		seenVal := map[string]bool{}
@@ -220,4 +231,32 @@ func cmdlineMacroNear(ws, build, out string) string {
 		}
 	}
 	return fmt.Sprintf(cmdlineMacroFmt, b.String())
+}
+
+// macroChain: what macro becomes when the name a -D gives it is itself a -D of the scripts,
+// followed step by step; "" when it is one step.
+func macroChain(ws string, scripts []string, macro string, defs []scriptLine) string {
+	var steps []string
+	cur, seen := macro, map[string]bool{macro: true}
+	lines := defs
+	for len(steps) < cmdlineMacroChainMax {
+		next, at := "", ""
+		for _, d := range lines {
+			if v := macroValue(d.text, cur); v != "" {
+				next, at = v, fmt.Sprintf("%s:%d", d.script, d.n)
+				break
+			}
+		}
+		if next == "" || seen[next] {
+			break
+		}
+		steps = append(steps, fmt.Sprintf(cmdlineMacroStepFmt, cur, next, at))
+		seen[next] = true
+		cur = next
+		lines = macroDefLines(ws, scripts, cur)
+	}
+	if len(steps) < 2 {
+		return ""
+	}
+	return fmt.Sprintf(cmdlineMacroChainFmt, macro, cur, strings.Join(steps, ", then "))
 }

@@ -82,3 +82,22 @@ func TestACommentOfTheBuildScriptIsNoDefinition(t *testing.T) {
 		t.Fatalf("%s", got)
 	}
 }
+
+// 11/25 16:47:21 -Dmain=e2e_embed_main (build.sh:147) and -De2e_embed_main=e2e_embed_main_
+// (build.sh:31) made main e2e_embed_main_: what main becomes in the end is given, step by step
+func TestWhatAMacroBecomesThroughAnotherIsGiven(t *testing.T) {
+	ws := t.TempDir()
+	putTree(t, ws, map[string]string{
+		".einsteinOS/verify/uint1/build.sh": "case \"$f\" in *embed_parity*) \"$CLANG\" -De2e_embed_main=e2e_embed_main_ \"$@\" -c \"$f\" -o \"$o\" ;; esac\n" +
+			"cuobj $T/embed_parity.cu \"$OBJ/e2e_embed.o\" -Dmain=e2e_embed_main\n",
+	})
+	got := cmdlineMacroNear(ws, ".einsteinOS/verify/uint1/build.sh", embedRedefOut)
+	want := "    main becomes e2e_embed_main_ in the end, each -D's name being itself a macro of the scripts: -Dmain=e2e_embed_main (.einsteinOS/verify/uint1/build.sh:2), then -De2e_embed_main=e2e_embed_main_ (.einsteinOS/verify/uint1/build.sh:1)\n"
+	if !strings.Contains(got, want) {
+		t.Fatalf("lacks %q:\n%s", want, got)
+	}
+	// one step: nothing said of a chain
+	if got := cmdlineMacroNear(embedRedefTree(t), ".einsteinOS/verify/uint1/build.sh", embedRedefOut); strings.Contains(got, "in the end") {
+		t.Fatalf("%s", got)
+	}
+}
