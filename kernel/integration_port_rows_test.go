@@ -30,7 +30,7 @@ func TestTheIntegrationUnitsPortRowsAreChecked(t *testing.T) {
 		t.Fatalf("files %v", files)
 	}
 	all := strings.Join(refused, "\n")
-	if len(refused) != 2 || !strings.Contains(all, "check → src/kernels/gpu/gdn_layer.cu gdn_ssm_norm_kernel (no unit ports check as a kernel)") || !strings.Contains(all, "missing:model.visual.patch_embed.proj.weight → src/kernels/gpu/vis.cu patch_kernel (no missing line") {
+	if len(refused) != 2 || !strings.Contains(all, "check → src/kernels/gpu/gdn_layer.cu gdn_ssm_norm_kernel (no unit ports check as a kernel; ") || !strings.Contains(all, "missing:model.visual.patch_embed.proj.weight → src/kernels/gpu/vis.cu patch_kernel (no missing line") {
 		t.Fatalf("%q", refused)
 	}
 	in := GateInput{UnitID: "uint", PortFiles: files, PortFilesRefused: refused, Kernels: map[string][]string{"src/kernels/gpu/gdn_layer.cu": {"gdn_ssm_norm_kernel"}}}
@@ -87,7 +87,7 @@ func TestRowsNamingTheSameFileAndFunctionOnBothSidesAreOneLine(t *testing.T) {
 	})
 	_, refused := integrationPortFiles(ws, "uint", readPortMap(ws, "uint"))
 	got := refusedRowsText(refused, []string{"src/k.cu"})
-	if !strings.HasPrefix(got, "tests/t.cu test_k → src/k.cu k_kernel (no unit ports test_k as a kernel); 2 row(s) name the same file and function in both columns (") {
+	if !strings.HasPrefix(got, "tests/t.cu test_k → src/k.cu k_kernel (no unit ports test_k as a kernel; ") || !strings.Contains(got, "missing:<group>); 2 row(s) name the same file and function in both columns (") {
 		t.Fatal(got)
 	}
 }
@@ -130,5 +130,28 @@ func TestTheReferencesProgramsAreGivenWithWhetherE2ERunsThem(t *testing.T) {
 		"src/program/generate.cpp main → src/driver/generate_cli.cpp main; no e2e.sh of the tree names generate_cli"
 	if got != want {
 		t.Fatalf("%s", got)
+	}
+}
+
+// 11/25 12:23 the embed part, told only that no unit ported its test_X names as kernels, wrote
+// each file's rows twice, launcher and kernel names, "to cover two possible check formats": a
+// refused row is given what column 2 is, with the rows that count for its file
+func TestARefusedRowIsGivenTheRowsThatCountForItsFile(t *testing.T) {
+	ws := t.TempDir()
+	putTree(t, ws, map[string]string{
+		".einsteinOS/port/pcd027bc02f.tsv": "src/kernels/cuda/elementwise.cu\trms_norm_kernel\tsrc/kernels/gpu/ew_ops.cu\trms_norm_weighted_kernel\n",
+		"src/kernels/gpu/ew_ops.cu":        "__global__ void rms_norm_weighted_kernel(float* x) {}\n",
+		".einsteinOS/port/uint.tsv": "tests/k39_integration/ln_parity.cu\ttest_rms\tsrc/kernels/gpu/ew_ops.cu\trms_norm_weighted\n" +
+			"tests/k39_integration/embed_parity.cu\ttest_embed_gather16\tsrc/prefill/kernels.cu\tgather_rows16_kernel\n",
+	})
+	_, refused := integrationPortFiles(ws, "uint", readPortMap(ws, "uint"))
+	all := strings.Join(refused, "\n")
+	for _, want := range []string{
+		"test_rms → src/kernels/gpu/ew_ops.cu rms_norm_weighted (no unit ports test_rms as a kernel; column 2 is the reference's function another unit's port map ports as a kernel — rows counting for src/kernels/gpu/ew_ops.cu: src/kernels/cuda/elementwise.cu rms_norm_kernel (pcd027bc02f ports it as rms_norm_weighted_kernel))",
+		"test_embed_gather16 → src/prefill/kernels.cu gather_rows16_kernel (no unit ports test_embed_gather16 as a kernel; column 2 is the reference's function another unit's port map ports as a kernel, and no unit's map writes a kernel into src/prefill/kernels.cu: a row for it counts with column 1 missing:<group>)",
+	} {
+		if !strings.Contains(all, want) {
+			t.Fatalf("lacks %q:\n%s", want, all)
+		}
 	}
 }

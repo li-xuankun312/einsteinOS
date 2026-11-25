@@ -163,8 +163,14 @@ func portKernels(ws, unitID string) map[string]bool {
 }
 
 const (
-	portExtraFmt     = "  %[1]s %[2]s → %[3]s:%[4]s: the line names no definition this unit ports"
-	portDuplicateFmt = "  %[1]s %[2]s → %[3]s:%[4]s: a second line for a definition line %[5]d already maps"
+	// %[1]s the file, %[2]s the rows counting for it
+	portRowCountsFmt = "; column 2 is the reference's function another unit's port map ports as a kernel — rows counting for %[1]s: %[2]s"
+	// %[1]s the file, %[2]s the missing prefix
+	portRowCountsNoneFmt = "; column 2 is the reference's function another unit's port map ports as a kernel, and no unit's map writes a kernel into %[1]s: a row for it counts with column 1 %[2]s<group>"
+	// %[1]s the reference file, %[2]s its function, %[3]s the unit, %[4]s its kernel
+	portRowCountsLineFmt = "%[1]s %[2]s (%[3]s ports it as %[4]s)"
+	portExtraFmt         = "  %[1]s %[2]s → %[3]s:%[4]s: the line names no definition this unit ports"
+	portDuplicateFmt     = "  %[1]s %[2]s → %[3]s:%[4]s: a second line for a definition line %[5]d already maps"
 )
 
 // readPortLines: the port map's lines in order, with their line numbers.
@@ -370,6 +376,8 @@ func integrationPortFiles(ws, unitID string, pm map[string]portEntry) (map[strin
 		}
 	}
 	refKernels := map[string]bool{}
+	// file -> the rows that count for it: what column 2 holds, measured from the other units' maps
+	countsFor := map[string][]string{}
 	maps, _ := filepath.Glob(filepath.Join(ws, ".einsteinOS", "port", "*.tsv"))
 	for _, m := range maps {
 		u := strings.TrimSuffix(filepath.Base(m), ".tsv")
@@ -380,6 +388,7 @@ func integrationPortFiles(ws, unitID string, pm map[string]portEntry) (map[strin
 		for _, e := range readPortMap(ws, u) {
 			if ks[symbolBase(e.name)] {
 				refKernels[e.refName] = true
+				countsFor[e.file] = append(countsFor[e.file], fmt.Sprintf(portRowCountsLineFmt, e.refFile, e.refName, u, e.name))
 			}
 		}
 	}
@@ -400,7 +409,17 @@ func integrationPortFiles(ws, unitID string, pm map[string]portEntry) (map[strin
 			// this repository on both sides — src/core/device_main.cpp main → the same
 			refused = append(refused, e.refFile+" "+e.refName+" → "+e.file+" "+e.name+portRowSameReason)
 		default:
-			refused = append(refused, e.refFile+" "+e.refName+" → "+e.file+" "+e.name+" (no unit ports "+e.refName+" as a kernel)")
+			// what column 2 is: 11/25 12:23 the embed part, told only that no unit ported its
+			// test_X names as kernels, wrote each file's rows twice, launcher and kernel names,
+			// "to cover two possible check formats"
+			why := " (no unit ports " + e.refName + " as a kernel"
+			if c := countsFor[e.file]; len(c) > 0 {
+				sort.Strings(c)
+				why += fmt.Sprintf(portRowCountsFmt, e.file, shortList(dedupStrings(c), 4))
+			} else {
+				why += fmt.Sprintf(portRowCountsNoneFmt, e.file, integrationMissingPrefix)
+			}
+			refused = append(refused, e.refFile+" "+e.refName+" → "+e.file+" "+e.name+why+")")
 		}
 	}
 	sort.Strings(refused)
