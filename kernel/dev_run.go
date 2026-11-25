@@ -617,7 +617,8 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 			}
 			report := preVerifyReport(o) + compileSymbolFacts(o.Result.Compile, mirror)
 			if o.Result.Compile == "fail" {
-				report += compileErrorOwners(unit.ID, o.Status["compile_error"]+"\n"+o.Result.BuildOut)
+				// build.sh's output once: compile_error is "build.sh exit=N: " and the same output
+				report += compileErrorOwners(unit.ID, o.Result.BuildOut)
 			}
 			if len(o.Result.GateFiles) > 0 {
 				report += "\n" + gateFileOwners(unit.ID, o.Result.Gate, o.Result.GateFiles)
