@@ -12,6 +12,7 @@ package kernel
 // run one at a time on it, and each file changed is set down to the conversation that changed it.
 
 import (
+	"bytes"
 	"fmt"
 	"io/fs"
 	"log"
@@ -570,6 +571,7 @@ func compileErrorOwners(unitID, out string) string {
 	var b strings.Builder
 	for _, f := range order {
 		b.WriteString(fmt.Sprintf(compileOwnerLineFmt, f, count[f], u.whose(f)))
+		b.WriteString(u.changedSinceStart(f))
 	}
 	return fmt.Sprintf(compileOwnersFmt, len(order), b.String())
 }
@@ -685,4 +687,78 @@ func gateFileOwners(unitID, gate string, files []string) string {
 	}
 	log.Printf(gateOwnersLogFmt, unitID, gate, strings.Join(said, "; "))
 	return fmt.Sprintf(gateOwnersFmt, gate, len(files), b.String())
+}
+
+const (
+	// %[1]d lines taken out, %[2]d put in
+	mirrorSinceStartFmt = "    its lines changed since the conversations began: %[1]d taken out, %[2]d put in\n"
+	// %[1]s the line
+	mirrorLineOutFmt = "    - %[1]s\n"
+	mirrorLineInFmt  = "    + %[1]s\n"
+	// %[1]d more lines
+	mirrorLinesMoreFmt  = "    … %[1]d more\n"
+	mirrorSinceLinesMax = 8 // lines of each kind given at most
+)
+
+// changedSinceStart: a file the mirror held when the conversations began, changed since — its
+// lines taken out and put in, as the compiler's files are given. 11/25 06:31-06:48 three compiles
+// failed on `static bool fail` in src/rt/graph.cpp, the branch's line being `bool fail`, and the
+// conversations were given the compiler's line and not that a command of theirs had changed it.
+// Called with u.mu held.
+func (u *mirrorUnit) changedSinceStart(f string) string {
+	old, ok := u.start[f]
+	now, ok2 := u.content[f]
+	if !ok || !ok2 || bytes.Equal(old, now) {
+		return ""
+	}
+	out, in := lineChanges(string(old), string(now))
+	if len(out) == 0 && len(in) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf(mirrorSinceStartFmt, len(out), len(in)))
+	for i, l := range out {
+		if i == mirrorSinceLinesMax {
+			b.WriteString(fmt.Sprintf(mirrorLinesMoreFmt, len(out)-i))
+			break
+		}
+		b.WriteString(fmt.Sprintf(mirrorLineOutFmt, l))
+	}
+	for i, l := range in {
+		if i == mirrorSinceLinesMax {
+			b.WriteString(fmt.Sprintf(mirrorLinesMoreFmt, len(in)-i))
+			break
+		}
+		b.WriteString(fmt.Sprintf(mirrorLineInFmt, l))
+	}
+	return b.String()
+}
+
+// lineChanges: the lines of old not in now and of now not in old, each counted as many times as
+// it differs, in file order.
+func lineChanges(old, now string) (out, in []string) {
+	o, n := strings.Split(old, "\n"), strings.Split(now, "\n")
+	left := map[string]int{}
+	for _, l := range n {
+		left[l]++
+	}
+	for _, l := range o {
+		if left[l] > 0 {
+			left[l]--
+		} else {
+			out = append(out, l)
+		}
+	}
+	left = map[string]int{}
+	for _, l := range o {
+		left[l]++
+	}
+	for _, l := range n {
+		if left[l] > 0 {
+			left[l]--
+		} else {
+			in = append(in, l)
+		}
+	}
+	return out, in
 }
