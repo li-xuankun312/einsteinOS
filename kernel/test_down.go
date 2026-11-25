@@ -376,3 +376,54 @@ func testDownsOfKernel(dir, kernel string) []*testDownRecord {
 	sort.SliceStable(out, func(i, j int) bool { return out[i].At < out[j].At })
 	return out
 }
+
+// runTestDownAlone, before a test.sh the machine went down in runs again: the program whose
+// kernel launch was noted last, as the build has made it again, runs by itself on the first
+// usable GPU, under the probe, with its start and end on the crash notes — when the machine goes
+// down in it, what went down is that program alone; when it stays up, test.sh runs. 11/25 01:49
+// test.sh ran in full after 7 minutes of build and the machine went down 2 minutes into it, in
+// router_top10_parity, the 12th kernel of its 4-GPU run.
+func runTestDownAlone(ws, unitID, gpuUsable, env string, d *testDown, timeout time.Duration) {
+	if d == nil || d.Exe == "" {
+		return
+	}
+	if _, err := os.Stat(d.Exe); err != nil {
+		log.Printf(testDownAloneNotFmt, unitID, d.Exe, "the build did not make it again")
+		return
+	}
+	gpu := strings.TrimSpace(strings.Split(gpuUsable, ",")[0])
+	cmd := env
+	if gpu != "" {
+		cmd += fmt.Sprintf("export EINSTEINOS_GPUS=%q CUDA_VISIBLE_DEVICES=%q; ", gpu, gpu)
+	}
+	logPath := ""
+	if lib, err := launchProbeLib(); err != nil {
+		log.Printf(testDownAloneNotFmt, unitID, d.Exe, "no launch probe: "+err.Error())
+		return
+	} else if f, err := os.CreateTemp(crashDir(), "einsteinos-launch-*.log"); err != nil {
+		log.Printf(testDownAloneNotFmt, unitID, d.Exe, err.Error())
+		return
+	} else {
+		logPath = f.Name()
+		f.Close()
+		defer os.Remove(logPath)
+		cmd += launchProbeEnv(lib, logPath) + "export EINSTEINOS_LAUNCH_SYNC=1; "
+	}
+	noteCrashStage(unitID, d.Exe, logPath)
+	start := time.Now()
+	code, out, _, err := runWatched(cmd+shq(d.Exe)+" 2>&1", ws, timeout)
+	CrashNote(fmt.Sprintf("unit %s: %s ended (exit %d)", unitID, d.Exe, code))
+	n := len(readProbeLog(logPath).Launches)
+	if err != nil {
+		out = err.Error() + "\n" + out
+	}
+	if gpu == "" {
+		gpu = "the GPUs visible here"
+	}
+	log.Printf(testDownAloneFmt, unitID, d.Exe, gpu, time.Since(start).Round(time.Second), code, n, tailText(out, 600))
+}
+
+const (
+	testDownAloneFmt    = "dev_verify: unit %[1]s: %[2]s ran alone on %[3]s before test.sh, %[4]s: exit %[5]d, %[6]d distinct kernel(s) launched, and the machine stayed up — test.sh runs; its output: %[7]s"
+	testDownAloneNotFmt = "dev_verify: unit %[1]s: %[2]s is not run alone before test.sh: %[3]s"
+)

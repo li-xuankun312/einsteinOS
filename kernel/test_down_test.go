@@ -140,8 +140,9 @@ func TestATestTheMachineWentDownInIsNotRunAgainUnchanged(t *testing.T) {
 	if res := verify(); res.Gate == "machine_down_during_test" {
 		t.Fatalf("its source changed and it was held: %+v", res)
 	}
-	if len(*ran) != 1 || !strings.Contains((*ran)[0], test) {
-		t.Fatalf("its source changed and test.sh did not run: %v", *ran)
+	// the program the machine went down in runs by itself first, then test.sh
+	if len(*ran) != 2 || !strings.Contains((*ran)[0], prog) || !strings.Contains((*ran)[1], test) {
+		t.Fatalf("its source changed: not the program alone, then test.sh: %v", *ran)
 	}
 }
 
@@ -203,5 +204,29 @@ func TestAKernelTheMachineWentDownWithTwiceIsHeldThoughItsFilesChange(t *testing
 	t.Setenv(testDownReleaseEnv, "x_kernel, other_kernel")
 	if same, why := testDownSame(ws, d, r, first); same {
 		t.Fatalf("released: held (%s)", why)
+	}
+}
+
+// before a test.sh the machine went down in runs again, the program it went down in runs alone
+// on the first usable GPU, its start and end on the crash notes: when the machine goes down in
+// it, the next boot reads that program as what went down
+func TestTheProgramTheMachineWentDownInRunsAloneOnOneGPUFirst(t *testing.T) {
+	ws, crash, _, prog := downFixture(t)
+	bootAt(t, time.Now().Add(time.Minute))
+	d, _, _ := noteTestDown(ws, "uint")
+	ran := withRunner(t, func(string) (int, string) { return 0, "parity ok" })
+	runTestDownAlone(ws, "uint", "2,3", "export EINSTEINOS_GPUS=\"2,3\" CUDA_VISIBLE_DEVICES=\"2,3\"; ", d, time.Minute)
+	if len(*ran) != 1 || !strings.Contains((*ran)[0], `CUDA_VISIBLE_DEVICES="2"; `) || !strings.Contains((*ran)[0], prog) || strings.Contains((*ran)[0], "test.sh") {
+		t.Fatalf("ran: %v", *ran)
+	}
+	b, _ := os.ReadFile(filepath.Join(crash, "einsteinos-stages.log"))
+	if !strings.Contains(string(b), "unit uint: "+prog+" starts; its kernel launches go to "+crash) || !strings.Contains(string(b), "unit uint: "+prog+" ended (exit 0)") {
+		t.Fatalf("stages:\n%s", b)
+	}
+	// the machine went down in the program alone: its start, no end, a boot after it
+	CrashNote("unit uint: " + prog + " starts; its kernel launches go to " + filepath.Join(crash, "einsteinos-launch-1.log"))
+	bootAt(t, time.Now().Add(time.Hour))
+	if d2 := lastTestDown(crash, "uint"); d2 == nil || d2.Test != prog {
+		t.Fatalf("down in the program alone: %+v", d2)
 	}
 }

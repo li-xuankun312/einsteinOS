@@ -575,6 +575,7 @@ func runUnitTestStage(ws, unitID, gpuUsable string, req UnitRequirements, change
 			return finish()
 		} else {
 			log.Printf("dev_verify: unit %s: its test.sh runs again, though the machine went down in the last one: %s", unitID, why)
+			runTestDownAlone(ws, unitID, gpuUsable, env, d, testTimeout)
 		}
 	}
 	// a GPU unit's test runs with the launch probe preloaded: which kernels ran is measured
