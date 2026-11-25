@@ -81,3 +81,16 @@ func TestAnErrorTheOutputHoldsAgainIsGivenOnce(t *testing.T) {
 		t.Fatalf("a window there once said twice: %q", got)
 	}
 }
+
+// 11/25 08:08:14 the error lines held "linker command failed" alone: the linker's multiple
+// definitions are error lines too
+func TestALinkersMultipleDefinitionIsAnErrorLine(t *testing.T) {
+	out := "[cuda-pic] src/baloon_e2e_shim.cu\n" +
+		"/usr/bin/ld: x/pic_e2e_moe.o: in function `ix_se::__device_stub__swiglu_kernel(float const*, float const*, float*, int)':\n" +
+		"moe_parity.cu:(.text+0x0): multiple definition of `ix_se::__device_stub__swiglu_kernel(float const*, float const*, float*, int)'; x/pic_e2e_se.o:test_shared_expert.cu:(.text+0x0): first defined here\n" +
+		"clang-16: error: linker command failed with exit code 1\n"
+	got := compileErrorLines(out, compileErrorLinesMax)
+	if !strings.HasPrefix(got, "moe_parity.cu:(.text+0x0): multiple definition of") {
+		t.Fatalf("%q", got)
+	}
+}

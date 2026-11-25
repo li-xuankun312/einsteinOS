@@ -1152,7 +1152,10 @@ func compileErrorLines(out string, max int) string {
 	count := map[string]int{}
 	n := 0
 	for i := 0; i < len(ls); i++ {
-		if !strings.Contains(ls[i], "error:") && !strings.Contains(ls[i], "undefined reference") {
+		// the linker's "multiple definition of" too: 11/25 08:08:14 the error lines held only
+		// "linker command failed", and the three multiple definitions it failed on were in the
+		// output's end alone, cut at "floa..."
+		if !strings.Contains(ls[i], "error:") && !strings.Contains(ls[i], "undefined reference") && !strings.Contains(ls[i], "multiple definition of") {
 			continue
 		}
 		var w strings.Builder
