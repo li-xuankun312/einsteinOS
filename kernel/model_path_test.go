@@ -68,3 +68,22 @@ func TestPartsNamingOnlyTensorsOffTheTextPathAreNotStarted(t *testing.T) {
 		t.Fatalf("%v %v", keep, off)
 	}
 }
+
+// 11/25 06:01 and 07:47 the planner's six parts were loader, embed, layer_norm, gdn, qsa and moe:
+// lm_head.weight, on the text path, is named by none of them; "in_proj_*" names in_proj_qkvz
+func TestTheTextPathsGroupsNoPartNamesAreMeasured(t *testing.T) {
+	parts := []string{
+		"loader: reads the 8 named tensor groups from the .safetensors files, validates dtype and shape against the model config, and maps the BF16 buffers into pinned GPU device memory",
+		"embed: gathers BF16 embedding rows by token ID from embed_tokens.weight into the initial hidden-state buffer for each position in the batch",
+		"layer_norm: applies a weighted RMS normalization in-place to the hidden state using one input_layernorm or post_attention_layernorm weight vector",
+		"gdn: runs one GDN (linear-attention) sub-layer: projects the hidden state to (qkv, z, a, b) via in_proj_*, applies the depthwise conv1d, runs the selective-scan recurrence with A_log and dt_bias, applies the sub-layer norm, gates by z, and projects back to hidden size via out_proj",
+		"qsa: runs one QSA (full-attention) sub-layer: projects the hidden state to (k, v) via k_proj and v_proj, applies per-head q_norm and k_norm, applies mRoPE, appends to the KV cache, and projects the attended output back to hidden size via o_proj",
+		"moe: runs one MoE FFN block: multiplies the hidden state by mlp.gate.weight to get router logits, selects top-8 experts, runs the shared expert (gate_proj, up_proj → SwiGLU → down_proj), gates the shared contribution with shared_expert_gate, and sums all contributions",
+	}
+	if got := unclaimedPathGroups(qwen36Shape(), parts); strings.Join(got, " ") != "lm_head.weight" {
+		t.Fatalf("%v", got)
+	}
+	if got := unclaimedPathGroups(qwen36Shape(), append(parts, "head: applies model.language_model.norm and projects through lm_head")); len(got) != 0 {
+		t.Fatalf("%v", got)
+	}
+}

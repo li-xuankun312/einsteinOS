@@ -236,12 +236,24 @@ func (r *devRun) integrationModelAnswer(unit DevPlanNode, baseRef string) Integr
 	}
 	// where the port's tree stands is the unit's to know too, not the planner's alone
 	p.Inventory = measurePortInventory(tree, ms).Block(len(ms.TensorGroups())) + closed
+	// the text path's groups no part started names (model_path.go)
+	if u := unclaimedPathGroups(ms, p.Parts); len(u) > 0 && len(p.Parts) > 0 {
+		log.Printf(integrationUnclaimedLogFmt, unit.ID, len(u), len(p.Parts), strings.Join(u, " "))
+		p.Inventory += fmt.Sprintf(integrationUnclaimedFmt, len(p.Parts), len(u), strings.Join(u, "\n  "))
+	}
 	log.Printf(integrationModelLogFmt, r.repo, unit.ID, p.counts(), len(ms.TensorGroups()), len(perUnit))
 	integrationAnswersMu.Lock()
 	integrationAnswers[unit.ID] = p
 	integrationAnswersMu.Unlock()
 	return p
 }
+
+const (
+	// %[1]s unit, %[2]d groups, %[3]d parts, %[4]s the groups
+	integrationUnclaimedLogFmt = "dev_from_theorems: integration unit %[1]s: %[2]d tensor group(s) on the model's text path are named by none of the planner's %[3]d part(s) started: %[4]s"
+	// %[1]d parts, %[2]d groups, %[3]s the groups
+	integrationUnclaimedFmt = "\n[TENSOR GROUPS ON THE MODEL'S TEXT PATH THAT NONE OF THE PLANNER'S %[1]d PARTS NAMES — measured from the parts' text and the model's files]\n%[2]d group(s):\n  %[3]s\n"
+)
 
 // IntegrationOp: a tensor group of the model and the unit kernel the planner found computing
 // with it; Unit is empty for a group no unit's kernel computes with (What says what).

@@ -172,3 +172,76 @@ func offPathParts(ms ModelShape, parts []string) (keep []string, off []string) {
 	}
 	return keep, off
 }
+
+// partGlobRe: a name a part's text writes with a trailing *, the name before it.
+var partGlobRe = regexp.MustCompile(`(?:^|[^A-Za-z0-9_.])([A-Za-z0-9_]+)\*`)
+
+// unclaimedPathGroups: the tensor groups on the model's text path that no part's text names —
+// a group is named when a part writes one of its names (groupTokens) that fewer than half the
+// path's groups have ("language_model" and "layers" are every layer's). 11/25 06:01 and 07:47
+// the planner's six parts were loader, embed, layer_norm, gdn, qsa and moe, each one sub-layer's
+// kernels; none wrote lm_head, and no program of the port went from the last layer to a token.
+func unclaimedPathGroups(ms ModelShape, parts []string) []string {
+	p := measureModelPath(ms)
+	var on []string
+	freq := map[string]int{}
+	for _, g := range ms.TensorGroups() {
+		if p.Off(g.Pattern) {
+			continue
+		}
+		on = append(on, g.Pattern)
+		seen := map[string]bool{}
+		for _, t := range groupTokens(g.Pattern) {
+			if !seen[t] {
+				seen[t] = true
+				freq[t]++
+			}
+		}
+	}
+	// a name written with a trailing * names every name it begins: "in_proj_*" (11/25 the gdn part)
+	var globs []string
+	for _, part := range parts {
+		for _, m := range partGlobRe.FindAllStringSubmatch(part, -1) {
+			globs = append(globs, m[1])
+		}
+	}
+	named := map[string]bool{}
+	for t := range freq {
+		re := regexp.MustCompile(`(^|[^A-Za-z0-9_])` + regexp.QuoteMeta(t) + `([^A-Za-z0-9_]|$)`)
+		for _, part := range parts {
+			if re.MatchString(part) {
+				named[t] = true
+				break
+			}
+		}
+		for _, g := range globs {
+			if strings.HasPrefix(t, g) {
+				named[t] = true
+			}
+		}
+	}
+	var out []string
+	for _, g := range on {
+		var own []string
+		for _, t := range groupTokens(g) {
+			if freq[t]*2 < len(on) {
+				own = append(own, t)
+			}
+		}
+		if len(own) == 0 {
+			continue // only names most groups have: what names it cannot be told
+		}
+		hit := false
+		for _, t := range own {
+			if named[t] {
+				hit = true
+				break
+			}
+		}
+		if !hit {
+			out = append(out, g)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
