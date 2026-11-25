@@ -535,7 +535,9 @@ func compileErrorOwners(unitID, out string) string {
 	defer u.mu.Unlock()
 	count := map[string]int{}
 	var order []string
-	for _, m := range compileErrPathRe.FindAllStringSubmatch(out, -1) {
+	// the files of its error lines and the two after each ('note:' lines among them), not of its
+	// warnings: 11/25 07:53:13 two test files were given for their -Wformat warnings alone
+	for _, m := range compileErrPathRe.FindAllStringSubmatch(compileErrorLines(out, compileErrorLinesMax), -1) {
 		p := filepath.ToSlash(m[1])
 		var file string
 		for f := range u.content {

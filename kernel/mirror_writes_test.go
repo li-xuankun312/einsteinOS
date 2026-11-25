@@ -477,3 +477,25 @@ func TestASharedFileTheCompilerNamesSaysWhoChangedIt(t *testing.T) {
 		t.Fatalf("an unchanged file given changed lines:\n%s", got)
 	}
 }
+
+// 11/25 07:53:13 tests/gpu_unit7/test_ilu_qsa.cu and tests/k14gpu_mmvq/test_mmvq.cu were given
+// among the compiler's files for their -Wformat warnings: only an error line and the two after it
+// name a file — the 'note: previous declaration' line among them
+func TestAWarningAloneNamesNoFile(t *testing.T) {
+	resetMirrorUnits()
+	defer resetMirrorUnits()
+	dir := t.TempDir()
+	for _, f := range []string{"src/rt/layout_check.cpp", "include/baloon/rt_layout.hpp", "tests/k14gpu_mmvq/test_mmvq.cu"} {
+		os.MkdirAll(filepath.Join(dir, filepath.Dir(f)), 0o755)
+		os.WriteFile(filepath.Join(dir, f), []byte("x\n"), 0o644)
+	}
+	noteMirrorConv("uint", dir, "3289499f", "")
+	out := "tests/k14gpu_mmvq/test_mmvq.cu:120:91: warning: format specifies type 'float' [-Wformat]\n  x\n  y\n" +
+		"src/rt/layout_check.cpp:9:13: error: static declaration of 'fail' follows non-static declaration\n" +
+		"static bool fail(std::string* why, const std::string& msg) {}\n" +
+		"include/baloon/rt_layout.hpp:32:6: note: previous declaration is here\n"
+	got := compileErrorOwners("uint", out)
+	if strings.Contains(got, "test_mmvq.cu") || !strings.Contains(got, "2 file(s):") || !strings.Contains(got, "src/rt/layout_check.cpp: 1 line(s)") || !strings.Contains(got, "include/baloon/rt_layout.hpp: 1 line(s)") {
+		t.Fatalf("%s", got)
+	}
+}
