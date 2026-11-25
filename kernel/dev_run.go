@@ -618,7 +618,12 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 			report := preVerifyReport(o) + compileSymbolFacts(o.Result.Compile, mirror)
 			if o.Result.Compile == "fail" {
 				// build.sh's output once: compile_error is "build.sh exit=N: " and the same output
-				report += compileErrorOwners(unit.ID, o.Result.BuildOut)
+				if owners := compileErrorOwners(unit.ID, o.Result.BuildOut); owners != "" {
+					// what the conversation is told of the files, in the log too: 11/25 06:31-06:48 it
+					// could not be read from the log whose src/rt/graph.cpp was said to be
+					log.Printf(preVerifyOwnersLogFmt, r.repo, unit.ID, owners)
+					report += owners
+				}
 			}
 			if len(o.Result.GateFiles) > 0 {
 				report += "\n" + gateFileOwners(unit.ID, o.Result.Gate, o.Result.GateFiles)
