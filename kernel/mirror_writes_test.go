@@ -618,3 +618,61 @@ func TestAPartStartsKnowingTheFilesItShares(t *testing.T) {
 		t.Fatal("a unit with no mirror given a block")
 	}
 }
+
+// 11/25 16:03:11 and 16:22:14 the compile failed on embed_parity.cu:133, the e2e_embed_main the
+// embed part had added: a part takes out a line the attempt put in a shared file, and is
+// written back only for a line the branch the unit started from holds
+func TestAPartTakesOutWhatTheAttemptPutInASharedFile(t *testing.T) {
+	resetMirrorUnits()
+	defer resetMirrorUnits()
+	defer func() {
+		mirrorBranchMu.Lock()
+		delete(mirrorBranch, "uint")
+		delete(mirrorBranchAt, "uint")
+		mirrorBranchMu.Unlock()
+	}()
+	clone := t.TempDir()
+	git := func(args ...string) {
+		if out, err := exec.Command("git", append([]string{"-C", clone}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	git("init", "-q", "-b", "dev")
+	putTree(t, clone, map[string]string{"src/rt/graph.cpp": "bool fail(const char* m) { return false; }\nint g;\n"})
+	git("add", ".")
+	git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "dev")
+	dir := t.TempDir()
+	embed := "tests/k39_integration/embed_parity.cu"
+	putTree(t, dir, map[string]string{
+		embed:              "int e2e_embed_main() {\n  return 0;\n}\nint main() { return 1; }\n",
+		"src/rt/graph.cpp": "bool fail(const char* m) { return false; }\nint g;\nint added_by_a_part;\n",
+	})
+	noteMirrorBranch("uint", clone, "dev")
+	noteMirrorConv("uint", dir, "a3e69c50", "")
+	noteMirrorConv("uint", dir, "0e57c6bd", "loader: the safetensors loader")
+	read := func(f string) string { b, _ := os.ReadFile(filepath.Join(dir, f)); return string(b) }
+	// a file the branch has not: every line of it the attempt's
+	MirrorCommand("0e57c6bd", func() string {
+		os.WriteFile(filepath.Join(dir, embed), []byte("int main() { return 1; }\n"), 0o644)
+		return ""
+	})
+	if got := read(embed); got != "int main() { return 1; }\n" {
+		t.Fatalf("the attempt's lines of a file the branch has not were written back: %q", got)
+	}
+	// a line the attempt put in a file the branch has: taken out
+	MirrorCommand("0e57c6bd", func() string {
+		os.WriteFile(filepath.Join(dir, "src/rt/graph.cpp"), []byte("bool fail(const char* m) { return false; }\nint g;\n"), 0o644)
+		return ""
+	})
+	if got := read("src/rt/graph.cpp"); strings.Contains(got, "added_by_a_part") {
+		t.Fatalf("a line the attempt put in was written back: %q", got)
+	}
+	// a line the branch holds: written back
+	MirrorCommand("0e57c6bd", func() string {
+		os.WriteFile(filepath.Join(dir, "src/rt/graph.cpp"), []byte("static bool fail(const char* m) { return false; }\nint g;\n"), 0o644)
+		return ""
+	})
+	if got := read("src/rt/graph.cpp"); !strings.HasPrefix(got, "bool fail(") {
+		t.Fatalf("a line of the branch changed and kept: %q", got)
+	}
+}

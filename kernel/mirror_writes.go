@@ -311,8 +311,8 @@ func (u *mirrorUnit) undo(conv string, before, after map[string]mirrorStat) []st
 			if whose == "" {
 				continue
 			}
-			if (whose == mirrorSharedFmt || whose == mirrorUnitsOwnFmt) && !w.Removed && u.onlyAdded(w.File) {
-				continue // lines added to a shared file, none of its own taken out
+			if (whose == mirrorSharedFmt || whose == mirrorUnitsOwnFmt) && !w.Removed && (u.onlyAdded(w.File) || u.takesOutOnlyAttemptLines(w.File)) {
+				continue // lines added to a shared file, or lines the attempt put in taken out again
 			}
 			if w.Removed || before[w.File].size > 0 {
 				if u.writeBack(w.File) {
@@ -329,9 +329,9 @@ func (u *mirrorUnit) undo(conv string, before, after map[string]mirrorStat) []st
 // conversations began. 11/23 the port map (168 rows the units had written) was first touched in
 // the attempt by the layer_norm part, which made it its own and cut it to one row, and at
 // 20:27:45 the gdn part overwrote 14 files the tree had held all along.
-const mirrorUnitsOwnFmt = "a file the unit's own conversation wrote, shared by all its parts: a part adds lines to it and takes none out"
+const mirrorUnitsOwnFmt = "a file the unit's own conversation wrote, shared by all its parts: a part adds lines to it and takes out none the branch the unit started from holds"
 
-const mirrorSharedFmt = "a file the mirror held when the unit's conversations began, shared by all its parts: a part adds lines to it and takes none out"
+const mirrorSharedFmt = "a file the mirror held when the unit's conversations began, shared by all its parts: a part adds lines to it and takes out none the branch the unit started from holds"
 
 const (
 	// %[1]s the part, %[2]s its conversation
@@ -876,4 +876,47 @@ func partSharedBlock(unitID string) string {
 		b.WriteString("  " + f + "\n")
 	}
 	return fmt.Sprintf(partSharedFmt, mirrorSharedFmt, len(files), b.String(), len(u.base))
+}
+
+// takesOutOnlyAttemptLines: whether every line the file as it is now lacks of the kept one is a
+// line the attempt put in — not one of the branch the unit started from (or, that branch not
+// known, of the mirror as its conversations began). 11/25 16:03:11 and 16:22:14 the compile
+// failed on embed_parity.cu:133, the e2e_embed_main the embed part had added at 12:2x: a part
+// could add a line to a shared file and no part take it out again, and the file is not on
+// einsteinOS/dev-c880662efd at all. Called with u.mu held.
+func (u *mirrorUnit) takesOutOnlyAttemptLines(f string) bool {
+	was, ok := u.content[f]
+	if !ok {
+		return false
+	}
+	now, err := os.ReadFile(filepath.Join(u.dir, filepath.FromSlash(f)))
+	if err != nil {
+		return false
+	}
+	var base []byte
+	if b, has, _, known := mirrorBranchFile(u.unit, f); known {
+		if !has {
+			return true // no line of it is the branch's
+		}
+		base = b
+	} else if s, ok := u.start[f]; ok {
+		base = s
+	} else {
+		return false
+	}
+	count := func(b []byte) map[string]int {
+		m := map[string]int{}
+		for _, l := range strings.Split(string(b), "\n") {
+			m[l]++
+		}
+		return m
+	}
+	baseN, nowN := count(base), count(now)
+	out, _ := lineChanges(string(was), string(now))
+	for _, l := range out {
+		if nowN[l] < baseN[l] {
+			return false // a line the branch holds taken out
+		}
+	}
+	return true
 }
