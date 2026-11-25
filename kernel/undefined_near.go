@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"fmt"
 	"io/fs"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -131,4 +132,97 @@ func undefinedRefNear(ws, out string) string {
 		}
 	}
 	return fmt.Sprintf(undefinedNearFmt, lb.String())
+}
+
+var multipleDefRe = regexp.MustCompile("multiple definition of [`']([^'`]+)'")
+
+const (
+	// %[1]s the lines
+	multipleDefFmt = "[WHERE THE FUNCTIONS THE LINK FOUND DEFINED TWICE ARE WRITTEN — measured from the workspace's sources]\n%[1]s"
+	// %[1]s the function, %[2]s the file defining it, %[3]s the files including that file
+	multipleDefLineFmt = "  %[1]s — written in %[2]s, which %[3]s #include\n"
+	// %[1]s the function, %[2]s the file defining it
+	multipleDefNoIncLineFmt = "  %[1]s — written in %[2]s, which no source of the workspace #includes\n"
+	// %[1]s the function
+	multipleDefNoneLineFmt = "  %[1]s — no source of the workspace has a __global__ definition of it\n"
+)
+
+// linkFuncName: a demangled symbol's function name — no parameters, no namespace, no CUDA
+// launch stub prefix ("ix_se::__device_stub__swiglu_kernel(float const*, …)" → swiglu_kernel).
+func linkFuncName(sym string) string {
+	n := funcBaseName(sym)
+	if i := strings.LastIndex(n, "::"); i >= 0 {
+		n = n[i+2:]
+	}
+	return strings.TrimPrefix(n, "__device_stub__")
+}
+
+// multipleDefNear: for each kernel a failed link found defined twice, the workspace files
+// defining it and the sources that #include each of them. 11/25 08:08:14 swiglu_kernel,
+// scalar_gate_kernel and scale_kernel of src/ix_shared_expert.cu were defined in both
+// pic_e2e_moe.o and pic_e2e_se.o: tests/k39_integration/moe_parity.cu and tests/test_shared_expert.cu
+// both #include that .cu file, and build.sh linked both objects into one program.
+func multipleDefNear(ws, out string) string {
+	var names []string
+	seen := map[string]bool{}
+	for _, m := range multipleDefRe.FindAllStringSubmatch(out, -1) {
+		n := linkFuncName(m[1])
+		if n == "" || seen[n] {
+			continue
+		}
+		seen[n] = true
+		names = append(names, n)
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	incRe := regexp.MustCompile(`(?m)^\s*#\s*include\s*"([^"]+)"`)
+	includes := map[string][]string{} // base name of an included file -> the sources including it
+	_ = filepath.WalkDir(ws, func(p string, e fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if e.IsDir() {
+			if e.Name() == ".git" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !kernelSourceExts[strings.ToLower(filepath.Ext(p))] {
+			return nil
+		}
+		if st, err := e.Info(); err != nil || st.Size() > 4<<20 {
+			return nil
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return nil
+		}
+		rel, _ := filepath.Rel(ws, p)
+		for _, m := range incRe.FindAllStringSubmatch(string(b), -1) {
+			includes[filepath.Base(m[1])] = append(includes[filepath.Base(m[1])], filepath.ToSlash(rel))
+		}
+		return nil
+	})
+	var b strings.Builder
+	for i, n := range names {
+		if i == undefinedNearMax {
+			break
+		}
+		defs := kernelDefiningFiles(ws, n)
+		if len(defs) == 0 {
+			b.WriteString(fmt.Sprintf(multipleDefNoneLineFmt, n))
+			continue
+		}
+		for _, d := range defs {
+			inc := append([]string(nil), includes[filepath.Base(d)]...)
+			sort.Strings(inc)
+			if len(inc) == 0 {
+				b.WriteString(fmt.Sprintf(multipleDefNoIncLineFmt, n, d))
+			} else {
+				b.WriteString(fmt.Sprintf(multipleDefLineFmt, n, d, strings.Join(inc, " and ")))
+			}
+		}
+	}
+	return fmt.Sprintf(multipleDefFmt, b.String())
 }

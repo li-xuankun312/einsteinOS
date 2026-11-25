@@ -45,3 +45,28 @@ func TestWhatTheBuildDefinedUnderAnUndefinedNameIsGiven(t *testing.T) {
 		t.Fatal("no undefined reference, something said")
 	}
 }
+
+// 11/25 08:08:14 ix_se's kernels were defined in pic_e2e_moe.o and pic_e2e_se.o: the .cu file
+// writing them is given, with the two sources that #include it
+func TestWhereAKernelTheLinkFoundTwiceIsWrittenIsGiven(t *testing.T) {
+	ws := t.TempDir()
+	putTree(t, ws, map[string]string{
+		"src/ix_shared_expert.cu":             "namespace ix_se {\n__global__ void swiglu_kernel(const float* g, const float* u, float* y, int n) { }\n}\n",
+		"tests/k39_integration/moe_parity.cu": "#include \"../../src/ix_shared_expert.cu\"\nint main() { return 0; }\n",
+		"tests/test_shared_expert.cu":         "#include \"../src/ix_shared_expert.cu\"\nint main() { return 0; }\n",
+	})
+	out := "moe_parity.cu:(.text+0x0): multiple definition of `ix_se::__device_stub__swiglu_kernel(float const*, float const*, float*, int)'; x/pic_e2e_se.o:test_shared_expert.cu:(.text+0x0): first defined here\n" +
+		"moe_parity.cu:(.text+0x90): multiple definition of `ix_se::__device_stub__nowhere_kernel(int)'; y\n"
+	got := multipleDefNear(ws, out)
+	for _, want := range []string{
+		"  swiglu_kernel — written in src/ix_shared_expert.cu, which tests/k39_integration/moe_parity.cu and tests/test_shared_expert.cu #include\n",
+		"  nowhere_kernel — no source of the workspace has a __global__ definition of it\n",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("lacks %q:\n%s", want, got)
+		}
+	}
+	if multipleDefNear(ws, "a.cu:3: error: x") != "" {
+		t.Fatal("no multiple definition, something said")
+	}
+}
