@@ -87,3 +87,16 @@ func TestTheTextPathsGroupsNoPartNamesAreMeasured(t *testing.T) {
 		t.Fatalf("%v", got)
 	}
 }
+
+// the planner asked again is given the text path's groups its last answer's started parts name
+// none of
+func TestThePlannerIsGivenTheGroupsItsLastPartsNamedNoneOf(t *testing.T) {
+	prev := "part: embed: gathers rows of embed_tokens.weight\npart: visual: runs patch_embed.proj and merger\n"
+	got := prevUnclaimedBlock(qwen36Shape(), prev, nil, func(string) bool { return false })
+	if !strings.Contains(got, "NONE OF THE LAST ANSWER'S 1 STARTED PARTS NAMES") || !strings.Contains(got, "  lm_head.weight") {
+		t.Fatalf("%q", got)
+	}
+	if prevUnclaimedBlock(qwen36Shape(), "", nil, nil) != "" {
+		t.Fatal("no last answer, something said")
+	}
+}

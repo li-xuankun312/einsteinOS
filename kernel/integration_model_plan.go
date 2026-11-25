@@ -213,7 +213,7 @@ func (r *devRun) integrationModelAnswer(unit DevPlanNode, baseRef string) Integr
 	closed := closedDirectionsBlock(e2eClosedDirections(tree, unit.ID, book))
 	data := integrationModelDataFiles(ms, perUnit, sources, treeFiles) +
 		measurePortInventory(tree, ms).Block(len(ms.TensorGroups())) + closed +
-		integrationFeedback(r.plan.LastFailure[unit.ID], prev)
+		integrationFeedback(r.plan.LastFailure[unit.ID], prev) + prevUnclaimedBlock(ms, prev, perUnit, treeHas)
 	out, fresh := askIntegrationModel(r.pid, r.repo, r.plan, data, string(theory), len(ms.TensorGroups()), len(perUnit), r.whileWaiting, takes)
 	if !takes(out) && prev != "" {
 		// a new answer the kernel reads nothing of leaves the last one standing
@@ -946,4 +946,22 @@ func partWroteOthers(unitID, part string, files map[string][]string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// %[1]d parts, %[2]d groups, %[3]s them
+const integrationPrevUnclaimedFmt = "[TENSOR GROUPS ON THE MODEL'S TEXT PATH THAT NONE OF THE LAST ANSWER'S %[1]d STARTED PARTS NAMES — measured from those parts' text and the model's files]\n%[2]d group(s):\n  %[3]s\n"
+
+// prevUnclaimedBlock: for the planner asked again, the text path's groups no part of its last
+// answer that was started names. 11/25 04:08, 06:01 and 07:47 the planner gave the same six
+// parts three times, none naming lm_head.weight.
+func prevUnclaimedBlock(ms ModelShape, prev string, perUnit map[string][]string, treeHas func(string) bool) string {
+	if prev == "" {
+		return ""
+	}
+	parts, _ := offPathParts(ms, parseIntegrationModelIn(prev, ms, perUnit, treeHas).Parts)
+	u := unclaimedPathGroups(ms, parts)
+	if len(parts) == 0 || len(u) == 0 {
+		return ""
+	}
+	return fmt.Sprintf(integrationPrevUnclaimedFmt, len(parts), len(u), strings.Join(u, "\n  "))
 }
