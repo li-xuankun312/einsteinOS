@@ -113,3 +113,22 @@ func TestKernelUnportedNamesThePlannersMissingGroups(t *testing.T) {
 		t.Fatalf("%v", texts)
 	}
 }
+
+// 11/25 the reference's src/program/generate.cpp had its counterpart in src/driver/generate_cli.cpp
+// and the integration unit's e2e.sh ran parity tests and never generate_cli: each reference
+// program a port map row gives a counterpart is given with it and whether an e2e.sh names it
+func TestTheReferencesProgramsAreGivenWithWhetherE2ERunsThem(t *testing.T) {
+	ws := t.TempDir()
+	putTree(t, ws, map[string]string{
+		".einsteinOS/port/ub25e8eba7f.tsv": "src/program/generate.cpp\tmain\tsrc/driver/generate_cli.cpp\tmain\n" +
+			"src/kernels/gr_parity.cpp\tmain\tsrc/kernels/gr_parity.cpp\tmain\n",
+		".einsteinOS/port/u1.tsv":                "src/kernels/gr_parity.cpp\tmain\ttests/gr_parity_port.cpp\tmain\n",
+		".einsteinOS/verify/uintegration/e2e.sh": "\"$BUILD/gr_parity_port\" --selftest\n",
+	})
+	got := strings.Join(refPrograms(ws), "\n")
+	want := "src/kernels/gr_parity.cpp main → tests/gr_parity_port.cpp main; .einsteinOS/verify/uintegration/e2e.sh names gr_parity_port\n" +
+		"src/program/generate.cpp main → src/driver/generate_cli.cpp main; no e2e.sh of the tree names generate_cli"
+	if got != want {
+		t.Fatalf("%s", got)
+	}
+}

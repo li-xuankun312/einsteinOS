@@ -34,6 +34,9 @@ type PortInventory struct {
 	// Printers: the sources of any language (and the line) printing "generated:" — the token
 	// ids a runner prints and the kernel measures the rate and the correctness by
 	Printers []string
+	// RefPrograms: each reference source whose main a port map row gives a counterpart, with that
+	// counterpart and whether an e2e.sh of the tree names its executable (refPrograms)
+	RefPrograms []string
 }
 
 // printerExts: the sources a "generated:" line may be printed from.
@@ -107,7 +110,7 @@ func groupKey(pattern string) string {
 
 // measurePortInventory reads the C/C++/CUDA sources of tree (its own .einsteinOS excluded).
 func measurePortInventory(tree string, ms ModelShape) PortInventory {
-	inv := PortInventory{Named: map[string][]string{}}
+	inv := PortInventory{Named: map[string][]string{}, RefPrograms: refPrograms(tree)}
 	keys := map[string][]string{} // key -> group patterns
 	for _, g := range ms.TensorGroups() {
 		k := groupKey(g.Pattern)
@@ -199,7 +202,56 @@ func lines(l []string) string {
 
 // Block: the inventory as the planner's data.
 func (inv PortInventory) Block(groups int) string {
-	return fmt.Sprintf(portInventoryFmt, len(inv.Programs), lines(inv.Programs), len(inv.Readers), lines(inv.Readers),
+	return fmt.Sprintf(portInventoryRefProgramsFmt, len(inv.RefPrograms), lines(inv.RefPrograms)) + fmt.Sprintf(portInventoryFmt, len(inv.Programs), lines(inv.Programs), len(inv.Readers), lines(inv.Readers),
 		groups-len(inv.Unnamed), groups, lines(inv.Unnamed), len(inv.Redefined), lines(inv.Redefined),
 		len(inv.Undefined), lines(inv.Undefined), len(inv.Printers), lines(inv.Printers))
+}
+
+const (
+	// %[1]d programs, %[2]s them
+	portInventoryRefProgramsFmt = "### %[1]d program(s) of the reference with a counterpart in the port — the port map row of its main, and whether an e2e.sh of the tree names the counterpart's executable\n%[2]s\n"
+	// %[1]s the reference source, %[2]s the port's, %[3]s the e2e.sh naming it
+	refProgramRunFmt = "%[1]s main → %[2]s main; %[3]s names %[4]s"
+	// %[1]s the reference source, %[2]s the port's, %[3]s the executable
+	refProgramNotRunFmt = "%[1]s main → %[2]s main; no e2e.sh of the tree names %[3]s"
+)
+
+// refPrograms: each reference source whose main a port map of tree gives a counterpart, with it
+// and whether an e2e.sh under .einsteinOS/verify names the counterpart's executable (its base
+// name without extension). 11/25 the reference's src/program/generate.cpp — the program printing
+// each token and the run's tok/s — had its counterpart in src/driver/generate_cli.cpp, built by
+// 23 units' build.sh as generate_cli, and the integration unit's e2e.sh ran parity tests and
+// pytools/e2e_infer.py and never generate_cli.
+func refPrograms(tree string) []string {
+	maps, _ := filepath.Glob(filepath.Join(tree, ".einsteinOS", "port", "*.tsv"))
+	e2es, _ := filepath.Glob(filepath.Join(tree, ".einsteinOS", "verify", "*", "e2e.sh"))
+	seen := map[string]bool{}
+	var out []string
+	for _, m := range maps {
+		u := strings.TrimSuffix(filepath.Base(m), ".tsv")
+		for _, e := range readPortMap(tree, u) {
+			if e.refName != "main" || e.name != "main" || e.refFile == e.file || strings.HasPrefix(e.refFile, integrationMissingPrefix) {
+				continue
+			}
+			k := e.refFile + "\x00" + e.file
+			if seen[k] {
+				continue
+			}
+			seen[k] = true
+			exe := strings.TrimSuffix(filepath.Base(e.file), filepath.Ext(e.file))
+			re := regexp.MustCompile(`(^|[^A-Za-z0-9_.-])` + regexp.QuoteMeta(exe) + `([^A-Za-z0-9_.-]|$)`)
+			line := fmt.Sprintf(refProgramNotRunFmt, e.refFile, e.file, exe)
+			for _, sh := range e2es {
+				b, err := os.ReadFile(sh)
+				if err == nil && re.Match(b) {
+					rel, _ := filepath.Rel(tree, sh)
+					line = fmt.Sprintf(refProgramRunFmt, e.refFile, e.file, filepath.ToSlash(rel), exe)
+					break
+				}
+			}
+			out = append(out, line)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
