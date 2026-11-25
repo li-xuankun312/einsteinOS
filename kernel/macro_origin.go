@@ -33,7 +33,44 @@ const (
 	cmdlineMacroLineFmt = "    %[1]s:%[2]d: %[3]s\n"
 	// %[1]s the macro
 	cmdlineMacroNoneFmt = "    no build script of the workspace has -D%[1]s\n"
+	// %[1]s the file of the error, %[2]s the name the macro becomes, %[3]s the macro
+	cmdlineMacroByHandFmt = "    %[1]s writes %[2]s itself, the name -D%[3]s= makes of %[3]s:\n"
+	// %[1]d the line number, %[2]s the line
+	cmdlineMacroByHandLineFmt = "      %[1]d: %[2]s\n"
+	cmdlineMacroByHandMax     = 6 // lines of the file given at most
 )
+
+var macroValueRe = regexp.MustCompile(`-D([A-Za-z_][A-Za-z0-9_]*)=([A-Za-z_][A-Za-z0-9_]*)`)
+
+// macroValue: the name a script line's -D<macro>=<name> makes of the macro ("" if none).
+func macroValue(line, macro string) string {
+	for _, m := range macroValueRe.FindAllStringSubmatch(line, -1) {
+		if m[1] == macro {
+			return m[2]
+		}
+	}
+	return ""
+}
+
+// writtenByHand: the lines of a source naming name, not in a // comment.
+func writtenByHand(path, name string) []scriptLine {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	re := regexp.MustCompile(`\b` + regexp.QuoteMeta(name) + `\b`)
+	var out []scriptLine
+	for i, l := range strings.Split(string(b), "\n") {
+		code := l
+		if j := strings.Index(code, "//"); j >= 0 {
+			code = code[:j]
+		}
+		if re.MatchString(code) {
+			out = append(out, scriptLine{n: i + 1, text: strings.TrimSpace(l)})
+		}
+	}
+	return out
+}
 
 // cmdlineMacroUse: a macro a compiler note says came from the command line, and the file of
 // the error that note follows.
@@ -154,6 +191,27 @@ func cmdlineMacroNear(ws, build, out string) string {
 				break
 			}
 			b.WriteString(fmt.Sprintf(cmdlineMacroLineFmt, d.script, d.n, d.text))
+		}
+		// the name the rename makes, written in the file by hand as well: 11/25 12:32:45
+		// embed_parity.cu:133 wrote e2e_embed_main() beside the main -Dmain= renamed into it
+		seenVal := map[string]bool{}
+		for _, d := range defs {
+			v := macroValue(d.text, u.macro)
+			if v == "" || seenVal[v] {
+				continue
+			}
+			seenVal[v] = true
+			hand := writtenByHand(filepath.Join(ws, u.file), v)
+			if len(hand) == 0 {
+				continue
+			}
+			b.WriteString(fmt.Sprintf(cmdlineMacroByHandFmt, u.file, v, u.macro))
+			for i, h := range hand {
+				if i == cmdlineMacroByHandMax {
+					break
+				}
+				b.WriteString(fmt.Sprintf(cmdlineMacroByHandLineFmt, h.n, h.text))
+			}
 		}
 	}
 	return fmt.Sprintf(cmdlineMacroFmt, b.String())

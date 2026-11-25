@@ -28,7 +28,7 @@ func embedRedefTree(t *testing.T) string {
 			"cuobj $T/embed_parity.cu \"$OBJ/e2e_embed.o\" -Dmain=e2e_embed_main\n" +
 			"cuobj_pic $T/embed_parity.cu \"$OBJ/pic_e2e_embed.o\" -Dmain=e2e_embed_main\n" +
 			"cuobj $T/x.cu \"$OBJ/x.o\" -Dmainline=1\n",
-		"tests/k39_integration/embed_parity.cu": "int e2e_embed_main() {\n  return 0;\n}\nint main() { return 1; }\n",
+		"tests/k39_integration/embed_parity.cu": "// e2e_embed_main: strong symbol\nint e2e_embed_main() {\n  return 0;\n}\nint main() { return 1; }\n",
 	})
 	return ws
 }
@@ -53,5 +53,19 @@ func TestTheBuildLinesDefiningACommandLineMacroAreGiven(t *testing.T) {
 	}
 	if got := cmdlineMacroNear(t.TempDir(), "", embedRedefOut); !strings.Contains(got, "no build script of the workspace has -Dmain") {
 		t.Fatalf("a macro no script defines, not said:\n%s", got)
+	}
+}
+
+// 11/25 12:32:45 embed_parity.cu:133 wrote e2e_embed_main() itself beside the main build.sh's
+// -Dmain=e2e_embed_main renamed into it: the line is given, not the comment naming it
+func TestANameTheRenameMakesWrittenByHandIsGiven(t *testing.T) {
+	ws := embedRedefTree(t)
+	got := cmdlineMacroNear(ws, ".einsteinOS/verify/uint1/build.sh", embedRedefOut)
+	want := "    tests/k39_integration/embed_parity.cu writes e2e_embed_main itself, the name -Dmain= makes of main:\n      2: int e2e_embed_main() {\n"
+	if !strings.Contains(got, want) {
+		t.Fatalf("lacks %q:\n%s", want, got)
+	}
+	if strings.Contains(got, "strong symbol") || strings.Count(got, "writes e2e_embed_main itself") != 1 {
+		t.Fatalf("a comment given, or the file twice:\n%s", got)
 	}
 }
