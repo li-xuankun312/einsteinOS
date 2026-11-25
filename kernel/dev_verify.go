@@ -1129,6 +1129,9 @@ func workspaceExes(ws string, procs []ProcSeen) []string {
 const compileErrorLinesMax = 80
 
 // %[1]d lines, %[2]s them
+// compileErrorsHead: how compileErrorsFmt begins, for output that already holds it.
+const compileErrorsHead = "[THE COMPILER'S ERRORS"
+
 const compileErrorsFmt = "[THE COMPILER'S ERRORS — every 'error:' line of build.sh's whole output, each with the two lines after it]\n%[2]s[THE END OF build.sh'S OUTPUT]\n"
 
 // compileErrorLines: each line of out with "error:" (a compiler's or a linker's), with the two lines

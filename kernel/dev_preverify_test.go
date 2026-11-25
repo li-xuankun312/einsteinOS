@@ -1,6 +1,7 @@
 package kernel
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -52,5 +53,18 @@ func TestThePreVerifyCheckOutlivesTheForkCall(t *testing.T) {
 	wait, unreg := strings.Index(after, "\t\tWait(child)\n"), strings.Index(after, "\t\tUnregisterPreVerify(role)\n\t\tif m := getMeta(child)")
 	if wait < 0 || unreg < wait {
 		t.Fatal("UnregisterPreVerify must come after Wait(child) (and after waitAbandoned)")
+	}
+}
+
+// 11/25 04:34:25 the log of a failed compile gave the error lines twice: once as the
+// verification put them first in build.sh's output, once again over compile_error and that output
+func TestTheLogOfAFailedCompileGivesItsErrorLinesOnce(t *testing.T) {
+	raw := "a\nx.cu:(.text+0x5): undefined reference to `f()'\nclang-16: error: linker command failed\nb\n"
+	put := fmt.Sprintf(compileErrorsFmt, 2, compileErrorLines(raw, compileErrorLinesMax)) + raw
+	if got := failedCompileLogText(put); strings.Count(got, compileErrorsHead) != 1 || strings.Count(got, "undefined reference to `f()'") != 2 {
+		t.Fatalf("%q", got) // once in the error lines, once in the output's end
+	}
+	if got := failedCompileLogText(raw); !strings.HasPrefix(got, "x.cu:(.text+0x5)") {
+		t.Fatalf("errors not first: %q", got)
 	}
 }

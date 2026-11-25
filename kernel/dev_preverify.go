@@ -249,3 +249,19 @@ const preVerifyGateTextLogMax = 3000
 // %[1]s repo, %[2]s unit, %[3]s the compile's output — 11/24 03:24:38 and 03:25:36 compile=fail
 // (exit 1) in 12s was logged with gate="" and nothing of what the compiler said
 const preVerifyCompileLogFmt = "dev_preverify: %[1]s unit %[2]s: the failed compile's output sent back (its end): %[3]s"
+
+// failedCompileLogText: what the log gives of a failed build's output — its error lines first,
+// then its end. BuildOut alone: the conversation's compile_error holds it too, and when the
+// verification put the error lines first they are not put again — 11/25 04:34:25 the log gave
+// them twice, compile_error and BuildOut joined.
+func failedCompileLogText(out string) string {
+	if strings.HasPrefix(out, compileErrorsHead) {
+		return truncStr(out, preVerifyGateTextLogMax)
+	}
+	if errs := compileErrorLines(out, compileErrorLinesMax); errs != "" {
+		// the errors first, wherever they were: 11/24 09:08:29 the log's 3000 bytes were the
+		// output's end, the warnings of test_kg.cu around the one error
+		out = errs + "…\n" + tailText(out, preVerifyGateTextLogMax/2)
+	}
+	return tailText(out, preVerifyGateTextLogMax)
+}

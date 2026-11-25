@@ -590,13 +590,7 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 				log.Printf(preVerifyGateTextLogFmt, r.repo, unit.ID, truncStr(o.Result.GateText, preVerifyGateTextLogMax))
 			}
 			if o.Result.Compile == "fail" {
-				out := o.Status["compile_error"] + "\n" + o.Result.BuildOut
-				if errs := compileErrorLines(out, compileErrorLinesMax); errs != "" {
-					// the errors first, wherever they were: 11/24 09:08:29 the log's 3000 bytes were the
-					// output's end, the warnings of test_kg.cu around the one error
-					out = errs + "…\n" + tailText(out, preVerifyGateTextLogMax/2)
-				}
-				log.Printf(preVerifyCompileLogFmt, r.repo, unit.ID, tailText(out, preVerifyGateTextLogMax))
+				log.Printf(preVerifyCompileLogFmt, r.repo, unit.ID, failedCompileLogText(o.Result.BuildOut))
 			}
 			if end {
 				endWhy = preVerifyReport(o)
