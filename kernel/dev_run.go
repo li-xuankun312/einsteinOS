@@ -662,6 +662,7 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 			a := integrationAnswerOf(unit.ID)
 			body := newRefMask(refMaskIdent, r.repo).Replace(integrationModelBlock(evalModel()) + a.Block() + newDevRepoFacts(r.devRepo, baseRef, mirror).Block())
 			notePartMirrorBase(unit.ID, mirror)
+			noteMirrorBranch(unit.ID, cloneDir, "origin/"+r.branch)
 			startIntegrationPartsOf(unit.ID, child, a.Parts, body, a.PartFiles)
 		}
 		// the fork returns at once and the conversation runs until Wait returns: the check

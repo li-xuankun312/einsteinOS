@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -497,5 +498,45 @@ func TestAWarningAloneNamesNoFile(t *testing.T) {
 	got := compileErrorOwners("uint", out)
 	if strings.Contains(got, "test_mmvq.cu") || !strings.Contains(got, "2 file(s):") || !strings.Contains(got, "src/rt/layout_check.cpp: 1 line(s)") || !strings.Contains(got, "include/baloon/rt_layout.hpp: 1 line(s)") {
 		t.Fatalf("%s", got)
+	}
+}
+
+// 11/25 07:05 a run started again: the mirror began at the parked tree, src/rt/graph.cpp already
+// `static bool fail` from the run before, and nothing it changed was seen. The lines are compared
+// with the branch the unit started from, where it was `bool fail`.
+func TestAFilesLinesAreComparedWithTheBranchTheUnitStartedFrom(t *testing.T) {
+	resetMirrorUnits()
+	defer resetMirrorUnits()
+	defer func() {
+		mirrorBranchMu.Lock()
+		delete(mirrorBranch, "uint")
+		delete(mirrorBranchAt, "uint")
+		mirrorBranchMu.Unlock()
+	}()
+	clone := t.TempDir()
+	git := func(args ...string) {
+		if out, err := exec.Command("git", append([]string{"-C", clone}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	git("init", "-q", "-b", "dev")
+	os.MkdirAll(filepath.Join(clone, "src/rt"), 0o755)
+	os.WriteFile(filepath.Join(clone, "src/rt/graph.cpp"), []byte("bool fail(const char* m) { return false; }\n"), 0o644)
+	git("add", ".")
+	git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "dev")
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "src/rt"), 0o755)
+	os.WriteFile(filepath.Join(dir, "src/rt/graph.cpp"), []byte("static bool fail(const char* m) { return false; }\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "src/rt/new.cpp"), []byte("int x;\n"), 0o644)
+	noteMirrorBranch("uint", clone, "dev")
+	noteMirrorConv("uint", dir, "3289499f", "")
+	out := "src/rt/graph.cpp:9:13: error: static declaration of 'fail' follows non-static declaration\nsrc/rt/new.cpp:1:1: error: y\n"
+	got := compileErrorOwners("uint", out)
+	if !strings.Contains(got, "    its lines changed since dev, the branch the unit started from, as the mirror holds it now (") ||
+		!strings.Contains(got, "    - bool fail(const char* m) { return false; }\n    + static bool fail(const char* m) { return false; }\n") {
+		t.Fatalf("%s", got)
+	}
+	if strings.Count(got, "its lines changed") != 1 {
+		t.Fatalf("a file the branch has not given lines:\n%s", got)
 	}
 }

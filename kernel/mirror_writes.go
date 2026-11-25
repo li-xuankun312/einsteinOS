@@ -17,6 +17,7 @@ import (
 	"io/fs"
 	"log"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -695,7 +696,11 @@ const (
 	// %[1]d lines taken out, %[2]d put in
 	// the mirror as it is when the report is made, which a command may have changed since the
 	// verification began — 11/25 07:53:13 it showed the fix of the line 07:52:47 had failed on
-	mirrorSinceStartFmt = "    its lines changed since the conversations began, as the mirror holds it now (%[3]s): %[1]d taken out, %[2]d put in\n"
+	mirrorSinceStartFmt = "    its lines changed since %[4]s, as the mirror holds it now (%[3]s): %[1]d taken out, %[2]d put in\n"
+	// what the lines are compared with
+	mirrorSinceBeganText = "the conversations began"
+	// %[1]s the branch
+	mirrorSinceBranchFmt = "%[1]s, the branch the unit started from"
 	// %[1]s the line
 	mirrorLineOutFmt = "    - %[1]s\n"
 	mirrorLineInFmt  = "    + %[1]s\n"
@@ -711,6 +716,16 @@ const (
 // Called with u.mu held.
 func (u *mirrorUnit) changedSinceStart(f string) string {
 	old, ok := u.start[f]
+	since := mirrorSinceBeganText
+	// the branch the unit started from, when known: the mirror of a run started again begins
+	// at the tree an earlier run parked, with that run's changes in it — 11/25 07:05 the mirror
+	// began with src/rt/graph.cpp's `static bool fail`, a command of the run before had written
+	if b, has, ref, known := mirrorBranchFile(u.unit, f); known {
+		if !has {
+			return ""
+		}
+		old, ok, since = b, true, fmt.Sprintf(mirrorSinceBranchFmt, ref)
+	}
 	now, ok2 := u.content[f]
 	if !ok || !ok2 || bytes.Equal(old, now) {
 		return ""
@@ -720,7 +735,7 @@ func (u *mirrorUnit) changedSinceStart(f string) string {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf(mirrorSinceStartFmt, len(out), len(in), time.Now().UTC().Format("15:04:05")))
+	b.WriteString(fmt.Sprintf(mirrorSinceStartFmt, len(out), len(in), time.Now().UTC().Format("15:04:05"), since))
 	for i, l := range out {
 		if i == mirrorSinceLinesMax {
 			b.WriteString(fmt.Sprintf(mirrorLinesMoreFmt, len(out)-i))
@@ -765,4 +780,43 @@ func lineChanges(old, now string) (out, in []string) {
 		}
 	}
 	return out, in
+}
+
+// mirrorBranch: per unit, the clone and the ref of the branch the unit started from.
+var (
+	mirrorBranchMu sync.Mutex
+	mirrorBranch   = map[string][2]string{}          // unit -> {clone dir, ref}
+	mirrorBranchAt = map[string]map[string]*[]byte{} // unit -> file -> its bytes on the ref (nil: not on it)
+)
+
+// noteMirrorBranch: the unit's mirror is compared with ref, read from the clone at dir.
+func noteMirrorBranch(unitID, dir, ref string) {
+	mirrorBranchMu.Lock()
+	defer mirrorBranchMu.Unlock()
+	mirrorBranch[unitID] = [2]string{dir, ref}
+	mirrorBranchAt[unitID] = map[string]*[]byte{}
+}
+
+// mirrorBranchFile: f as the branch the unit started from holds it — its bytes, whether the
+// branch has it, the ref — and whether a branch is known for the unit at all.
+func mirrorBranchFile(unitID, f string) ([]byte, bool, string, bool) {
+	mirrorBranchMu.Lock()
+	defer mirrorBranchMu.Unlock()
+	br, ok := mirrorBranch[unitID]
+	if !ok {
+		return nil, false, "", false
+	}
+	if c, ok := mirrorBranchAt[unitID][f]; ok {
+		if c == nil {
+			return nil, false, br[1], true
+		}
+		return *c, true, br[1], true
+	}
+	b, err := exec.Command("git", "-C", br[0], "show", br[1]+":"+f).Output()
+	if err != nil {
+		mirrorBranchAt[unitID][f] = nil
+		return nil, false, br[1], true
+	}
+	mirrorBranchAt[unitID][f] = &b
+	return b, true, br[1], true
 }
