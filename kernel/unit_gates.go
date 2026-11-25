@@ -196,7 +196,7 @@ func unitGatesAll(in GateInput) (kinds, texts []string) {
 			}
 			t := fmt.Sprintf(gateKernelUnportedFmt, len(files), strings.Join(each, "; "), PortMapPath(in.UnitID))
 			if len(in.PortFilesRefused) > 0 {
-				t += fmt.Sprintf(gateKernelUnportedRowsFmt, len(in.PortFilesRefused), shortList(in.PortFilesRefused, 12), integrationMissingPrefix)
+				t += fmt.Sprintf(gateKernelUnportedRowsFmt, len(in.PortFilesRefused), refusedRowsText(in.PortFilesRefused, files), integrationMissingPrefix)
 			}
 			fail("kernel_unported", t)
 		}
@@ -742,4 +742,33 @@ func isTestPath(p string) bool {
 		}
 	}
 	return false
+}
+
+// refusedRowsText: the port map rows that do not count, those writing into a file kernel_unported
+// holds on first and all of them, then the others cut at 12. 11/25 06:27:29 the nine rows that
+// wrote into the held files sorted after 184 others and were cut, "(+181 more)".
+func refusedRowsText(refused, held []string) string {
+	var into, rest []string
+	for _, r := range refused {
+		hit := false
+		for _, f := range held {
+			if strings.Contains(r, " → "+f+" ") {
+				hit = true
+				break
+			}
+		}
+		if hit {
+			into = append(into, r)
+		} else {
+			rest = append(rest, r)
+		}
+	}
+	var parts []string
+	if len(into) > 0 {
+		parts = append(parts, strings.Join(into, "; "))
+	}
+	if len(rest) > 0 {
+		parts = append(parts, shortList(rest, 12))
+	}
+	return strings.Join(parts, "; ")
 }

@@ -55,3 +55,23 @@ func TestTheUnportedKernelsAreGivenWithTheirFiles(t *testing.T) {
 		t.Fatalf("%v", texts)
 	}
 }
+
+// 11/25 06:27:29 the nine rows writing into the held files sorted after 184 others and were cut:
+// those rows come first, all of them
+func TestTheRowsIntoTheHeldFilesComeFirst(t *testing.T) {
+	var refused []string
+	for i := 0; i < 30; i++ {
+		refused = append(refused, fmt.Sprintf("src/a%02d.cpp main → src/a%02d.cpp main (no unit ports main as a kernel)", i, i))
+	}
+	for i := 0; i < 9; i++ {
+		refused = append(refused, fmt.Sprintf("tests/t.cu test_%d → src/k%d.cu k%d_kernel (no unit ports test_%d as a kernel)", i, i, i, i))
+	}
+	var held []string
+	for i := 0; i < 9; i++ {
+		held = append(held, fmt.Sprintf("src/k%d.cu", i))
+	}
+	got := refusedRowsText(refused, held)
+	if !strings.HasPrefix(got, "tests/t.cu test_0 → src/k0.cu") || !strings.Contains(got, "src/k8.cu k8_kernel") || !strings.Contains(got, "(+18 more)") {
+		t.Fatal(got)
+	}
+}
