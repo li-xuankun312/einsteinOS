@@ -1147,7 +1147,7 @@ const compileErrorNotesMax = 4
 // compileErrorsHead: how compileErrorsFmt begins, for output that already holds it.
 const compileErrorsHead = "[THE COMPILER'S ERRORS"
 
-const compileErrorsFmt = "[THE COMPILER'S ERRORS — every 'error:' line of build.sh's whole output, each with the two lines after it]\n%[2]s[THE END OF build.sh'S OUTPUT]\n"
+const compileErrorsFmt = "[THE COMPILER'S ERRORS — every 'error:' line of build.sh's whole output, each with the two lines after it and the notes that follow it, each with its two]\n%[2]s[THE END OF build.sh'S OUTPUT]\n"
 
 // compileErrorLines: each line of out with "error:" (a compiler's or a linker's), with the two lines
 // after it, at most max lines in all. 11/24 04:27:49 a build of 844 compiles failed on one error in
