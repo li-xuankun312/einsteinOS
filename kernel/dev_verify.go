@@ -524,7 +524,11 @@ func runUnitVerifyAlone(ws, unitID, gpuUsable string, req UnitRequirements, chan
 	res.BuildExit, res.BuildOut = code, tailText(out, 3000)
 	if code != 0 {
 		// the compiler's errors wherever they are in the output, not only in its last 3000 bytes
-		if errs := compileErrorLines(out, compileErrorLinesMax); errs != "" && !strings.Contains(res.BuildOut, errs) {
+		errs := compileErrorLines(out, compileErrorLinesMax)
+		if errs != "" {
+			errs += undefinedRefNear(ws, out)
+		}
+		if errs != "" && !strings.Contains(res.BuildOut, errs) {
 			res.BuildOut = fmt.Sprintf(compileErrorsFmt, strings.Count(errs, "\n"), errs) + res.BuildOut
 		}
 	}
