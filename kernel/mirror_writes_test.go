@@ -464,11 +464,14 @@ func TestASharedFileTheCompilerNamesSaysWhoChangedIt(t *testing.T) {
 	for _, want := range []string{
 		"  src/rt/graph.cpp: 1 line(s) named — shared — the mirror held it when the conversations began; changed since by the unit's conversation (conversation 8c680f2c) (the last first)",
 		"  include/baloon/rt_graph.hpp: 1 line(s) named — shared — the mirror held it when the conversations began, and no command of theirs has changed it",
-		"    its lines changed since the conversations began: 1 taken out, 1 put in\n    - bool fail(const char* m) { return false; }\n    + static bool fail(const char* m) { return false; }\n",
+		"    - bool fail(const char* m) { return false; }\n    + static bool fail(const char* m) { return false; }\n",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("lacks %q:\n%s", want, got)
 		}
+	}
+	if !strings.Contains(got, "    its lines changed since the conversations began, as the mirror holds it now (") {
+		t.Fatalf("not said to be the mirror now:\n%s", got)
 	}
 	if strings.Contains(got, "rt_graph.hpp: 1 line(s) named — shared — the mirror held it when the conversations began, and no command of theirs has changed it\n    its lines") {
 		t.Fatalf("an unchanged file given changed lines:\n%s", got)

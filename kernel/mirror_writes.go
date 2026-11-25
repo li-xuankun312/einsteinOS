@@ -691,7 +691,9 @@ func gateFileOwners(unitID, gate string, files []string) string {
 
 const (
 	// %[1]d lines taken out, %[2]d put in
-	mirrorSinceStartFmt = "    its lines changed since the conversations began: %[1]d taken out, %[2]d put in\n"
+	// the mirror as it is when the report is made, which a command may have changed since the
+	// verification began — 11/25 07:53:13 it showed the fix of the line 07:52:47 had failed on
+	mirrorSinceStartFmt = "    its lines changed since the conversations began, as the mirror holds it now (%[3]s): %[1]d taken out, %[2]d put in\n"
 	// %[1]s the line
 	mirrorLineOutFmt = "    - %[1]s\n"
 	mirrorLineInFmt  = "    + %[1]s\n"
@@ -716,7 +718,7 @@ func (u *mirrorUnit) changedSinceStart(f string) string {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf(mirrorSinceStartFmt, len(out), len(in)))
+	b.WriteString(fmt.Sprintf(mirrorSinceStartFmt, len(out), len(in), time.Now().UTC().Format("15:04:05")))
 	for i, l := range out {
 		if i == mirrorSinceLinesMax {
 			b.WriteString(fmt.Sprintf(mirrorLinesMoreFmt, len(out)-i))
