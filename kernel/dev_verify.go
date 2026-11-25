@@ -1140,6 +1140,9 @@ func workspaceExes(ws string, procs []ProcSeen) []string {
 // compileErrorLinesMax: how many lines of the compiler's errors a failed build keeps.
 const compileErrorLinesMax = 80
 
+// compileErrorNotesMax: the notes after one error given with it at most
+const compileErrorNotesMax = 4
+
 // %[1]d lines, %[2]s them
 // compileErrorsHead: how compileErrorsFmt begins, for output that already holds it.
 const compileErrorsHead = "[THE COMPILER'S ERRORS"
@@ -1166,10 +1169,18 @@ func compileErrorLines(out string, max int) string {
 			continue
 		}
 		var w strings.Builder
-		for j := i; j < len(ls) && j <= i+2; j++ {
+		end := i + 2
+		// the notes the compiler gives the error, each with its two lines: 11/25 15:43:38 the
+		// three "no matching function for call to 'e2e_*_main'" were given without their
+		// "candidate function not viable: requires 2 arguments", and 12:47:48 the redefinition
+		// without "<command line>:3:14: note: expanded from macro 'main'" — each the fourth line
+		for k := 0; k < compileErrorNotesMax && end+1 < len(ls) && strings.Contains(ls[end+1], ": note:"); k++ {
+			end += 3
+		}
+		for j := i; j < len(ls) && j <= end; j++ {
 			w.WriteString(ls[j] + "\n")
 		}
-		i += 2
+		i = end
 		k := w.String()
 		if count[k] == 0 {
 			if n >= max {
