@@ -59,6 +59,9 @@ type GateInput struct {
 	MissingGroups []string
 	// Shadowed: kernels the port map names that a test file defines too (shadowedKernels)
 	Shadowed []string
+	// EntryStubs: headers defining, inline as a constant, an entry build.sh makes of a test's
+	// main (entryStubs)
+	EntryStubs []string
 	// PortRefFiles: port map lines whose reference file is not one of the unit's
 	// (portRefFiles)
 	PortRefFiles []string
@@ -323,6 +326,11 @@ func unitGatesAll(in GateInput) (kinds, texts []string) {
 	}
 	if len(in.PortScripts) > 0 {
 		fail("port_count_in_script", fmt.Sprintf(gatePortScriptFmt, strings.Join(in.PortScripts, ", "), PortMapPath(in.UnitID), len(in.Req.Symbols)))
+	}
+	// 11/25 05:06:01 include/baloon/kg_kernels.hpp:201 `inline int e2e_embed_main() { return 0; }`
+	// beside build.sh's -Dmain=e2e_embed_main of embed_parity.cu, every compile since passing
+	if len(in.EntryStubs) > 0 {
+		fail("entry_stubbed", fmt.Sprintf(gateEntryStubFmt, len(in.EntryStubs), strings.Join(in.EntryStubs, "\n")))
 	}
 	if len(in.Shadowed) > 0 {
 		fail("kernel_shadowed_in_test", fmt.Sprintf(gateKernelShadowedFmt, strings.Join(in.Shadowed, ", "), PortMapPath(in.UnitID)))
