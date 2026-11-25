@@ -348,6 +348,9 @@ func withRefPathsPresent(ws string, changed []string, req UnitRequirements) []st
 	return out
 }
 
+// portRowSameReason: why a row naming the same file and function on both sides does not count.
+const portRowSameReason = " (the same file and function in both columns)"
+
 // integrationMissingPrefix: the first column of an integration unit's port map row for a kernel
 // it writes for a tensor group the planner's missing lines give it ("missing:<group>").
 const integrationMissingPrefix = "missing:"
@@ -392,6 +395,10 @@ func integrationPortFiles(ws, unitID string, pm map[string]portEntry) (map[strin
 			}
 		case refKernels[e.refName]:
 			out[e.file] = true
+		case e.refFile == e.file && e.refName == e.name:
+			// 11/25 06:27:29 165 of the 193 rows that did not count named a file and function of
+			// this repository on both sides — src/core/device_main.cpp main → the same
+			refused = append(refused, e.refFile+" "+e.refName+" → "+e.file+" "+e.name+portRowSameReason)
 		default:
 			refused = append(refused, e.refFile+" "+e.refName+" → "+e.file+" "+e.name+" (no unit ports "+e.refName+" as a kernel)")
 		}

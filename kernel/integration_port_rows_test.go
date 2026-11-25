@@ -75,3 +75,19 @@ func TestTheRowsIntoTheHeldFilesComeFirst(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+// 11/25 06:27:29 165 of the 193 rows that did not count named the same file and function on both
+// sides, each given alone with "no unit ports main as a kernel": they are said to be that, in one line
+func TestRowsNamingTheSameFileAndFunctionOnBothSidesAreOneLine(t *testing.T) {
+	ws := t.TempDir()
+	putTree(t, ws, map[string]string{
+		".einsteinOS/port/uint.tsv": "src/core/device_main.cpp\tmain\tsrc/core/device_main.cpp\tmain\n" +
+			"src/kernels/x_parity.cpp\tcheck\tsrc/kernels/x_parity.cpp\tcheck\n" +
+			"tests/t.cu\ttest_k\tsrc/k.cu\tk_kernel\n",
+	})
+	_, refused := integrationPortFiles(ws, "uint", readPortMap(ws, "uint"))
+	got := refusedRowsText(refused, []string{"src/k.cu"})
+	if !strings.HasPrefix(got, "tests/t.cu test_k → src/k.cu k_kernel (no unit ports test_k as a kernel); 2 row(s) name the same file and function in both columns (") {
+		t.Fatal(got)
+	}
+}

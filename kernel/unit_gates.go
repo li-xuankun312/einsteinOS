@@ -744,12 +744,19 @@ func isTestPath(p string) bool {
 	return false
 }
 
+// %[1]d rows, %[2]s the first of them
+const portRowsSameFmt = "%[1]d row(s) name the same file and function in both columns (%[2]s, …)"
+
 // refusedRowsText: the port map rows that do not count, those writing into a file kernel_unported
 // holds on first and all of them, then the others cut at 12. 11/25 06:27:29 the nine rows that
 // wrote into the held files sorted after 184 others and were cut, "(+181 more)".
 func refusedRowsText(refused, held []string) string {
-	var into, rest []string
+	var into, rest, same []string
 	for _, r := range refused {
+		if strings.HasSuffix(r, portRowSameReason) {
+			same = append(same, strings.TrimSuffix(r, portRowSameReason))
+			continue
+		}
 		hit := false
 		for _, f := range held {
 			if strings.Contains(r, " → "+f+" ") {
@@ -769,6 +776,10 @@ func refusedRowsText(refused, held []string) string {
 	}
 	if len(rest) > 0 {
 		parts = append(parts, shortList(rest, 12))
+	}
+	if len(same) > 0 {
+		// one line for them: 11/25 06:27:29 they were 165 of 193, each given alone
+		parts = append(parts, fmt.Sprintf(portRowsSameFmt, len(same), same[0]))
 	}
 	return strings.Join(parts, "; ")
 }
