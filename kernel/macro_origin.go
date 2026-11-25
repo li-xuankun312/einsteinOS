@@ -150,6 +150,11 @@ func macroDefLines(ws string, scripts []string, macro string) []scriptLine {
 		sc := bufio.NewScanner(f)
 		sc.Buffer(make([]byte, 64<<10), 1<<20)
 		for n := 1; sc.Scan(); n++ {
+			// a shell comment defines nothing: 11/25 16:47:21 build.sh:26 and :28, two comments
+			// naming -Dmain=, were given as definitions beside :147
+			if strings.HasPrefix(strings.TrimSpace(sc.Text()), "#") {
+				continue
+			}
 			if re.MatchString(sc.Text()) {
 				out = append(out, scriptLine{script: s, n: n, text: strings.TrimSpace(sc.Text())})
 			}

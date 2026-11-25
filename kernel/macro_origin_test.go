@@ -69,3 +69,16 @@ func TestANameTheRenameMakesWrittenByHandIsGiven(t *testing.T) {
 		t.Fatalf("a comment given, or the file twice:\n%s", got)
 	}
 }
+
+// 11/25 16:47:21 build.sh:26 and :28 were comments naming -Dmain=: a shell comment is no definition
+func TestACommentOfTheBuildScriptIsNoDefinition(t *testing.T) {
+	ws := t.TempDir()
+	putTree(t, ws, map[string]string{
+		".einsteinOS/verify/uint1/build.sh": "# embed_parity.cu already defines e2e_embed_main; compiling it with -Dmain=e2e_embed_main\n" +
+			"cuobj $T/embed_parity.cu \"$OBJ/e2e_embed.o\" -Dmain=e2e_embed_main\n",
+	})
+	got := cmdlineMacroNear(ws, ".einsteinOS/verify/uint1/build.sh", embedRedefOut)
+	if strings.Contains(got, "build.sh:1:") || !strings.Contains(got, "build.sh:2: cuobj") {
+		t.Fatalf("%s", got)
+	}
+}
