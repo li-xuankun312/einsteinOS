@@ -306,6 +306,8 @@ type VerifyResult struct {
 	// GateText says what was measured. Build/Test are what the scripts' processes did.
 	Gate     string
 	GateText string
+	// GateFiles: the workspace files the gate names as what it holds on (test_down.go)
+	GateFiles []string
 	// Gates: every gate unit_gates.go measured failed, Gate first
 	Gates []string
 	Build ProcTrace
@@ -571,6 +573,7 @@ func runUnitTestStage(ws, unitID, gpuUsable string, req UnitRequirements, change
 			text := fmt.Sprintf(gateMachineDownFmt, testDownFact(d, r), why, testDownHistory(ws, r))
 			res.Smoke = "skipped"
 			res.Gates, res.Gate, res.GateText = []string{"machine_down_during_test"}, "machine_down_during_test", text
+			res.GateFiles = sourcePaths(r.Sources)
 			log.Printf("dev_verify: unit %s: %s", unitID, text)
 			return finish()
 		} else {

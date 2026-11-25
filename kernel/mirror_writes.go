@@ -548,13 +548,7 @@ func compileErrorOwners(unitID, out string) string {
 	sort.Strings(order)
 	var b strings.Builder
 	for _, f := range order {
-		whose := "no part's (no conversation of the unit has written it)"
-		if o, ok := u.owner[f]; ok {
-			whose = fmt.Sprintf(mirrorOwnedByFmt, partName(u.part[o]), shortID(o))
-		} else if p, ok := u.named[f]; ok {
-			whose = fmt.Sprintf(mirrorNamedForFmt, p)
-		}
-		b.WriteString(fmt.Sprintf(compileOwnerLineFmt, f, count[f], whose))
+		b.WriteString(fmt.Sprintf(compileOwnerLineFmt, f, count[f], u.whose(f)))
 	}
 	return fmt.Sprintf(compileOwnersFmt, len(order), b.String())
 }
@@ -598,4 +592,48 @@ func partWroteOthersBy(unitID, conv, part string, files map[string][]string) []s
 	}
 	sort.Strings(out)
 	return out
+}
+
+// whose: the part whose file f is in the unit's mirror — first written by its conversation, or
+// given it by the planner. Called with u.mu held.
+func (u *mirrorUnit) whose(f string) string {
+	if o, ok := u.owner[f]; ok {
+		return fmt.Sprintf(mirrorOwnedByFmt, partName(u.part[o]), shortID(o))
+	}
+	if p, ok := u.named[f]; ok {
+		return fmt.Sprintf(mirrorNamedForFmt, p)
+	}
+	return "no part's (no conversation of the unit has written it)"
+}
+
+const (
+	// %[1]s the gate, %[2]d files, %[3]s them with whose they are
+	gateOwnersFmt = "[WHOSE FILES THE GATE %[1]s HOLDS ON — measured from the unit's mirror]\n%[2]d file(s):\n%[3]s"
+	// %[1]s the file, %[2]s whose
+	gateOwnerLineFmt = "  %[1]s: %[2]s\n"
+	// %[1]s the unit, %[2]s the gate, %[3]s the files with whose they are
+	gateOwnersLogFmt = "dev_preverify: unit %[1]s: the files %[2]s holds on: %[3]s"
+)
+
+// gateFileOwners: the files a gate holds on — 11/25 04:23:56 machine_down_during_test held on
+// src/ix_router_top10_wave.cu — each with the part whose file it is in the unit's mirror, as
+// compileErrorOwners gives the files a failed compile names.
+func gateFileOwners(unitID, gate string, files []string) string {
+	mirrorUnitsMu.Lock()
+	u := mirrorUnits[unitID]
+	mirrorUnitsMu.Unlock()
+	if u == nil || len(files) == 0 {
+		return ""
+	}
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	var b strings.Builder
+	var said []string
+	for _, f := range files {
+		w := u.whose(f)
+		b.WriteString(fmt.Sprintf(gateOwnerLineFmt, f, w))
+		said = append(said, f+": "+w)
+	}
+	log.Printf(gateOwnersLogFmt, unitID, gate, strings.Join(said, "; "))
+	return fmt.Sprintf(gateOwnersFmt, gate, len(files), b.String())
 }

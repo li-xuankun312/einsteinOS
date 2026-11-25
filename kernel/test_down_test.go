@@ -273,3 +273,20 @@ func TestARecordKeptWithoutItsTimeIsReadFromTheStagesLog(t *testing.T) {
 		t.Fatalf("%+v", rs)
 	}
 }
+
+// a held test.sh's verification names the files it holds on, for whose they are to be said
+func TestAHeldTestNamesTheFilesItHoldsOn(t *testing.T) {
+	ws, _, _, prog := downFixture(t)
+	os.Remove(prog)
+	bootAt(t, time.Now().Add(time.Minute))
+	fakeCudaProgram(t, filepath.Join(ws, "build"))
+	test := ".einsteinOS/verify/uint/test.sh"
+	os.MkdirAll(filepath.Join(ws, filepath.Dir(test)), 0o755)
+	os.WriteFile(filepath.Join(ws, test), []byte("true\n"), 0o755)
+	withRunner(t, func(string) (int, string) { return 0, "" })
+	res := runUnitTestStage(ws, "uint", "", UnitRequirements{}, nil, time.Minute, time.Minute, "", ".einsteinOS/verify/uint/build.sh", test,
+		VerifyResult{Compile: "pass", Smoke: "missing", TestExit: -1}, time.Now())
+	if len(res.GateFiles) != 1 || res.GateFiles[0] != "src/other.cu" {
+		t.Fatalf("%+v", res.GateFiles)
+	}
+}

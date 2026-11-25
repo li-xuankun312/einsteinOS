@@ -387,3 +387,33 @@ func TestALongCommandDoesNotHoldTheMirrorFromTheOthers(t *testing.T) {
 	}
 	close(release)
 }
+
+// 11/25 04:23:56 machine_down_during_test held on src/ix_router_top10_wave.cu: the gate goes back
+// with whose file each one it holds on is — written first by a part, or given one by the planner
+func TestTheFilesAGateHoldsOnGoBackWithWhoseTheyAre(t *testing.T) {
+	resetMirrorUnits()
+	defer resetMirrorUnits()
+	dir := t.TempDir()
+	noteMirrorConv("uint", dir, "a6d47c28", "moe: y")
+	noteMirrorPartFiles("uint", map[string][]string{"router: z": {"src/ix_router_top10_wave.cu"}})
+	MirrorCommand("a6d47c28", func() string {
+		os.MkdirAll(filepath.Join(dir, "src"), 0o755)
+		os.WriteFile(filepath.Join(dir, "src/moe.cu"), []byte("x"), 0o644)
+		return ""
+	})
+	got := gateFileOwners("uint", "machine_down_during_test", []string{"src/ix_router_top10_wave.cu", "src/moe.cu", "src/none.cu"})
+	for _, want := range []string{
+		"[WHOSE FILES THE GATE machine_down_during_test HOLDS ON",
+		"3 file(s):\n",
+		"  src/ix_router_top10_wave.cu: the file the planner gave router: z\n",
+		"  src/moe.cu: the file of moe, conversation a6d47c28, which wrote it first\n",
+		"  src/none.cu: no part's",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("lacks %q:\n%s", want, got)
+		}
+	}
+	if gateFileOwners("uother", "g", []string{"a"}) != "" || gateFileOwners("uint", "g", nil) != "" {
+		t.Fatal("no mirror or no file, something said")
+	}
+}

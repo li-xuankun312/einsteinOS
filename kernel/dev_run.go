@@ -625,6 +625,9 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 			if o.Result.Compile == "fail" {
 				report += compileErrorOwners(unit.ID, o.Status["compile_error"]+"\n"+o.Result.BuildOut)
 			}
+			if len(o.Result.GateFiles) > 0 {
+				report += "\n" + gateFileOwners(unit.ID, o.Result.Gate, o.Result.GateFiles)
+			}
 			return false, report
 		}
 		check := func() (bool, string) { return checkFrom(false) }
