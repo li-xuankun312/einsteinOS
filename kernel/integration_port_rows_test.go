@@ -91,3 +91,25 @@ func TestRowsNamingTheSameFileAndFunctionOnBothSidesAreOneLine(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+// 11/25 06:27:29 kernel_unported asked for missing:<group> rows and named no group: the groups the
+// planner's missing lines give the unit are given
+func TestKernelUnportedNamesThePlannersMissingGroups(t *testing.T) {
+	integrationAnswersMu.Lock()
+	integrationAnswers["uint"] = IntegrationModelPlan{Ops: []IntegrationOp{
+		{Group: "model.language_model.layers.{i}.mlp.gate.weight", What: "router"},
+		{Group: "model.language_model.layers.{i}.input_layernorm.weight", What: "norm"},
+		{Group: "model.language_model.embed_tokens.weight", Unit: "u7991572426", What: "embed"},
+	}}
+	integrationAnswersMu.Unlock()
+	defer func() { integrationAnswersMu.Lock(); delete(integrationAnswers, "uint"); integrationAnswersMu.Unlock() }()
+	g := integrationMissingGroups("uint")
+	if len(g) != 2 || g[0] != "model.language_model.layers.{i}.input_layernorm.weight" {
+		t.Fatalf("%v", g)
+	}
+	in := GateInput{UnitID: "uint", PortFiles: map[string]bool{}, MissingGroups: g, Kernels: map[string][]string{"src/ix_router_top10_wave.cu": {"router_top10_wave_kernel"}}}
+	_, texts := unitGatesAll(in)
+	if len(texts) == 0 || !strings.Contains(texts[0], "; the planner's missing lines give the integration unit 2 tensor group(s): model.language_model.layers.{i}.input_layernorm.weight model.language_model.layers.{i}.mlp.gate.weight") {
+		t.Fatalf("%v", texts)
+	}
+}

@@ -423,3 +423,16 @@ func plannerMissingRow(unitID, refFile string) bool {
 	}
 	return false
 }
+
+// integrationMissingGroups: the tensor groups the planner's missing lines give the integration
+// unit, sorted.
+func integrationMissingGroups(unitID string) []string {
+	var out []string
+	for _, o := range integrationAnswerOf(unitID).Ops {
+		if o.Unit == "" && o.Group != "" {
+			out = append(out, o.Group)
+		}
+	}
+	sort.Strings(out)
+	return out
+}

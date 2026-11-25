@@ -54,6 +54,9 @@ type GateInput struct {
 	PortFiles map[string]bool
 	// PortFilesRefused: the integration unit's port map rows that do not count (port_gate.go)
 	PortFilesRefused []string
+	// MissingGroups: the tensor groups the planner's missing lines give the integration unit — the
+	// groups a missing:<group> row of its port map counts for (port_gate.go)
+	MissingGroups []string
 	// Shadowed: kernels the port map names that a test file defines too (shadowedKernels)
 	Shadowed []string
 	// PortRefFiles: port map lines whose reference file is not one of the unit's
@@ -107,6 +110,8 @@ const (
 	gateKernelUnportedRowsFmt = "; %[1]d row(s) of the port map do not count: %[2]s — a kernel for a tensor group the planner's missing lines give the integration unit is written in a row whose first column is %[3]s<group>"
 	// %[1]d files, %[2]s each with its kernels, %[3]s the port map
 	gateKernelUnportedFmt = "kernel_unported: %[1]d file(s) define __global__ kernels and are neither test files nor files the unit's port map %[3]s writes a counterpart into: %[2]s"
+	// %[1]d groups, %[2]s them
+	gateKernelUnportedGroupsFmt = "; the planner's missing lines give the integration unit %[1]d tensor group(s): %[2]s"
 	// %[1]s the file, %[2]s its kernels
 	gateKernelUnportedFileFmt  = "%[1]s (%[2]s)"
 	gateGPUKernelMissingFmt    = "gpu_kernel_missing: the unit's modules come from CUDA sources in the reference (%[1]s) but its CUDA files define no __global__ kernel: %[2]s — a host header about a kernel is not the kernel; kernels its port map %[3]s names: %[4]d; kernels its test launched: %[5]s"
@@ -197,6 +202,11 @@ func unitGatesAll(in GateInput) (kinds, texts []string) {
 			t := fmt.Sprintf(gateKernelUnportedFmt, len(files), strings.Join(each, "; "), PortMapPath(in.UnitID))
 			if len(in.PortFilesRefused) > 0 {
 				t += fmt.Sprintf(gateKernelUnportedRowsFmt, len(in.PortFilesRefused), refusedRowsText(in.PortFilesRefused, files), integrationMissingPrefix)
+			}
+			if len(in.MissingGroups) > 0 {
+				// what may follow "missing:": 11/25 06:27:29 the text asked for missing:<group> rows
+				// and named no group, and the port map had none since 11/24 04:37
+				t += fmt.Sprintf(gateKernelUnportedGroupsFmt, len(in.MissingGroups), strings.Join(in.MissingGroups, " "))
 			}
 			fail("kernel_unported", t)
 		}

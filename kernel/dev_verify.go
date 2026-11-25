@@ -714,11 +714,12 @@ func changedFilesText(changed []string) string {
 func unitGateInput(ws, unitID string, req UnitRequirements, changed []string, build, test ProcTrace, nt NoToolchainBuild) GateInput {
 	pm := readPortMap(ws, unitID)
 	pf := portFiles(pm)
-	var pfRefused []string
+	var pfRefused, missingGroups []string
 	if len(req.Tests) > 0 {
 		// the integration unit's kernels: their rows are checked against the planner's missing
 		// lines and the kernels the units ported (port_gate.go)
 		pf, pfRefused = integrationPortFiles(ws, unitID, pm)
+		missingGroups = integrationMissingGroups(unitID)
 	}
 	mutScript, mutMissing := testMutatesMissing(ws, unitID, changed)
 	return GateInput{Req: req, Changed: changed, Build: build, Test: test, Compilers: presentGPUCompilers(),
@@ -726,7 +727,7 @@ func unitGateInput(ws, unitID string, req UnitRequirements, changed []string, bu
 		PortForeign: portForeignNames(ws, unitID, req.FileNames), PortScripts: unitPortScripts(ws, unitID, req), MutatesMissingScript: mutScript, MutatesMissing: mutMissing, Kernels: unitKernels(ws, changed), KernelsMeasured: true,
 		Shadowed: shadowedKernels(unitKernels(ws, changed), portKernels(ws, unitID)),
 		ISAFuncs: isaPortFuncs(pm, req.FlagFiles), PortKernels: portKernels(ws, unitID), UnitID: unitID,
-		PortFiles: pf, PortFilesRefused: pfRefused,
+		PortFiles: pf, PortFilesRefused: pfRefused, MissingGroups: missingGroups,
 		NoToolchain: nt, Includers: cuhIncluders(ws, changed), IncludersMeasured: true,
 		RepoKernels: integrationRepoKernels(ws, req), LeanCopied: unitLeanCopied(ws, changed)}
 }
