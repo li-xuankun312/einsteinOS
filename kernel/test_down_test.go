@@ -173,3 +173,35 @@ func TestAHeldTestFailsTheAttemptWithItsGate(t *testing.T) {
 		t.Fatalf("%v", st)
 	}
 }
+
+// 11/25 01:49 the file defining router_top10_wave_kernel had changed, test.sh ran, and the
+// machine went down at the same kernel again: a kernel the machine went down with twice is not
+// let run by a change of its files, until EINSTEINOS_TEST_DOWN_RELEASE names it
+func TestAKernelTheMachineWentDownWithTwiceIsHeldThoughItsFilesChange(t *testing.T) {
+	ws, crash, _, prog := downFixture(t)
+	os.Remove(prog)
+	bootAt(t, time.Now().Add(time.Minute))
+	fakeCudaProgram(t, filepath.Join(ws, "build"))
+	d, r, first := noteTestDown(ws, "uint")
+	if d == nil || r.Kernel != "other_kernel" || r.Unit != "uint" || r.Test != d.Test || r.At == "" {
+		t.Fatalf("%+v %+v", d, r)
+	}
+	os.WriteFile(filepath.Join(ws, "src", "other.cu"), []byte("__global__ void other_kernel(int* p) { if (p) *p = 0; }\n"), 0o644)
+	if same, why := testDownSame(ws, d, r, first); same {
+		t.Fatalf("down once, its file changed: held (%s)", why)
+	}
+	// an earlier time, on another launch log, at the same kernel
+	saveTestDownRecord(filepath.Join(crash, "einsteinos-down-882494937.json"),
+		&testDownRecord{Unit: "uint", Test: d.Test, At: "2026/11/24 17:40:14.827", Kernel: "other_kernel", Sources: map[string]string{"src/other.cu": "0121486c"}})
+	if n := len(testDownsOfKernel(crash, "other_kernel")); n != 2 {
+		t.Fatalf("downs: %d", n)
+	}
+	same, why := testDownSame(ws, d, r, first)
+	if !same || !strings.Contains(why, "went down at other_kernel 2 times") || !strings.Contains(why, testDownReleaseEnv) {
+		t.Fatalf("down twice, its file changed: %v %s", same, why)
+	}
+	t.Setenv(testDownReleaseEnv, "x_kernel, other_kernel")
+	if same, why := testDownSame(ws, d, r, first); same {
+		t.Fatalf("released: held (%s)", why)
+	}
+}

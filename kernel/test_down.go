@@ -45,6 +45,11 @@ type testDown struct {
 // testDownRecord is what the kernel measured of a testDown after the unit's build had made the
 // executable again, kept beside the launch log on the crash directory (einsteinos-down-*.json).
 type testDownRecord struct {
+	// the test the machine went down in: the unit, what it ran (its test.sh, or the program run
+	// alone before it) and when it started
+	Unit   string `json:"unit,omitempty"`
+	Test   string `json:"test,omitempty"`
+	At     string `json:"at,omitempty"`
 	Symbol string `json:"symbol,omitempty"`
 	Kernel string `json:"kernel,omitempty"`
 	Why    string `json:"why,omitempty"` // why no kernel name could be given
@@ -146,7 +151,7 @@ func saveTestDownRecord(path string, r *testDownRecord) {
 // measureTestDown resolves d's last launch in the executable the build has just made again at
 // the same path, and finds the workspace files defining that kernel.
 func measureTestDown(ws string, d *testDown) *testDownRecord {
-	r := &testDownRecord{}
+	r := &testDownRecord{Unit: d.Unit, Test: d.Test, At: d.At.Format(crashStagesTimeLayout)}
 	switch {
 	case !d.Noted:
 		r.Why = "its launch log noted no kernel launch"
@@ -317,6 +322,12 @@ func testDownSame(ws string, d *testDown, r *testDownRecord, first bool) (bool, 
 			}
 		}
 		if len(changed) > 0 {
+			// a kernel the machine went down with more than once is not let run by a change of its
+			// files: 11/25 01:49 src/ix_router_top10_wave.cu had changed and the machine went down
+			// at the same kernel, at the same offset
+			if n := len(testDownsOfKernel(crashDir(), r.Kernel)); n >= testDownRepeatHold && !testDownReleased(r.Kernel) {
+				return true, fmt.Sprintf(testDownRepeatFmt, strings.Join(changed, ", "), r.Kernel, n, testDownReleaseEnv)
+			}
 			return false, fmt.Sprintf("%s changed since the machine went down", strings.Join(changed, ", "))
 		}
 		return true, fmt.Sprintf("%s, defining %s, are as they were", strings.Join(sourcePaths(r.Sources), ", "), r.Kernel)
@@ -328,4 +339,40 @@ func testDownSame(ws string, d *testDown, r *testDownRecord, first bool) (bool, 
 	default:
 		return first, "the program it went down with is not known; only this verification is held"
 	}
+}
+
+// testDownRepeatHold: how many times the machine may go down at one kernel, on the crash
+// directory, before a change of the files defining it no longer lets test.sh run.
+const testDownRepeatHold = 2
+
+// testDownReleaseEnv names, comma-separated, kernels whose test.sh runs again after a change of
+// their files however many times the machine went down at them — set by whoever runs the kernel.
+const testDownReleaseEnv = "EINSTEINOS_TEST_DOWN_RELEASE"
+
+const testDownRepeatFmt = "%[1]s changed since the machine went down, but the machine went down at %[2]s %[3]d times on the crash notes; test.sh runs again after a change only when %[4]s names %[2]s"
+
+func testDownReleased(kernel string) bool {
+	for _, k := range strings.Split(os.Getenv(testDownReleaseEnv), ",") {
+		if strings.TrimSpace(k) == kernel && kernel != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// testDownsOfKernel: the records on dir (einsteinos-down-*.json) of the times the machine went
+// down at the kernel named kernel, oldest first.
+func testDownsOfKernel(dir, kernel string) []*testDownRecord {
+	if dir == "" || kernel == "" {
+		return nil
+	}
+	paths, _ := filepath.Glob(filepath.Join(dir, "einsteinos-down-*.json"))
+	var out []*testDownRecord
+	for _, p := range paths {
+		if r, ok := loadTestDownRecord(p); ok && r.Kernel == kernel {
+			out = append(out, r)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].At < out[j].At })
+	return out
 }
