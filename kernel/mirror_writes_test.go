@@ -1,6 +1,7 @@
 package kernel
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -674,5 +675,58 @@ func TestAPartTakesOutWhatTheAttemptPutInASharedFile(t *testing.T) {
 	})
 	if got := read("src/rt/graph.cpp"); !strings.HasPrefix(got, "bool fail(") {
 		t.Fatalf("a line of the branch changed and kept: %q", got)
+	}
+}
+
+// 11/25 23:24:24 a command of the loader part changed 699 files of the mirror at once — the
+// whole tree — and was told only of the 90 written back: a command that changes many files is
+// measured against the branch the unit started from, and what it set back is given
+func TestACommandThatSetsManyFilesBackToTheBranchIsTold(t *testing.T) {
+	resetMirrorUnits()
+	defer resetMirrorUnits()
+	defer func() {
+		mirrorBranchMu.Lock()
+		delete(mirrorBranch, "uint")
+		delete(mirrorBranchAt, "uint")
+		mirrorBranchMu.Unlock()
+	}()
+	clone, dir := t.TempDir(), t.TempDir()
+	files := map[string]string{}
+	for i := 0; i < mirrorBulkMin+5; i++ {
+		files[fmt.Sprintf("src/f%03d.cu", i)] = fmt.Sprintf("branch %d\n", i)
+	}
+	putTree(t, clone, files)
+	putTree(t, dir, files)
+	for _, args := range [][]string{{"init", "-q", "-b", "dev"}, {"add", "."}, {"-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "dev"}} {
+		if out, err := exec.Command("git", append([]string{"-C", clone}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	noteMirrorBranch("uint", clone, "dev")
+	noteMirrorConv("uint", dir, "e3bf792a", "loader: the safetensors loader")
+	// the attempt's work: every file carries a line of its own
+	MirrorCommand("e3bf792a", func() string {
+		for f, c := range files {
+			os.WriteFile(filepath.Join(dir, f), []byte(c+"the attempt's line\n"), 0o644)
+		}
+		return ""
+	})
+	// a git command writing the working tree: every file back to the branch's
+	got := MirrorCommand("e3bf792a", func() string {
+		for f, c := range files {
+			os.WriteFile(filepath.Join(dir, f), []byte(c), 0o644)
+		}
+		return "ok"
+	})
+	if !strings.Contains(got, fmt.Sprintf("this one command changed %d file(s) of the mirror, and %d of them now hold what the branch the unit started from holds", len(files), len(files))) ||
+		!strings.Contains(got, "src/f000.cu") {
+		t.Fatalf("%q", got)
+	}
+	// one file changed: nothing of the kind said
+	if got := MirrorCommand("e3bf792a", func() string {
+		os.WriteFile(filepath.Join(dir, "src/f000.cu"), []byte("branch 0\nx\n"), 0o644)
+		return ""
+	}); strings.Contains(got, "now hold what the branch") {
+		t.Fatalf("%q", got)
 	}
 }

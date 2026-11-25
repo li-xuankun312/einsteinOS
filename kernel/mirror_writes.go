@@ -227,6 +227,7 @@ func MirrorCommand(conv string, run func() string) string {
 			said = append(said, w.File)
 		}
 	}
+	setBack := u.setBackToBranch(conv, said) // before keep: what the mirror held is still u.content
 	u.keep(kept)
 	if len(said) > 0 {
 		log.Printf(mirrorWroteFmt, shortID(conv), partName(u.part[conv]), len(said), strings.Join(said, " "))
@@ -235,6 +236,7 @@ func MirrorCommand(conv string, run func() string) string {
 			wrote = append(wrote, fmt.Sprintf("%s by %s (conversation %s)", f, partName(u.part[conv]), shortID(conv)))
 		}
 		mirrorChanged(u.unit, wrote...)
+		out += setBack
 	}
 	out += mirrorVerifyNews(u.unit, conv)
 	out += u.sinceHeard(conv)
@@ -251,6 +253,49 @@ const (
 	// %[1]d files, %[2]s them with whose they were
 	mirrorOthersFmt = "\n[THE UNIT'S MIRROR — measured on this machine]\nthis command changed or removed %[1]d file(s) that another conversation of the unit wrote or the planner gave another part:\n%[2]s"
 )
+
+const (
+	mirrorBulkMin = 50 // files changed at once before the command is measured against the branch
+	mirrorBulkMax = 12 // files named at most
+	// %[1]d files changed, %[2]d of them set back, %[3]s some of those
+	mirrorSetBackFmt = "\n[THE UNIT'S MIRROR — measured on this machine]\nthis one command changed %[1]d file(s) of the mirror, and %[2]d of them now hold what the branch the unit started from holds, the work of this attempt gone from them: %[3]s\nthe mirror is the unit's tree on this machine, and a git command that writes the working tree writes it.\n"
+	// %[1]s the conversation, %[2]d changed, %[3]d set back
+	mirrorSetBackLogFmt = "mirror: a command of %[1]s changed %[2]d file(s) at once and set %[3]d of them back to what the branch the unit started from holds"
+)
+
+// setBackToBranch: what a command that changed many files at once set back to the branch the
+// unit started from. 11/25 23:24:24 a command of the loader part changed 699 files of the
+// mirror — theory.md, every port map, every verify script, the whole tree — and was told only
+// of the 90 written back and the 1 file of another conversation. Called with u.mu held.
+func (u *mirrorUnit) setBackToBranch(conv string, said []string) string {
+	if len(said) < mirrorBulkMin {
+		return ""
+	}
+	var back []string
+	for _, f := range said {
+		if strings.HasSuffix(f, " (removed)") {
+			continue
+		}
+		b, has, _, known := mirrorBranchFile(u.unit, f)
+		if !known || !has {
+			continue
+		}
+		now, err := os.ReadFile(filepath.Join(u.dir, filepath.FromSlash(f)))
+		if err != nil || !bytes.Equal(now, b) {
+			continue
+		}
+		if was, ok := u.content[f]; ok && bytes.Equal(was, b) {
+			continue // it already held the branch's before this command
+		}
+		back = append(back, f)
+	}
+	if len(back) == 0 {
+		return ""
+	}
+	sort.Strings(back)
+	log.Printf(mirrorSetBackLogFmt, shortID(conv), len(said), len(back))
+	return fmt.Sprintf(mirrorSetBackFmt, len(said), len(back), shortList(back, mirrorBulkMax))
+}
 
 // mirrorTurnWait: the longest a command waits for another's turn on the mirror.
 const mirrorTurnWait = 20 * time.Second
