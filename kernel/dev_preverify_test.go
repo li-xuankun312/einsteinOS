@@ -68,3 +68,16 @@ func TestTheLogOfAFailedCompileGivesItsErrorLinesOnce(t *testing.T) {
 		t.Fatalf("errors not first: %q", got)
 	}
 }
+
+// 11/25 04:34:25 the same link failure was in build.sh's output twice: it is given once, with
+// how many times it was there
+func TestAnErrorTheOutputHoldsAgainIsGivenOnce(t *testing.T) {
+	one := "x.cu:(.text+0x5): undefined reference to `f()'\nclang-16: error: linker command failed\n\n"
+	got := compileErrorLines("a\n"+one+"b\n"+one+"y.cu:3:1: error: z\nq\nr\n", compileErrorLinesMax)
+	if strings.Count(got, "undefined reference") != 1 || !strings.Contains(got, fmt.Sprintf(compileErrorRepeatFmt, 2)) || !strings.Contains(got, "y.cu:3:1: error: z\nq\nr\n") {
+		t.Fatalf("%q", got)
+	}
+	if strings.Contains(got, "y.cu:3:1: error: z\nq\nr\n(the") {
+		t.Fatalf("a window there once said twice: %q", got)
+	}
+}

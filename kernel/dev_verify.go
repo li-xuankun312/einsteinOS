@@ -1140,20 +1140,43 @@ const compileErrorsFmt = "[THE COMPILER'S ERRORS — every 'error:' line of buil
 // warnings of test_kg.cu around it; an error earlier in a build would not have been sent at all.
 func compileErrorLines(out string, max int) string {
 	ls := strings.Split(out, "\n")
-	var b strings.Builder
+	// a window the output holds again — 11/25 04:34:25 build.sh linked e2e_all_check, and the
+	// build.sh of pd9efd3692a it runs linked it again, the same two lines each time — is given
+	// once, with how many times it was there
+	var order []string
+	count := map[string]int{}
 	n := 0
-	for i := 0; i < len(ls) && n < max; i++ {
+	for i := 0; i < len(ls); i++ {
 		if !strings.Contains(ls[i], "error:") && !strings.Contains(ls[i], "undefined reference") {
 			continue
 		}
-		for j := i; j < len(ls) && j <= i+2 && n < max; j++ {
-			b.WriteString(ls[j] + "\n")
-			n++
+		var w strings.Builder
+		for j := i; j < len(ls) && j <= i+2; j++ {
+			w.WriteString(ls[j] + "\n")
 		}
 		i += 2
+		k := w.String()
+		if count[k] == 0 {
+			if n >= max {
+				continue
+			}
+			order = append(order, k)
+			n += strings.Count(k, "\n")
+		}
+		count[k]++
+	}
+	var b strings.Builder
+	for _, k := range order {
+		b.WriteString(k)
+		if count[k] > 1 {
+			b.WriteString(fmt.Sprintf(compileErrorRepeatFmt, count[k]))
+		}
 	}
 	return b.String()
 }
+
+// %[1]d how many times the lines above were in the output
+const compileErrorRepeatFmt = "(the %[1]d times build.sh's output holds the lines above)\n"
 
 // crashDir: EINSTEINOS_CRASH_DIR, a directory that outlives the machine (a network disk), where a
 // GPU test's launch log is written line by line as each kernel launches, and each test stage is
