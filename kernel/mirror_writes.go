@@ -701,6 +701,8 @@ const (
 	mirrorSinceBeganText = "the conversations began"
 	// %[1]s the branch
 	mirrorSinceBranchFmt = "%[1]s, the branch the unit started from"
+	// %[1]s the branch
+	mirrorSinceNoBranchFmt = "the conversations began (%[1]s, the branch the unit started from, has no such file)"
 	// %[1]s the line
 	mirrorLineOutFmt = "    - %[1]s\n"
 	mirrorLineInFmt  = "    + %[1]s\n"
@@ -721,10 +723,14 @@ func (u *mirrorUnit) changedSinceStart(f string) string {
 	// at the tree an earlier run parked, with that run's changes in it — 11/25 07:05 the mirror
 	// began with src/rt/graph.cpp's `static bool fail`, a command of the run before had written
 	if b, has, ref, known := mirrorBranchFile(u.unit, f); known {
-		if !has {
-			return ""
+		if has {
+			old, ok, since = b, true, fmt.Sprintf(mirrorSinceBranchFmt, ref)
+		} else {
+			// a file the branch has not: compared with what the mirror held as the conversations
+			// began — 11/25 12:48:22 tests/k39_integration/embed_parity.cu, not on the dev branch,
+			// was said changed by embed (b10706e5) and none of the 19 lines it put in were given
+			since = fmt.Sprintf(mirrorSinceNoBranchFmt, ref)
 		}
-		old, ok, since = b, true, fmt.Sprintf(mirrorSinceBranchFmt, ref)
 	}
 	now, ok2 := u.content[f]
 	if !ok || !ok2 || bytes.Equal(old, now) {

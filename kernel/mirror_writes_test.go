@@ -540,3 +540,45 @@ func TestAFilesLinesAreComparedWithTheBranchTheUnitStartedFrom(t *testing.T) {
 		t.Fatalf("a file the branch has not given lines:\n%s", got)
 	}
 }
+
+// 11/25 12:48:22 tests/k39_integration/embed_parity.cu was not on the dev branch the unit
+// started from: its lines are compared with what the mirror held as the conversations began,
+// and that the branch has no such file is said
+func TestAFileTheBranchHasNotIsComparedWithTheMirrorsStart(t *testing.T) {
+	resetMirrorUnits()
+	defer resetMirrorUnits()
+	defer func() {
+		mirrorBranchMu.Lock()
+		delete(mirrorBranch, "uint")
+		delete(mirrorBranchAt, "uint")
+		mirrorBranchMu.Unlock()
+	}()
+	clone := t.TempDir()
+	git := func(args ...string) {
+		if out, err := exec.Command("git", append([]string{"-C", clone}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	git("init", "-q", "-b", "dev")
+	os.WriteFile(filepath.Join(clone, "README"), []byte("x\n"), 0o644)
+	git("add", ".")
+	git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "dev")
+	dir := t.TempDir()
+	f := "tests/k39_integration/embed_parity.cu"
+	os.MkdirAll(filepath.Join(dir, filepath.Dir(f)), 0o755)
+	os.WriteFile(filepath.Join(dir, f), []byte("int main() { return 0; }\n"), 0o644)
+	noteMirrorBranch("uint", clone, "dev")
+	noteMirrorConv("uint", dir, "b10706e5", "")
+	os.WriteFile(filepath.Join(dir, f), []byte("int e2e_embed_main() { return 0; }\nint main() { return 0; }\n"), 0o644)
+	mirrorUnitsMu.Lock()
+	u := mirrorUnits["uint"]
+	mirrorUnitsMu.Unlock()
+	u.mu.Lock()
+	u.content[f] = []byte("int e2e_embed_main() { return 0; }\nint main() { return 0; }\n")
+	got := u.changedSinceStart(f)
+	u.mu.Unlock()
+	if !strings.Contains(got, "its lines changed since the conversations began (dev, the branch the unit started from, has no such file)") ||
+		!strings.Contains(got, "    + int e2e_embed_main() { return 0; }\n") {
+		t.Fatalf("%q", got)
+	}
+}
