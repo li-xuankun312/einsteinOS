@@ -238,6 +238,46 @@ func preVerifyLogFields(o UnitVerifyOutcome) string {
 	return fmt.Sprintf("compile=%s smoke=%s gate=%q", o.Result.Compile, o.Result.Smoke, o.Result.Gate)
 }
 
+// %[1]s the file holding the whole of it
+const preVerifyGateTextFileFmt = " (the whole text sent back, %[1]d bytes: %[2]s)"
+
+// gatesTextDir: where each verification's whole gate text is written — the crash directory when
+// one is set, else ~/.einsteinos/gates. 11/26 09:49:16 the log kept 3000 bytes of a gate text
+// whose kernel_unported part listed 168 refused rows, and what the conversation was sent of it
+// could not be read anywhere afterwards.
+var gatesTextDir = func() string {
+	if d := crashDir(); d != "" {
+		return filepath.Join(d, "gates")
+	}
+	h, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(h, ".einsteinos", "gates")
+}
+
+// writeGatesText writes a verification's whole gate text and returns where ("" when it could not).
+func writeGatesText(unitID, text string, at time.Time) string {
+	d := gatesTextDir()
+	if d == "" || text == "" || os.MkdirAll(d, 0o755) != nil {
+		return ""
+	}
+	p := filepath.Join(d, unitID+"-"+at.Format("20060102-150405")+".txt")
+	if os.WriteFile(p, []byte(text), 0o644) != nil {
+		return ""
+	}
+	return p
+}
+
+// gatesLogLine: the log line of the gates' text — its share of the cap, and where the whole is.
+func gatesLogLine(repo, unitID, text string, kinds []string, at time.Time) string {
+	line := fmt.Sprintf(preVerifyGateTextLogFmt, repo, unitID, gatesLogText(text, kinds, preVerifyGateTextLogMax))
+	if p := writeGatesText(unitID, text, at); p != "" {
+		line += fmt.Sprintf(preVerifyGateTextFileFmt, len(text), p)
+	}
+	return line
+}
+
 // %[1]s repo, %[2]s unit, %[3]s the gate's text
 const preVerifyGateTextLogFmt = "dev_preverify: %[1]s unit %[2]s: the gates' text sent back: %[3]s"
 
