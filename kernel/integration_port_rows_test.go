@@ -428,3 +428,26 @@ func TestARefusedRowPortIncompleteCountsIsSaidToBe(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+// 11/26 13:27:10 kernel_unported passed on missing:model.visual.blocks.{i}.attn.qkv.weight for
+// router_top10_wave_kernel and rows like it: a missing group off the model's text path counts
+// for no kernel
+func TestAMissingRowOffTheTextPathDoesNotCount(t *testing.T) {
+	integrationAnswers["uint"] = IntegrationModelPlan{Ops: []IntegrationOp{
+		{Group: "model.visual.blocks.{i}.attn.qkv.weight", What: "vit"},
+		{Group: "model.language_model.layers.{i}.linear_attn.conv1d.weight", What: "conv"},
+	}, GroupsOff: []string{"model.visual.blocks.{i}.attn.qkv.weight"}}
+	t.Cleanup(func() { delete(integrationAnswers, "uint") })
+	ws := t.TempDir()
+	putTree(t, ws, map[string]string{
+		".einsteinOS/port/uint.tsv": "missing:model.visual.blocks.{i}.attn.qkv.weight\trouter_top10_wave_kernel\tsrc/ix_router_top10_wave.cu\trouter_top10_wave_kernel\n" +
+			"missing:model.language_model.layers.{i}.linear_attn.conv1d.weight\tgdn\tsrc/ix_gdn.cu\tgdn_conv_kernel\n",
+	})
+	files, refused := integrationPortFiles(ws, "uint", readPortMap(ws, "uint"))
+	if files["src/ix_router_top10_wave.cu"] || !files["src/ix_gdn.cu"] {
+		t.Fatalf("counted: %v", files)
+	}
+	if len(refused) != 1 || !strings.Contains(refused[0], "off the model's text path") {
+		t.Fatalf("refused: %v", refused)
+	}
+}

@@ -169,6 +169,7 @@ const (
 	// the groups themselves are given once, after the rows (gateKernelUnportedGroupsFmt): 11/26
 	// 09:49:16 each of 168 refused rows carried the same list, the gate text came to 14355 bytes
 	// and the conversation was shown 8000 of them
+	portMissingOffFmt    = " (the planner's missing lines give this group, and it is off the model's text path, where no part is started)"
 	portMissingGroupsFmt = " (no missing line of the planner's names this group; its %[1]d missing line(s) name the groups given after the rows)"
 	// %[1]s the file, %[2]s the rows counting for it
 	portRowCountsFmt = "; column 2 is the reference's function another unit's port map ports as a kernel — rows counting for %[1]s: %[2]s"
@@ -438,14 +439,23 @@ func integrationPortFiles(ws, unitID string, pm map[string]portEntry) (map[strin
 		}
 	}
 	groups := integrationMissingGroups(unitID)
+	off := integrationGroupsOff(unitID)
 	out := map[string]bool{}
 	var refused []string
 	for _, e := range pm {
 		switch {
 		case strings.HasPrefix(e.refFile, integrationMissingPrefix):
-			if missing[strings.TrimPrefix(e.refFile, integrationMissingPrefix)] {
+			g := strings.TrimPrefix(e.refFile, integrationMissingPrefix)
+			switch {
+			case missing[g] && off[g]:
+				// a group the model's text never goes through: 11/26 13:27:10 kernel_unported
+				// passed on missing:model.visual.blocks.{i}.attn.qkv.weight for
+				// router_top10_wave_kernel and twelve rows like it, GDN, QSA and MoE kernels
+				// written under groups of the vision encoder
+				refused = append(refused, e.refFile+" → "+e.file+" "+e.name+portMissingOffFmt)
+			case missing[g]:
 				out[e.file] = true
-			} else {
+			default:
 				// which groups there are: 11/25 23:05:05 220 rows did not count, the conversation
 				// having written missing:router_top10_kernel, missing:router_top10_wave and two
 				// tensor names of the model as groups, and nothing named the planner's own
