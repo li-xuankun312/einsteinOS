@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // ---------------------------------------------------------------------------
@@ -641,6 +642,11 @@ func truncStr(s string, n int) string {
 	s = redactSecrets(s)
 	if len(s) <= n {
 		return s
+	}
+	// at the start of a character: 11/26 10:04:32 the log's gate text ended "check \xe2..."
+	// where it cut a "—" in two
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
 	}
 	return s[:n] + "..."
 }
