@@ -735,8 +735,13 @@ func unitGateInput(ws, unitID string, req UnitRequirements, changed []string, bu
 		otherPorted = integrationOtherPorted(ws, unitID)
 	}
 	mutScript, mutMissing := testMutatesMissing(ws, unitID, changed)
+	portMissingLines := portMissing(ws, unitID, req.Symbols)
+	var portMissingText string
+	if len(req.Tests) > 0 {
+		portMissingText = portMissingByFile(ws, unitID, portMissingLines)
+	}
 	return GateInput{Req: req, Changed: changed, Build: build, Test: test, Compilers: presentGPUCompilers(),
-		PortMissing: portMissing(ws, unitID, req.Symbols), PortExtra: portExtra(ws, unitID, req.Symbols), PortRefFiles: portRefFiles(ws, unitID, req.Symbols), RefPathsWritten: refPathsWritten(withRefPathsPresent(ws, changed, req), req),
+		PortMissing: portMissingLines, PortMissingText: portMissingText, PortExtra: portExtra(ws, unitID, req.Symbols), PortRefFiles: portRefFiles(ws, unitID, req.Symbols), RefPathsWritten: refPathsWritten(withRefPathsPresent(ws, changed, req), req),
 		PortForeign: portForeignNames(ws, unitID, req.FileNames), PortScripts: unitPortScripts(ws, unitID, req), MutatesMissingScript: mutScript, MutatesMissing: mutMissing, Kernels: unitKernels(ws, changed), KernelsMeasured: true,
 		Shadowed:   shadowedKernels(unitKernels(ws, changed), portKernels(ws, unitID)),
 		EntryStubs: entryStubs(ws, unitBuildScript(unitID)),

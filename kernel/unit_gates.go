@@ -30,6 +30,9 @@ type GateInput struct {
 	Compilers []string
 	// PortMissing: reference definitions without a verified counterpart (port_gate.go)
 	PortMissing []string
+	// PortMissingText: PortMissing as the integration unit is given it, its lines with no row
+	// grouped by reference file (port_gate.go); "" gives PortMissing line by line
+	PortMissingText string
 	// Kernels: per changed CUDA file, the __global__ kernels it defines (gpu_kernels.go);
 	// KernelsMeasured says the files were read (a hand-built input leaves both empty)
 	Kernels         map[string][]string
@@ -377,7 +380,11 @@ func unitGatesAll(in GateInput) (kinds, texts []string) {
 		fail("port_name_foreign", fmt.Sprintf(gatePortForeignFmt, len(in.PortForeign), PortMapPath(in.UnitID), strings.Join(in.PortForeign, "\n")))
 	}
 	if len(in.PortMissing) > 0 {
-		fail("port_incomplete", fmt.Sprintf(gatePortFmt, len(in.PortMissing), len(in.Req.Symbols), strings.Join(in.PortMissing, "\n")))
+		listed := strings.Join(in.PortMissing, "\n")
+		if in.PortMissingText != "" {
+			listed = in.PortMissingText
+		}
+		fail("port_incomplete", fmt.Sprintf(gatePortFmt, len(in.PortMissing), len(in.Req.Symbols), listed))
 	}
 
 	return kinds, texts

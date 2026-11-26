@@ -486,3 +486,34 @@ func TestARefusedRowIsGivenTheUnitRowOfItsKernelsName(t *testing.T) {
 		t.Fatalf("got %v", r)
 	}
 }
+
+// 11/26 14:37:46 the 150 definitions with no row took 150 lines of which the conversation could be
+// shown a dozen: they are grouped by reference file, each with the port's sources of its name
+func TestPortIncompleteIsGroupedByReferenceFile(t *testing.T) {
+	ws := t.TempDir()
+	putTree(t, ws, map[string]string{
+		"tests/k39_integration/bf16_gemv_parity.cu": "static float rel_l1(float a) { return a; }\nint main() { return 0; }\n",
+	})
+	p := PortMapPath("uint")
+	lines := []string{
+		"  src/kernels/bf16_gemv_parity.cpp func check: no line in " + p,
+		"  src/kernels/bf16_gemv_parity.cpp func main: no line in " + p,
+		"  src/kernels/bf16_gemv_parity.cpp func rel_l1: no line in " + p,
+		"  src/kernels/cpu/pool_test.cpp func main: no line in " + p,
+		"  src/kernels/gdn_parity.cpp func check → tests/x.cu:check: not defined in that file",
+	}
+	got := portMissingByFile(ws, "uint", lines)
+	want := []string{
+		"  src/kernels/bf16_gemv_parity.cpp: 3 definition(s) with no row: check main rel_l1; the port's tests/k39_integration/bf16_gemv_parity.cu, of the same name, defines main rel_l1",
+		"  src/kernels/cpu/pool_test.cpp: 1 definition(s) with no row: main; no source of the port has its name",
+		"  src/kernels/gdn_parity.cpp func check → tests/x.cu:check: not defined in that file",
+	}
+	if got != strings.Join(want, "\n") {
+		t.Fatalf("got\n%s", got)
+	}
+	in := GateInput{PortMissing: lines, PortMissingText: got, Req: UnitRequirements{Symbols: make([]RefSymbol, 168)}}
+	_, texts := unitGatesAll(in)
+	if all := strings.Join(texts, "\n"); !strings.Contains(all, "port_incomplete: 5 of the 168") || !strings.Contains(all, want[0]) {
+		t.Fatalf("gate: %s", all)
+	}
+}

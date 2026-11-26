@@ -13,6 +13,7 @@ package kernel
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -747,4 +748,105 @@ func portedAsName(names map[string][]string, e portEntry) string {
 		return ""
 	}
 	return fmt.Sprintf(portPortedNameFmt, symbolBase(e.name), strings.Join(rows, "; "))
+}
+
+// %[1]s the reference file, %[2]d its definitions with no row, %[3]s them, %[4]s the port's files
+const (
+	portMissingFileFmt     = "  %[1]s: %[2]d definition(s) with no row: %[3]s%[4]s"
+	portMissingSameFmt     = "; the port's %[1]s, of the same name, defines %[2]s"
+	portMissingSameNoneFmt = "; the port's %[1]s, of the same name, defines none of them"
+	portMissingNoSameFmt   = "; no source of the port has its name"
+)
+
+// portMissingByFile: port_incomplete's lines for the integration unit, those of definitions with
+// no row of the map grouped by reference file, each with the port's sources of the same name
+// (src/kernels/gdn_parity.cpp → …/gdn_parity.cu) and which of the definitions they define; the
+// other lines as they are. 11/26 14:37:46 the 150 definitions with no row took 150 lines, 16 KB,
+// of which the conversation could be shown the first dozen, and nothing said that the port has
+// tests named like the reference's.
+func portMissingByFile(ws, unitID string, lines []string) string {
+	suffix := ": no line in " + PortMapPath(unitID)
+	type fileMissing struct{ names []string }
+	byFile := map[string]*fileMissing{}
+	var order []string
+	var other []string
+	for _, l := range lines {
+		body, ok := strings.CutSuffix(l, suffix)
+		f := strings.Fields(body)
+		if !ok || len(f) != 3 {
+			other = append(other, l)
+			continue
+		}
+		if byFile[f[0]] == nil {
+			byFile[f[0]] = &fileMissing{}
+			order = append(order, f[0])
+		}
+		byFile[f[0]].names = append(byFile[f[0]].names, f[2])
+	}
+	if len(order) == 0 {
+		return ""
+	}
+	stems := portSourcesByStem(ws)
+	var out []string
+	for _, rf := range order {
+		names := byFile[rf].names
+		same := stems[fileStem(rf)]
+		where := portMissingNoSameFmt
+		if len(same) > 0 {
+			where = ""
+			for _, pf := range same {
+				b, _ := os.ReadFile(filepath.Join(ws, pf))
+				def := map[string]bool{}
+				for _, s := range SymbolsOf(pf, string(b)) {
+					def[symbolBase(s.Name)] = true
+				}
+				var has []string
+				for _, n := range names {
+					if def[symbolBase(n)] {
+						has = append(has, n)
+					}
+				}
+				if len(has) > 0 {
+					where += fmt.Sprintf(portMissingSameFmt, pf, strings.Join(has, " "))
+				} else {
+					where += fmt.Sprintf(portMissingSameNoneFmt, pf)
+				}
+			}
+		}
+		out = append(out, fmt.Sprintf(portMissingFileFmt, rf, len(names), strings.Join(names, " "), where))
+	}
+	return strings.Join(append(out, other...), "\n")
+}
+
+// fileStem: a path's base name without its extension.
+func fileStem(p string) string {
+	b := filepath.Base(p)
+	return strings.TrimSuffix(b, filepath.Ext(b))
+}
+
+// portSourcesByStem: the port's C/C++/CUDA sources by stem, the kernel's own directory left out.
+func portSourcesByStem(ws string) map[string][]string {
+	out := map[string][]string{}
+	filepath.WalkDir(ws, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		rel, _ := filepath.Rel(ws, p)
+		rel = filepath.ToSlash(rel)
+		if d.IsDir() {
+			if rel == ".einsteinOS" || rel == ".git" || rel == verifyBuildDir {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		switch filepath.Ext(p) {
+		case ".c", ".cc", ".cpp", ".cxx", ".cu", ".cuh", ".h", ".hpp":
+			out[fileStem(rel)] = append(out[fileStem(rel)], rel)
+		}
+		return nil
+	})
+	for k := range out {
+		sort.Strings(out[k])
+	}
+	return out
 }
