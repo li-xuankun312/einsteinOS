@@ -32,6 +32,22 @@ type preVerifyResult struct {
 	// portMap: the unit's port map in the mirror as the verification started, and when
 	portMap string
 	at      time.Time
+	// judged: the last verification before this one whose gates were judged
+	judged *preVerifyResult
+}
+
+// lastJudged: the last verification whose gates were judged — this one when its build compiled,
+// else the one it carries. 11/26 17:56:58 kernel_unported, port_ref_file_unknown, port_extra and
+// port_incomplete were said to have passed at the verification of 17:42:38, whose compile had
+// failed and whose gates were never judged.
+func (p *preVerifyResult) lastJudged() *preVerifyResult {
+	if p == nil {
+		return nil
+	}
+	if p.out.Err == nil && p.out.Verified && p.out.Result.Compile == "pass" {
+		return p
+	}
+	return p.judged
 }
 
 const (
@@ -65,7 +81,7 @@ func preVerifySince(start time.Time, since []string) string {
 // the conversation removed 156 rows of the map, the next verification failed kernel_unported,
 // the one after port_incomplete, and nothing said which lines had made them pass.
 func gatesRegressed(prev *preVerifyResult, now UnitVerifyOutcome, mapNow, mapPath string) string {
-	if prev == nil || prev.out.Err != nil || !prev.out.Verified || now.Err != nil || !now.Verified {
+	if prev == nil || prev.out.Err != nil || !prev.out.Verified || prev.out.Result.Compile != "pass" || now.Err != nil || !now.Verified || now.Result.Compile != "pass" {
 		return ""
 	}
 	had := map[string]bool{}
