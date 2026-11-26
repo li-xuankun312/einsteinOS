@@ -476,9 +476,9 @@ func TestARefusedRowIsGivenTheUnitRowOfItsKernelsName(t *testing.T) {
 	t.Cleanup(func() { delete(integrationAnswers, "uint") })
 	ws := t.TempDir()
 	putTree(t, ws, map[string]string{
-		".einsteinOS/port/pA.tsv":      "src/kernels/cuda/bf16_gemv.cu\tbf16_gemv_warp_kernel\tsrc/kernels/gpu/bf16_native.cu\tbf16_gemv_warp_kernel\n",
+		".einsteinOS/port/pA.tsv":        "src/kernels/cuda/bf16_gemv.cu\tbf16_gemv_warp_kernel\tsrc/kernels/gpu/bf16_native.cu\tbf16_gemv_warp_kernel\n",
 		"src/kernels/gpu/bf16_native.cu": "__global__ void bf16_gemv_warp_kernel(float* x) {}\n",
-		".einsteinOS/port/uint.tsv":    "tests/k39_integration/qsa_layer_parity.cu\ttest_qsa_bf16_kv_proj\tsrc/ix_bf16_gemv.cu\tbf16_gemv_warp_kernel\n",
+		".einsteinOS/port/uint.tsv":      "tests/k39_integration/qsa_layer_parity.cu\ttest_qsa_bf16_kv_proj\tsrc/ix_bf16_gemv.cu\tbf16_gemv_warp_kernel\n",
 	})
 	r := portRefFiles(ws, "uint", []RefSymbol{{File: "src/kernels/qsa_parity.cpp", Name: "main"}})
 	want := " — bf16_gemv_warp_kernel is the name of a kernel a unit ported: pA src/kernels/cuda/bf16_gemv.cu bf16_gemv_warp_kernel → src/kernels/gpu/bf16_native.cu"
