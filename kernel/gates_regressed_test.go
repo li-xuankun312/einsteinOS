@@ -35,3 +35,28 @@ func TestAGateThatPassedAndFailsNowIsGivenTheLinesTheMapLost(t *testing.T) {
 		t.Fatalf("no last verification: %q", s)
 	}
 }
+
+// 11/26 09:41:43 kernel_shadowed_in_test was sent for a file the conversation had rewritten at
+// 09:41:31, the verification having taken the mirror at 09:34:37: the report says when it took
+// the mirror and what changed it after
+func TestTheReportSaysWhatChangedTheMirrorAfterItWasTaken(t *testing.T) {
+	start := time.Now()
+	mirrorUnitsMu.Lock()
+	mirrorUnits["usince"] = &mirrorUnit{unit: "usince", part: map[string]string{"6c315f57aaaa": ""}, writes: []mirrorWrite{
+		{File: "old.cu", Conv: "6c315f57aaaa", At: start.Add(-time.Minute)},
+		{File: "tests/k39_integration/ix_router_top10_wave.cu", Conv: "6c315f57aaaa", At: start.Add(time.Second)},
+	}}
+	mirrorUnitsMu.Unlock()
+	t.Cleanup(func() { mirrorUnitsMu.Lock(); delete(mirrorUnits, "usince"); mirrorUnitsMu.Unlock() })
+	since := mirrorWritesSince("usince", start)
+	if len(since) != 1 || !strings.HasSuffix(since[0], "tests/k39_integration/ix_router_top10_wave.cu") {
+		t.Fatalf("got %v", since)
+	}
+	got := preVerifySince(start, since)
+	if !strings.Contains(got, "judged the mirror as it was at "+start.Format("15:04:05")) || !strings.Contains(got, "changed it 1 time(s)") {
+		t.Fatalf("got %q", got)
+	}
+	if preVerifySince(start, nil) != "" {
+		t.Fatal("nothing changed and something is said")
+	}
+}

@@ -62,6 +62,7 @@ type mirrorWrite struct {
 	File, Conv string
 	Removed    bool
 	Seq        int
+	At         time.Time
 }
 
 // mirrorUnit: the conversations working on one unit's mirror and what their commands wrote.
@@ -216,7 +217,7 @@ func MirrorCommand(conv string, run func() string) string {
 		}
 		kept = append(kept, w.File)
 		u.seq++
-		w.Conv, w.Seq = conv, u.seq
+		w.Conv, w.Seq, w.At = conv, u.seq, time.Now()
 		u.writes = append(u.writes, w)
 		if _, ok := u.owner[w.File]; !ok && !w.Removed && !u.base[w.File] && !buildOutput(w.File) {
 			u.owner[w.File] = conv
@@ -975,4 +976,29 @@ var buildOutputExts = map[string]bool{".bc": true, ".o": true, ".a": true, ".so"
 // conversation's build had its own output written back, stale, under the next build's feet.
 func buildOutput(f string) bool {
 	return buildOutputExts[strings.ToLower(filepath.Ext(f))]
+}
+
+// mirrorWritesSince: what the commands of unitID's conversations changed in its mirror from t on,
+// "<time> <conversation> (<part>) <file>", in order.
+func mirrorWritesSince(unitID string, t time.Time) []string {
+	mirrorUnitsMu.Lock()
+	u := mirrorUnits[unitID]
+	mirrorUnitsMu.Unlock()
+	if u == nil {
+		return nil
+	}
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	var out []string
+	for _, w := range u.writes {
+		if w.At.Before(t) {
+			continue
+		}
+		f := w.File
+		if w.Removed {
+			f += " (removed)"
+		}
+		out = append(out, fmt.Sprintf("%s %s (%s) %s", w.At.Format("15:04:05"), shortID(w.Conv), partName(u.part[w.Conv]), f))
+	}
+	return out
 }

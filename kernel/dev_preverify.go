@@ -37,7 +37,25 @@ const (
 	// %[5]s them
 	gatesRegressedFmt = "\n[GATES THAT PASSED AT THE LAST VERIFICATION AND FAIL NOW — measured from the mirror as each verification started]\n%[1]s passed at the verification that started at %[2]s and fail now; %[3]s held then %[4]d line(s) it does not hold now:\n%[5]s\n"
 	gatesRegressedMax = 60
+	// %[1]s when the verification started, %[2]d changes, %[3]s them
+	preVerifySinceFmt = "\n[WHAT THE MIRROR WAS JUDGED AS — measured]\nthis verification judged the mirror as it was at %[1]s; since then the conversations' commands changed it %[2]d time(s):\n%[3]s\n"
+	preVerifySinceMax = 40
 )
+
+// preVerifySince: when the verification took the mirror, and what changed it after. 11/26 09:41:31
+// the unit's conversation rewrote tests/k39_integration/ix_router_top10_wave.cu, and at 09:41:43 it
+// was sent kernel_shadowed_in_test for that file, judged on the mirror of 09:34:37; each of the
+// day's verifications took 7 minutes and was answered of a tree the conversation had changed since.
+func preVerifySince(start time.Time, since []string) string {
+	if len(since) == 0 {
+		return ""
+	}
+	shown := since
+	if len(shown) > preVerifySinceMax {
+		shown = append(append([]string(nil), shown[:preVerifySinceMax]...), fmt.Sprintf("(+%d more)", len(since)-preVerifySinceMax))
+	}
+	return fmt.Sprintf(preVerifySinceFmt, start.Format("15:04:05"), len(since), strings.Join(shown, "\n"))
+}
 
 // gatesRegressed: the gates failing now that passed at the last verification, with the lines of
 // the port map that verification saw and this one does not ("" when no gate went that way, or
