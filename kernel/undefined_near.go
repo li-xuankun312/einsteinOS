@@ -65,7 +65,9 @@ func undefinedRefNear(ws, out string) string {
 	}
 	defs := objectFuncDefs(ws, func(b string) bool { return want[b] != nil })
 	if defs == nil {
-		return ""
+		// the build writes its objects outside the workspace: 11/26 02:56:03 the link failed on
+		// baloon::rt::fail and nothing was given, build.sh writing to /tmp/baloon_integration_whole
+		return undefinedInSources(ws, names)
 	}
 	var lb strings.Builder
 	n := 0
@@ -237,4 +239,51 @@ func objectFuncDefs(ws string, keep func(base string) bool) map[string][]string 
 		}
 	}
 	return defs
+}
+
+const (
+	// %[1]s the name, %[2]s the places
+	undefinedSourceFmt = "[WHERE THE WORKSPACE'S SOURCES WRITE THE FUNCTIONS THE LINK FOUND NO DEFINITION OF — measured from the sources, no object file of the build being in the workspace]\n%[1]s"
+	// %[1]s the name
+	undefinedSourceHeadFmt = "  %[1]s:\n"
+	// %[1]s the file, %[2]d the line, %[3]s the line
+	undefinedSourceLineFmt = "    %[1]s:%[2]d: %[3]s\n"
+	// %[1]s the name
+	undefinedSourceNoneFmt = "    no source of the workspace writes %[1]s outside a comment\n"
+)
+
+// undefinedInSources: where the workspace's sources write each name the link found no
+// definition of, with the #if standing over each — what defsOfName measures for an undeclared
+// name. A declaration the compiler cannot use, such as an inline one with no body in the
+// translation unit, is a line like any other and is given as written.
+func undefinedInSources(ws string, names []string) string {
+	var b strings.Builder
+	for i, name := range names {
+		if i == undefinedNearMax {
+			break
+		}
+		short := name
+		if j := strings.LastIndex(short, "::"); j >= 0 {
+			short = short[j+2:]
+		}
+		b.WriteString(fmt.Sprintf(undefinedSourceHeadFmt, name))
+		defs := defsOfName(ws, short)
+		if len(defs) == 0 {
+			b.WriteString(fmt.Sprintf(undefinedSourceNoneFmt, name))
+			continue
+		}
+		for j, d := range defs {
+			if j == undeclaredDefsMax {
+				break
+			}
+			b.WriteString(fmt.Sprintf(undefinedSourceLineFmt, d.file, d.n, truncStr(d.text, 160)))
+			if len(d.under) > 0 {
+				b.WriteString(fmt.Sprintf(undeclaredUnderFmt, strings.Join(d.under, ", then ")))
+			}
+		}
+	}
+	if b.Len() == 0 {
+		return ""
+	}
+	return fmt.Sprintf(undefinedSourceFmt, b.String())
 }

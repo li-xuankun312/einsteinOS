@@ -70,3 +70,29 @@ func TestWhereAKernelTheLinkFoundTwiceIsWrittenIsGiven(t *testing.T) {
 		t.Fatal("no multiple definition, something said")
 	}
 }
+
+// 11/26 02:56:03 the link failed on baloon::rt::fail, build.sh writing its objects to
+// /tmp/baloon_integration_whole: with no object file in the workspace, where the sources write
+// the name is given — the inline declaration with no body among them, as written
+func TestWithNoObjectInTheWorkspaceTheSourcesAreGiven(t *testing.T) {
+	ws := t.TempDir()
+	putTree(t, ws, map[string]string{
+		"include/baloon/rt_layout.hpp": "namespace baloon { namespace rt {\n" +
+			"inline bool fail(std::string* why, const std::string& msg);   // stores msg, returns false\n" +
+			"} }\n",
+		"src/rt/graph.cpp": "namespace baloon { namespace rt {\n" +
+			"bool fail(std::string* why, const std::string& msg) { if (why) *why = msg; return false; }\n" +
+			"} }\n",
+	})
+	out := "test_rt.cpp:(.text+0x6b8e): undefined reference to `baloon::rt::fail(std::__cxx11::basic_string<char>*, std::__cxx11::basic_string<char> const&)'\n"
+	got := undefinedRefNear(ws, out)
+	for _, want := range []string{
+		"  baloon::rt::fail:\n",
+		"include/baloon/rt_layout.hpp:2: inline bool fail(std::string* why, const std::string& msg);",
+		"src/rt/graph.cpp:2: bool fail(std::string* why, const std::string& msg) {",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("lacks %q:\n%s", want, got)
+		}
+	}
+}
