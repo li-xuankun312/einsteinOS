@@ -232,7 +232,7 @@ func portExtra(ws, unitID string, syms []RefSymbol) []string {
 		k := e.refFile + "\t" + e.refName
 		switch {
 		case !own[k]:
-			out = append(out, fmt.Sprintf(portExtraFmt, e.refFile, e.refName, e.file, e.name))
+			out = append(out, fmt.Sprintf(portExtraFmt, e.refFile, e.refName, e.file, e.name)+portedElsewhere(ported, e.refName))
 		case first[k] > 0:
 			out = append(out, fmt.Sprintf(portDuplicateFmt, e.refFile, e.refName, e.file, e.name, first[k]))
 		default:
@@ -342,7 +342,7 @@ func portRefFiles(ws, unitID string, syms []RefSymbol) []string {
 		}
 		if !refFiles[e.refFile] && !seen[e.refFile] {
 			seen[e.refFile] = true
-			line := fmt.Sprintf(portRefFileFmt, e.refFile, e.refName, e.file, e.name)
+			line := fmt.Sprintf(portRefFileFmt, e.refFile, e.refName, e.file, e.name) + portedElsewhere(ported, e.refName)
 			// the group written without its prefix: 11/26 05:43:17 a command of the moe part wrote
 			// model.language_model.layers.{i}.mlp.gate.weight in column 1 and the row fell here
 			if isPlannerGroup(unitID, e.refFile) {
@@ -511,6 +511,24 @@ func integrationPortedRefs(ws, unitID string) map[string]string {
 		}
 	}
 	return out
+}
+
+// %[1]s the reference file, %[2]s the name, %[3]s the unit, its kernel and where
+const portPortedElsewhereFmt = " — %[2]s is a reference kernel a unit ported: %[1]s %[2]s, by %[3]s"
+
+// portedElsewhere: where another unit's map ports the name of column 2 as a kernel, when it does
+// from a file other than column 1. 11/26 07:28:43 tests/k39_integration/moe_parity.cu
+// test_moe_router_logits and src/kernels/cuda/router_top10.cu router_top10_kernel were refused
+// alike, and nothing said that pcd027bc02f ports router_top10_kernel from that file.
+func portedElsewhere(ported map[string]string, name string) string {
+	var out []string
+	for k, v := range ported {
+		if f, n, _ := strings.Cut(k, "\t"); n == name {
+			out = append(out, fmt.Sprintf(portPortedElsewhereFmt, f, n, v))
+		}
+	}
+	sort.Strings(out)
+	return strings.Join(out, "")
 }
 
 // plannerMissingRow: a port map row of the integration unit whose first column is

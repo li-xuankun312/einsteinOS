@@ -346,3 +346,22 @@ func TestARowNamingAKernelAUnitPortedPassesEveryGate(t *testing.T) {
 		t.Fatalf("outside the integration unit: %v", r)
 	}
 }
+
+// 11/26 07:28:43 a row naming router_top10_kernel from a file of the port was refused with nothing
+// saying from which reference file pcd027bc02f ports it
+func TestARefusedRowSaysWhereAUnitPortsItsName(t *testing.T) {
+	integrationAnswers["uint"] = IntegrationModelPlan{Ops: []IntegrationOp{{Group: "g", Unit: "pA", Kernel: "router_top10_kernel"}}}
+	t.Cleanup(func() { delete(integrationAnswers, "uint") })
+	ws := t.TempDir()
+	putTree(t, ws, map[string]string{
+		".einsteinOS/port/pA.tsv":   "src/kernels/cuda/router_top10.cu\trouter_top10_kernel\tsrc/kernels/gpu/router.cu\trouter_top10_kernel\n",
+		"src/kernels/gpu/router.cu": "__global__ void router_top10_kernel(float* x) {}\n",
+		".einsteinOS/port/uint.tsv": "tests/k39/moe_parity.cu\trouter_top10_kernel\tsrc/kernels/gpu/moe_native.cu\tmoe_router_logits_kernel\n",
+	})
+	syms := []RefSymbol{{File: "src/kernels/gdn_parity.cpp", Name: "check", Kind: "func"}}
+	r := portRefFiles(ws, "uint", syms)
+	want := " — router_top10_kernel is a reference kernel a unit ported: src/kernels/cuda/router_top10.cu router_top10_kernel, by pA router_top10_kernel in src/kernels/gpu/router.cu"
+	if len(r) != 1 || !strings.HasSuffix(r[0], want) {
+		t.Fatalf("lacks %q: %v", want, r)
+	}
+}
