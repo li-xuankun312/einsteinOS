@@ -182,7 +182,7 @@ const (
 	portMissingOffFmt    = " (the planner's missing lines give this group, and it is off the model's text path, where no part is started)"
 	portMissingGroupsFmt = " (no missing line of the planner's names this group; its %[1]d missing line(s) name the groups given after the rows)"
 	// %[1]s the file, %[2]s the rows counting for it
-	portRowCountsFmt = "; column 2 is the reference's function another unit's port map ports as a kernel — rows counting for %[1]s: %[2]s"
+	portRowCountsFmt = "; column 2 is the reference's function another unit's port map ports as a kernel — the reference kernels the units ported into %[1]s are given after the rows"
 	// %[1]s the file, %[2]s the missing prefix
 	portRowCountsNoneFmt = "; column 2 is the reference's function another unit's port map ports as a kernel, and no unit's map writes a kernel into %[1]s: a row for it counts with column 1 %[2]s<group>, where <group> is one of the %[3]d the planner's missing lines name, given after the rows"
 	// %[1]s the file, %[2]d the planner's missing groups
@@ -514,8 +514,9 @@ func integrationPortRows(ws, unitID string, pm map[string]portEntry) (map[string
 				why += p
 			}
 			if c := countsFor[e.file]; len(c) > 0 {
-				sort.Strings(c)
-				why += fmt.Sprintf(portRowCountsFmt, e.file, shortList(dedupStrings(c), 4))
+				// given once per file, after the rows: 11/26 17:3x each of 28 refused rows carried
+				// the list for its file, those into ew_ops.cu thirteen entries each
+				why += fmt.Sprintf(portRowCountsFmt, e.file)
 			} else {
 				// which groups there are, here too: 11/26 04:27:08 this is the branch almost every
 				// refused row takes, and only a row already written missing: was given them
@@ -875,6 +876,33 @@ func portSourcesByStem(ws string) map[string][]string {
 	})
 	for k := range out {
 		sort.Strings(out[k])
+	}
+	return out
+}
+
+// integrationPortedInto: for the integration unit, per file, the reference kernels other units'
+// maps port into it, "<ref file> <ref name> (<unit> ports it as <name>)".
+func integrationPortedInto(ws, unitID string) map[string][]string {
+	if len(integrationAnswerOf(unitID).Ops) == 0 {
+		return nil
+	}
+	out := map[string][]string{}
+	maps, _ := filepath.Glob(filepath.Join(ws, ".einsteinOS", "port", "*.tsv"))
+	for _, m := range maps {
+		u := strings.TrimSuffix(filepath.Base(m), ".tsv")
+		if u == unitID {
+			continue
+		}
+		ks := portKernels(ws, u)
+		for _, e := range readPortMap(ws, u) {
+			if ks[symbolBase(e.name)] {
+				out[e.file] = append(out[e.file], fmt.Sprintf(portRowCountsLineFmt, e.refFile, e.refName, u, e.name))
+			}
+		}
+	}
+	for f := range out {
+		out[f] = dedupStrings(out[f])
+		sort.Strings(out[f])
 	}
 	return out
 }

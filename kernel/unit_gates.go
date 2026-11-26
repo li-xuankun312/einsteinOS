@@ -62,6 +62,8 @@ type GateInput struct {
 	MissingGroups []string
 	// MissingOff: those of MissingGroups off the model's text path
 	MissingOff map[string]bool
+	// PortedInto: for the integration unit, per file, the reference kernels other units port into it
+	PortedInto map[string][]string
 	// RowKernels: for the integration unit, per file, the kernels its rows count for
 	RowKernels map[string]map[string]bool
 	// OtherPorted: per file, the kernels in it other units' port maps write — for the
@@ -128,6 +130,8 @@ const (
 	gateKernelUnportedFmt = "kernel_unported: %[1]d file(s) define __global__ kernels and are neither test files nor files the unit's port map %[3]s writes a counterpart into: %[2]s"
 	// %[1]d groups, %[2]s them
 	gateKernelUnportedGroupsFmt = "; the planner's missing lines give the integration unit %[1]d tensor group(s): %[2]s"
+	// %[1]s each held file with the reference kernels units ported into it
+	gateKernelUnportedIntoFmt = "; the reference kernels the units ported into these files: %[1]s"
 	// %[1]d kernels, %[2]s each with its unit's row and groups
 	gateKernelUnportedOpsFmt = "; the planner's op lines give the model's text path %[1]d kernel(s) units ported, each with the row of its unit's port map and the groups: %[2]s"
 	// %[1]d groups, %[2]d on the path, %[3]s them, %[4]d off it, %[5]s them
@@ -240,6 +244,15 @@ func unitGatesAll(in GateInput) (kinds, texts []string) {
 			t := fmt.Sprintf(gateKernelUnportedFmt, len(files), strings.Join(each, "; "), PortMapPath(in.UnitID))
 			if into, _ := refusedRowsIntoHeld(in.PortFilesRefused, files); len(into) > 0 {
 				t += fmt.Sprintf(gateKernelUnportedRowsFmt, len(into), refusedRowsText(in.PortFilesRefused, files), integrationMissingPrefix)
+			}
+			var into []string
+			for _, f := range files {
+				if p := in.PortedInto[f]; len(p) > 0 {
+					into = append(into, f+": "+strings.Join(p, ", "))
+				}
+			}
+			if len(into) > 0 {
+				t += fmt.Sprintf(gateKernelUnportedIntoFmt, strings.Join(into, "; "))
 			}
 			if len(in.MissingGroups) > 0 {
 				// what may follow "missing:": 11/25 06:27:29 the text asked for missing:<group> rows

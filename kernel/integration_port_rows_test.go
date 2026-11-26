@@ -147,12 +147,23 @@ func TestARefusedRowIsGivenTheRowsThatCountForItsFile(t *testing.T) {
 	_, refused := integrationPortFiles(ws, "uint", readPortMap(ws, "uint"))
 	all := strings.Join(refused, "\n")
 	for _, want := range []string{
-		"test_rms → src/kernels/gpu/ew_ops.cu rms_norm_weighted (no unit ports test_rms as a kernel; column 2 is the reference's function another unit's port map ports as a kernel — rows counting for src/kernels/gpu/ew_ops.cu: src/kernels/cuda/elementwise.cu rms_norm_kernel (pcd027bc02f ports it as rms_norm_weighted_kernel))",
+		"test_rms → src/kernels/gpu/ew_ops.cu rms_norm_weighted (no unit ports test_rms as a kernel; column 2 is the reference's function another unit's port map ports as a kernel — the reference kernels the units ported into src/kernels/gpu/ew_ops.cu are given after the rows)",
 		"test_embed_gather16 → src/prefill/kernels.cu gather_rows16_kernel (no unit ports test_embed_gather16 as a kernel; column 2 is the reference's function another unit's port map ports as a kernel, and no unit's map writes a kernel into src/prefill/kernels.cu: a row for it counts with column 1 missing:<group>, where <group>",
 	} {
 		if !strings.Contains(all, want) {
 			t.Fatalf("lacks %q:\n%s", want, all)
 		}
+	}
+	// 11/26 17:3x each of 28 refused rows carried its file's list: the gate gives it once
+	in := GateInput{UnitID: "uint", PortFiles: map[string]bool{}, PortFilesRefused: refused, PortedInto: integrationPortedInto(ws, "uint"),
+		Kernels: map[string][]string{"src/kernels/gpu/ew_ops.cu": {"rms_norm_weighted"}}}
+	integrationAnswers["uint"] = IntegrationModelPlan{Ops: []IntegrationOp{{Group: "g", Unit: "pcd027bc02f", Kernel: "rms_norm_weighted_kernel"}}}
+	defer delete(integrationAnswers, "uint")
+	in.PortedInto = integrationPortedInto(ws, "uint")
+	_, texts := unitGatesAll(in)
+	w := "; the reference kernels the units ported into these files: src/kernels/gpu/ew_ops.cu: src/kernels/cuda/elementwise.cu rms_norm_kernel (pcd027bc02f ports it as rms_norm_weighted_kernel)"
+	if len(texts) == 0 || strings.Count(texts[0], "src/kernels/cuda/elementwise.cu rms_norm_kernel") != 1 || !strings.Contains(texts[0], w) {
+		t.Fatalf("%v", texts)
 	}
 }
 
