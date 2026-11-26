@@ -728,6 +728,7 @@ func unitGateInput(ws, unitID string, req UnitRequirements, changed []string, bu
 		// the integration unit's kernels: their rows are checked against the planner's missing
 		// lines and the kernels the units ported (port_gate.go)
 		pf, pfRefused = integrationPortFiles(ws, unitID, pm)
+		pfRefused = markPortIncompleteRows(pfRefused, req.Symbols)
 		missingGroups = integrationMissingGroups(unitID)
 		missingOff = integrationMissingOff(unitID)
 		opKernels = integrationOpKernels(ws, unitID)

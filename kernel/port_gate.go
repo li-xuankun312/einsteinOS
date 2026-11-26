@@ -650,3 +650,27 @@ func integrationOtherPorted(ws, unitID string) map[string]map[string]bool {
 	}
 	return out
 }
+
+// %[1]s the reference file, %[2]s the name
+const portRowIncompleteCountsFmt = " — port_incomplete counts this row as the counterpart of %[1]s %[2]s"
+
+// markPortIncompleteRows: the refused rows of kernel_unported that port_incomplete counts, said to
+// be. 11/26 09:49:16 168 rows did not count for kernel_unported, each the counterpart
+// port_incomplete had counted when it passed; the conversation removed them, and port_incomplete
+// failed 163 of 168 from 09:56:53 on.
+func markPortIncompleteRows(refused []string, syms []RefSymbol) []string {
+	own := map[string]bool{}
+	for _, s := range syms {
+		own[s.File+" "+s.Name] = true
+	}
+	out := make([]string, len(refused))
+	for i, r := range refused {
+		out[i] = r
+		head, _, ok := strings.Cut(r, " → ")
+		if ok && own[head] && !strings.HasSuffix(r, portRowSameReason) { // those are given as one line
+			f, n, _ := strings.Cut(head, " ")
+			out[i] = r + fmt.Sprintf(portRowIncompleteCountsFmt, f, n)
+		}
+	}
+	return out
+}

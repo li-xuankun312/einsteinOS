@@ -415,3 +415,16 @@ func TestKernelUnportedHoldsOnlyTheKernelsNoUnitPorted(t *testing.T) {
 		t.Fatal("a kernel another unit ported is held")
 	}
 }
+
+// 11/26 09:49:16 168 rows refused by kernel_unported were each port_incomplete's counterpart of a
+// reference definition; the conversation removed them and port_incomplete failed
+func TestARefusedRowPortIncompleteCountsIsSaidToBe(t *testing.T) {
+	refused := []string{
+		"src/kernels/shared_expert_parity.cpp check → src/ix_shared_expert.cu swiglu_kernel (no unit ports check as a kernel)",
+		"missing:gdn → src/ix_gdn.cu gdn_step_kernel (no missing line of the planner's names this group)",
+	}
+	got := markPortIncompleteRows(refused, []RefSymbol{{File: "src/kernels/shared_expert_parity.cpp", Name: "check"}})
+	if !strings.HasSuffix(got[0], " — port_incomplete counts this row as the counterpart of src/kernels/shared_expert_parity.cpp check") || got[1] != refused[1] {
+		t.Fatalf("got %q", got)
+	}
+}
