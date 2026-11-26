@@ -30,6 +30,9 @@ const (
 	// %[1]d how many, %[2]s the lines
 	// %[1]s the objects
 	entryStubObjsFmt = "; measured with nm -C, the build's object files define it: %[1]s"
+	// %[1]s the places
+	entryStubSourceFmt    = "; measured from the sources, no object file of the build being in the workspace, these write it too: %[1]s"
+	entryStubNoSourceText = "; measured from the sources, no object file of the build being in the workspace, nothing else of the workspace writes it"
 	// what nm found when no object defines it strongly
 	entryStubNoObjText = "; measured with nm -C, no object file of the build defines it but by this header"
 	gateEntryStubFmt   = "entry_stubbed: %[1]d header definition(s) give, inline and returning a constant, an entry build.sh makes of a test's main by -Dmain=; a source including the header may be compiled to the constant and never run the test:\n%[2]s"
@@ -97,6 +100,24 @@ func entryStubs(ws, build string) []string {
 		// reliably export main() renamed via -Dmain=e2e_embed_main", and the embed conversation
 		// (b10706e5) wrote it by hand on that comment alone
 		defs := objectFuncDefs(ws, func(b string) bool { _, ok := entries[b]; return ok })
+		if defs == nil {
+			// the build writes its objects outside the workspace: 11/26 03:16:24 the entry_stubbed
+			// line gave kg_kernels.hpp:202 with no word of where else e2e_embed_main is written
+			for i, l := range out {
+				name := stubNameRe.FindStringSubmatch(l[strings.Index(l, "inline"):])[1]
+				var at []string
+				for _, d := range defsOfName(ws, name) {
+					if !strings.Contains(d.text, "inline") {
+						at = append(at, fmt.Sprintf("%s:%d", d.file, d.n))
+					}
+				}
+				if len(at) > 0 {
+					out[i] += fmt.Sprintf(entryStubSourceFmt, shortList(at, 4))
+				} else {
+					out[i] += entryStubNoSourceText
+				}
+			}
+		}
 		if defs != nil {
 			for i, l := range out {
 				name := l[strings.Index(l, "inline"):]

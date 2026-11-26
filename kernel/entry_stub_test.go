@@ -20,7 +20,7 @@ func TestAHeaderStubOfARenamedTestMainIsAGate(t *testing.T) {
 		"tests/embed_parity.cu": "int main() { return 1; }\n",
 	})
 	got := entryStubs(ws, unitBuildScript("uint1"))
-	if len(got) != 1 || got[0] != "include/baloon/kg_kernels.hpp:3: inline int e2e_embed_main() { return 0; } — while .einsteinOS/verify/uint1/build.sh:2 makes it of a test's main" {
+	if len(got) != 1 || !strings.HasPrefix(got[0], "include/baloon/kg_kernels.hpp:3: inline int e2e_embed_main() { return 0; } — while .einsteinOS/verify/uint1/build.sh:2 makes it of a test's main") {
 		t.Fatalf("%q", got)
 	}
 	kinds, texts := unitGatesAll(GateInput{UnitID: "uint1", EntryStubs: got})
@@ -57,6 +57,31 @@ func TestWhatTheRenameMadeIsMeasuredBesideTheStub(t *testing.T) {
 	}
 	got := entryStubs(ws, unitBuildScript("uint1"))
 	if len(got) != 1 || !strings.HasSuffix(got[0], "; measured with nm -C, the build's object files define it: build/.obj/e2e_embed.o (e2e_embed_main())") {
+		t.Fatalf("%q", got)
+	}
+}
+
+// 11/26 03:16:24 the entry_stubbed line gave kg_kernels.hpp:202 with no word of where else
+// e2e_embed_main is written, build.sh writing its objects outside the workspace: with no object
+// there, the sources that write the entry are given
+func TestWithNoObjectTheSourcesWritingTheEntryAreGiven(t *testing.T) {
+	ws := t.TempDir()
+	putTree(t, ws, map[string]string{
+		".einsteinOS/verify/uint1/build.sh":     "cuobj $T/embed_parity.cu \"$OBJ/e2e_embed.o\" -Dmain=e2e_embed_main\n",
+		"include/baloon/kg_kernels.hpp":         "inline int e2e_embed_main() { return 0; }\n",
+		"tests/k39_integration/embed_parity.cu": "int e2e_embed_main() {\n  return run_gather();\n}\n",
+	})
+	got := entryStubs(ws, unitBuildScript("uint1"))
+	if len(got) != 1 || !strings.HasSuffix(got[0], "; measured from the sources, no object file of the build being in the workspace, these write it too: tests/k39_integration/embed_parity.cu:1") {
+		t.Fatalf("%q", got)
+	}
+	// nothing else writes it
+	ws2 := t.TempDir()
+	putTree(t, ws2, map[string]string{
+		".einsteinOS/verify/uint1/build.sh": "cuobj $T/embed_parity.cu \"$OBJ/e2e_embed.o\" -Dmain=e2e_embed_main\n",
+		"include/baloon/kg_kernels.hpp":     "inline int e2e_embed_main() { return 0; }\n",
+	})
+	if got := entryStubs(ws2, unitBuildScript("uint1")); len(got) != 1 || !strings.HasSuffix(got[0], "nothing else of the workspace writes it") {
 		t.Fatalf("%q", got)
 	}
 }
