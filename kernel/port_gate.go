@@ -207,6 +207,7 @@ func portExtra(ws, unitID string, syms []RefSymbol) []string {
 	if len(syms) == 0 {
 		return nil
 	}
+	ported := integrationPortedRefs(ws, unitID)
 	own := map[string]bool{}
 	for _, s := range syms {
 		own[s.File+"\t"+s.Name] = true
@@ -221,6 +222,9 @@ func portExtra(ws, unitID string, syms []RefSymbol) []string {
 	for i, e := range lines {
 		if plannerMissingRow(unitID, e.refFile) {
 			continue // the integration unit's own kernel, checked by kernel_unported
+		}
+		if _, ok := ported[e.refFile+"\t"+e.refName]; ok {
+			continue // a reference kernel another unit ported, the row kernel_unported asks for
 		}
 		if !refFiles[e.refFile] && !strings.HasPrefix(e.refFile, integrationMissingPrefix) {
 			continue // port_ref_file_unknown names it, with what column 1 is
@@ -327,10 +331,14 @@ func portRefFiles(ws, unitID string, syms []RefSymbol) []string {
 	}
 	seen := map[string]bool{}
 	var out []string
+	ported := integrationPortedRefs(ws, unitID)
 	lines, _ := readPortLines(ws, unitID)
 	for _, e := range lines {
 		if plannerMissingRow(unitID, e.refFile) {
 			continue // the integration unit's own kernel, checked by kernel_unported
+		}
+		if _, ok := ported[e.refFile+"\t"+e.refName]; ok {
+			continue // a reference kernel another unit ported, the row kernel_unported asks for
 		}
 		if !refFiles[e.refFile] && !seen[e.refFile] {
 			seen[e.refFile] = true
@@ -474,6 +482,35 @@ func integrationPortFiles(ws, unitID string, pm map[string]portEntry) (map[strin
 	}
 	sort.Strings(refused)
 	return out, refused
+}
+
+// integrationPortedRefs: for the integration unit, the reference definitions another unit's port
+// map ports as a kernel, keyed "<file>\t<name>" as that map writes them, each with the unit, its
+// kernel and the file it is in. A row of the integration map naming one of them is the row
+// kernel_unported counts for a kernel of the text path (integrationPortFiles), and its first
+// column is that unit's reference file, not one of the integration unit's: 11/26 07:28:43
+// src/kernels/cuda/gdn.cu gdn_conv_kernel → src/kernels/gpu/gdn_bf16_layer.cu, written as
+// kernel_unported said, was refused by port_ref_file_unknown, and port_extra refused the rows
+// like it written with a file of the integration unit's in column 1.
+func integrationPortedRefs(ws, unitID string) map[string]string {
+	if len(integrationAnswerOf(unitID).Ops) == 0 {
+		return nil
+	}
+	out := map[string]string{}
+	maps, _ := filepath.Glob(filepath.Join(ws, ".einsteinOS", "port", "*.tsv"))
+	for _, m := range maps {
+		u := strings.TrimSuffix(filepath.Base(m), ".tsv")
+		if u == unitID {
+			continue
+		}
+		ks := portKernels(ws, u)
+		for _, e := range readPortMap(ws, u) {
+			if ks[symbolBase(e.name)] {
+				out[e.refFile+"\t"+e.refName] = u + " " + e.name + " in " + e.file
+			}
+		}
+	}
+	return out
 }
 
 // plannerMissingRow: a port map row of the integration unit whose first column is

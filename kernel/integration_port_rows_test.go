@@ -315,3 +315,34 @@ func TestTheMissingGroupsOffTheTextPathAreSaidToBe(t *testing.T) {
 		t.Fatalf("none on the path is not said: %v", texts)
 	}
 }
+
+// 11/26 07:28:43 the conversation wrote the row kernel_unported asked for — column 2 the reference
+// kernel a unit ported, column 1 its reference file — and port_ref_file_unknown refused it,
+// column 1 being no file of the integration unit's reference
+func TestARowNamingAKernelAUnitPortedPassesEveryGate(t *testing.T) {
+	integrationAnswers["uint"] = IntegrationModelPlan{Ops: []IntegrationOp{{Group: "model.language_model.layers.{i}.linear_attn.conv1d.weight", Unit: "pA", Kernel: "gdn_conv_kernel"}}}
+	t.Cleanup(func() { delete(integrationAnswers, "uint") })
+	ws := t.TempDir()
+	putTree(t, ws, map[string]string{
+		".einsteinOS/port/pA.tsv":           "src/kernels/cuda/gdn.cu\tgdn_conv_kernel\tsrc/kernels/gpu/gdn.cu\tgdn_conv_kernel\n",
+		"src/kernels/gpu/gdn.cu":            "__global__ void gdn_conv_kernel(float* x) {}\n",
+		".einsteinOS/port/uint.tsv":         "src/kernels/gdn_parity.cpp\tcheck\ttests/k39/gdn_parity.cu\tcheck\nsrc/kernels/cuda/gdn.cu\tgdn_conv_kernel\tsrc/kernels/gpu/gdn_bf16_layer.cu\tgdn_bf16_conv_step_kernel\n",
+		"src/kernels/gpu/gdn_bf16_layer.cu": "__global__ void gdn_bf16_conv_step_kernel(float* x) {}\n",
+		"tests/k39/gdn_parity.cu":           "int check() { return 0; }\n",
+	})
+	syms := []RefSymbol{{File: "src/kernels/gdn_parity.cpp", Name: "check", Kind: "func"}}
+	if r := portRefFiles(ws, "uint", syms); len(r) != 0 {
+		t.Fatalf("port_ref_file_unknown: %v", r)
+	}
+	if r := portExtra(ws, "uint", syms); len(r) != 0 {
+		t.Fatalf("port_extra: %v", r)
+	}
+	if files, _ := integrationPortFiles(ws, "uint", readPortMap(ws, "uint")); !files["src/kernels/gpu/gdn_bf16_layer.cu"] {
+		t.Fatalf("kernel_unported does not count it: %v", files)
+	}
+	// a unit that is not the integration unit is judged as before
+	delete(integrationAnswers, "uint")
+	if r := portRefFiles(ws, "uint", syms); len(r) != 1 {
+		t.Fatalf("outside the integration unit: %v", r)
+	}
+}
