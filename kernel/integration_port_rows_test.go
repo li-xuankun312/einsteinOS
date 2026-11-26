@@ -204,3 +204,25 @@ func TestARefusedRowSaysWhereTheReferenceFunctionIsPorted(t *testing.T) {
 		t.Fatalf("lacks %q:\n%s", want, all)
 	}
 }
+
+// 11/26 04:15:56 the same rows stood under port_ref_file_unknown and under port_extra, each
+// row named twice: a row whose column 1 is no reference file is left to port_ref_file_unknown
+func TestARowWhoseColumn1IsNoReferenceFileIsNamedOnce(t *testing.T) {
+	ws := t.TempDir()
+	putTree(t, ws, map[string]string{
+		".einsteinOS/port/uint.tsv": "tests/k39_integration/elementwise_parity.cu\ttest_rms\tsrc/kernels/gpu/ew_ops.cu\trms_kernel\n" +
+			"src/kernels/cuda/elementwise.cu\tnot_a_symbol\tsrc/kernels/gpu/ew_ops.cu\tx_kernel\n",
+	})
+	syms := []RefSymbol{{File: "src/kernels/cuda/elementwise.cu", Name: "rms_norm_kernel"}}
+	extra := portExtra(ws, "uint", syms)
+	all := strings.Join(extra, "\n")
+	if strings.Contains(all, "elementwise_parity.cu") {
+		t.Fatalf("a row port_ref_file_unknown names was named again:\n%s", all)
+	}
+	if !strings.Contains(all, "not_a_symbol") {
+		t.Fatalf("a row of a reference file naming no definition was not named:\n%s", all)
+	}
+	if un := portRefFiles(ws, "uint", syms); len(un) != 1 || !strings.Contains(un[0], "elementwise_parity.cu") {
+		t.Fatalf("%q", un)
+	}
+}

@@ -209,12 +209,19 @@ func portExtra(ws, unitID string, syms []RefSymbol) []string {
 	for _, s := range syms {
 		own[s.File+"\t"+s.Name] = true
 	}
+	refFiles := map[string]bool{}
+	for _, s := range syms {
+		refFiles[s.File] = true
+	}
 	first := map[string]int{}
 	var out []string
 	lines, nums := readPortLines(ws, unitID)
 	for i, e := range lines {
 		if plannerMissingRow(unitID, e.refFile) {
 			continue // the integration unit's own kernel, checked by kernel_unported
+		}
+		if !refFiles[e.refFile] && !strings.HasPrefix(e.refFile, integrationMissingPrefix) {
+			continue // port_ref_file_unknown names it, with what column 1 is
 		}
 		k := e.refFile + "\t" + e.refName
 		switch {
