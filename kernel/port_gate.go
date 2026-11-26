@@ -627,3 +627,26 @@ func integrationOpKernels(ws, unitID string) []string {
 	}
 	return out
 }
+
+// integrationOtherPorted: for the integration unit, per file, the kernels in it the other units'
+// port maps write.
+func integrationOtherPorted(ws, unitID string) map[string]map[string]bool {
+	out := map[string]map[string]bool{}
+	maps, _ := filepath.Glob(filepath.Join(ws, ".einsteinOS", "port", "*.tsv"))
+	for _, m := range maps {
+		u := strings.TrimSuffix(filepath.Base(m), ".tsv")
+		if u == unitID {
+			continue
+		}
+		ks := portKernels(ws, u)
+		for _, e := range readPortMap(ws, u) {
+			if b := symbolBase(e.name); ks[b] {
+				if out[e.file] == nil {
+					out[e.file] = map[string]bool{}
+				}
+				out[e.file][b] = true
+			}
+		}
+	}
+	return out
+}

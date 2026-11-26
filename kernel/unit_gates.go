@@ -59,6 +59,9 @@ type GateInput struct {
 	MissingGroups []string
 	// MissingOff: those of MissingGroups off the model's text path
 	MissingOff map[string]bool
+	// OtherPorted: per file, the kernels in it other units' port maps write — for the
+	// integration unit, which changes files of the units it puts together (port_gate.go)
+	OtherPorted map[string]map[string]bool
 	// OpKernels: the kernels units ported that the planner's op lines give the text path's
 	// groups, each with the row of its unit's map (port_gate.go)
 	OpKernels []string
@@ -196,9 +199,23 @@ func unitGatesAll(in GateInput) (kinds, texts []string) {
 	// u61716a9a8a src/kernels/cuda/verify_commit_dev.cu, each to pass gpu_kernel_missing
 	if in.PortFiles != nil {
 		var files []string
+		held := map[string][]string{}
 		for f, ks := range in.Kernels {
-			if len(ks) > 0 && !isTestPath(f) && !in.PortFiles[f] {
+			if len(ks) == 0 || isTestPath(f) || in.PortFiles[f] {
+				continue
+			}
+			// a kernel another unit's map writes is that unit's port: 11/26 07:28 to 11:34
+			// a change of the integration unit to a file of the units it puts together held
+			// every kernel in the file
+			var own []string
+			for _, k := range ks {
+				if !in.OtherPorted[f][symbolBase(k)] {
+					own = append(own, k)
+				}
+			}
+			if len(own) > 0 {
 				files = append(files, f)
+				held[f] = own
 			}
 		}
 		if len(files) > 0 {
@@ -207,7 +224,7 @@ func unitGatesAll(in GateInput) (kinds, texts []string) {
 			// given as one list cut at 12, "(+26 more)", with no file to any of them
 			var each []string
 			for _, f := range files {
-				ks := append([]string(nil), in.Kernels[f]...)
+				ks := append([]string(nil), held[f]...)
 				sort.Strings(ks)
 				each = append(each, fmt.Sprintf(gateKernelUnportedFileFmt, f, strings.Join(ks, " ")))
 			}

@@ -723,6 +723,7 @@ func unitGateInput(ws, unitID string, req UnitRequirements, changed []string, bu
 	var pfRefused, missingGroups []string
 	var missingOff map[string]bool
 	var opKernels []string
+	var otherPorted map[string]map[string]bool
 	if len(req.Tests) > 0 {
 		// the integration unit's kernels: their rows are checked against the planner's missing
 		// lines and the kernels the units ported (port_gate.go)
@@ -730,6 +731,7 @@ func unitGateInput(ws, unitID string, req UnitRequirements, changed []string, bu
 		missingGroups = integrationMissingGroups(unitID)
 		missingOff = integrationMissingOff(unitID)
 		opKernels = integrationOpKernels(ws, unitID)
+		otherPorted = integrationOtherPorted(ws, unitID)
 	}
 	mutScript, mutMissing := testMutatesMissing(ws, unitID, changed)
 	return GateInput{Req: req, Changed: changed, Build: build, Test: test, Compilers: presentGPUCompilers(),
@@ -738,7 +740,7 @@ func unitGateInput(ws, unitID string, req UnitRequirements, changed []string, bu
 		Shadowed:   shadowedKernels(unitKernels(ws, changed), portKernels(ws, unitID)),
 		EntryStubs: entryStubs(ws, unitBuildScript(unitID)),
 		ISAFuncs:   isaPortFuncs(pm, req.FlagFiles), PortKernels: portKernels(ws, unitID), UnitID: unitID,
-		PortFiles: pf, PortFilesRefused: pfRefused, MissingGroups: missingGroups, MissingOff: missingOff, OpKernels: opKernels,
+		PortFiles: pf, PortFilesRefused: pfRefused, MissingGroups: missingGroups, MissingOff: missingOff, OpKernels: opKernels, OtherPorted: otherPorted,
 		NoToolchain: nt, Includers: cuhIncluders(ws, changed), IncludersMeasured: true,
 		RepoKernels: integrationRepoKernels(ws, req), LeanCopied: unitLeanCopied(ws, changed)}
 }

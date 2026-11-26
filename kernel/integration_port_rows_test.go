@@ -394,3 +394,24 @@ func TestKernelUnportedNamesTheKernelsTheOpLinesGive(t *testing.T) {
 		t.Fatalf("not in the gate: %v", texts)
 	}
 }
+
+// 11/26 07:28 to 11:34 the integration unit changed src/kernels/gpu/ew_ops.cu, where other units
+// had ported their kernels, and kernel_unported held all fourteen kernels of the file
+func TestKernelUnportedHoldsOnlyTheKernelsNoUnitPorted(t *testing.T) {
+	ws := t.TempDir()
+	putTree(t, ws, map[string]string{
+		".einsteinOS/port/pA.tsv":   "src/kernels/cuda/elementwise.cu\trms_norm_weighted_kernel\tsrc/kernels/gpu/ew_ops.cu\trms_norm_weighted_kernel\n",
+		"src/kernels/gpu/ew_ops.cu": "__global__ void rms_norm_weighted_kernel(float* x) {}\n__global__ void silu_kernel(float* x) {}\n",
+	})
+	other := integrationOtherPorted(ws, "uint")
+	in := GateInput{UnitID: "uint", PortFiles: map[string]bool{}, OtherPorted: other,
+		Kernels: map[string][]string{"src/kernels/gpu/ew_ops.cu": {"rms_norm_weighted_kernel", "silu_kernel"}}}
+	kinds, texts := unitGatesAll(in)
+	if len(kinds) == 0 || kinds[0] != "kernel_unported" || !strings.Contains(texts[0], "src/kernels/gpu/ew_ops.cu (silu_kernel)") {
+		t.Fatalf("the integration unit's own kernel is not held alone: %v %v", kinds, texts)
+	}
+	in.Kernels = map[string][]string{"src/kernels/gpu/ew_ops.cu": {"rms_norm_weighted_kernel"}}
+	if kinds, _ := unitGatesAll(in); len(kinds) > 0 && kinds[0] == "kernel_unported" {
+		t.Fatal("a kernel another unit ported is held")
+	}
+}
