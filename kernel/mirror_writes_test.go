@@ -730,3 +730,65 @@ func TestACommandThatSetsManyFilesBackToTheBranchIsTold(t *testing.T) {
 		t.Fatalf("%q", got)
 	}
 }
+
+// 11/25 23:20:44 44 of the 45 files written back were .bc a build had written: what a compiler
+// writes is no conversation's, and another's build is not written back over it
+func TestABuildsOutputIsNoConversationsFile(t *testing.T) {
+	resetMirrorUnits()
+	defer resetMirrorUnits()
+	dir := t.TempDir()
+	noteMirrorConv("uint", dir, "029bd60e", "qsa: the QSA sub-layer")
+	noteMirrorConv("uint", dir, "e3bf792a", "loader: the safetensors loader")
+	putTree(t, dir, map[string]string{"src/x.cu": "// src\n"})
+	MirrorCommand("029bd60e", func() string {
+		os.WriteFile(filepath.Join(dir, "src/ix_gdn.bc"), []byte("qsa's build\n"), 0o644)
+		os.WriteFile(filepath.Join(dir, "src/ilu_qsa.cu"), []byte("// qsa's source\n"), 0o644)
+		return ""
+	})
+	got := MirrorCommand("e3bf792a", func() string {
+		os.WriteFile(filepath.Join(dir, "src/ix_gdn.bc"), []byte("loader's build\n"), 0o644)
+		os.WriteFile(filepath.Join(dir, "src/ilu_qsa.cu"), []byte("// loader's\n"), 0o644)
+		return ""
+	})
+	bc, _ := os.ReadFile(filepath.Join(dir, "src/ix_gdn.bc"))
+	if string(bc) != "loader's build\n" {
+		t.Fatalf("a build's output written back: %q", bc)
+	}
+	if strings.Contains(got, "ix_gdn.bc") {
+		t.Fatalf("a build's output said to be another's: %s", got)
+	}
+	if !strings.Contains(got, "src/ilu_qsa.cu") {
+		t.Fatalf("a source another conversation wrote not said: %s", got)
+	}
+}
+
+// 11/25 23:20:44 a command of the loader part was undone for 45 file(s), 44 of them .bc the qsa
+// part's build had written first: what a build writes is no conversation's, and a build of one
+// conversation does not put back another's stale output
+func TestWhatABuildWritesIsNoConversationsFile(t *testing.T) {
+	resetMirrorUnits()
+	defer resetMirrorUnits()
+	dir := t.TempDir()
+	putTree(t, dir, map[string]string{"src/a.cu": "v1\n"})
+	noteMirrorConv("uint", dir, "029bd60e", "qsa: the QSA layer")
+	noteMirrorConv("uint", dir, "e3bf792a", "loader: the safetensors loader")
+	MirrorCommand("029bd60e", func() string {
+		os.WriteFile(filepath.Join(dir, "src/a.bc"), []byte("qsa's build\n"), 0o644)
+		os.WriteFile(filepath.Join(dir, "src/qsa_only.cu"), []byte("qsa's source\n"), 0o644)
+		return ""
+	})
+	got := MirrorCommand("e3bf792a", func() string {
+		os.WriteFile(filepath.Join(dir, "src/a.bc"), []byte("loader's build\n"), 0o644)
+		os.WriteFile(filepath.Join(dir, "src/qsa_only.cu"), []byte("loader's edit\n"), 0o644)
+		return ""
+	})
+	if b, _ := os.ReadFile(filepath.Join(dir, "src/a.bc")); string(b) != "loader's build\n" {
+		t.Fatalf("a build's output put back: %q", b)
+	}
+	if strings.Contains(got, "src/a.bc") {
+		t.Fatalf("a build's output said to be another's: %q", got)
+	}
+	if !strings.Contains(got, "src/qsa_only.cu (the file of qsa, conversation 029bd60e, which wrote it first)") {
+		t.Fatalf("a source of another conversation not said: %q", got)
+	}
+}

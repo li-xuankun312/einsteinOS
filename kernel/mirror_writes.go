@@ -218,7 +218,7 @@ func MirrorCommand(conv string, run func() string) string {
 		u.seq++
 		w.Conv, w.Seq = conv, u.seq
 		u.writes = append(u.writes, w)
-		if _, ok := u.owner[w.File]; !ok && !w.Removed && !u.base[w.File] {
+		if _, ok := u.owner[w.File]; !ok && !w.Removed && !u.base[w.File] && !buildOutput(w.File) {
 			u.owner[w.File] = conv
 		}
 		if w.Removed {
@@ -461,8 +461,8 @@ func (u *mirrorUnit) sinceHeard(conv string) string {
 	last := map[string]mirrorWrite{}
 	var order []string
 	for _, w := range u.writes {
-		if w.Seq <= u.heard[conv] || w.Conv == conv {
-			continue
+		if w.Seq <= u.heard[conv] || w.Conv == conv || buildOutput(w.File) {
+			continue // what a build writes is no conversation's news
 		}
 		if _, ok := last[w.File]; !ok {
 			order = append(order, w.File)
@@ -964,4 +964,15 @@ func (u *mirrorUnit) takesOutOnlyAttemptLines(f string) bool {
 		}
 	}
 	return true
+}
+
+// buildOutputExts: what a compiler or a linker writes, not what a conversation ports.
+var buildOutputExts = map[string]bool{".bc": true, ".o": true, ".a": true, ".so": true, ".d": true, ".obj": true, ".ll": true, ".fatbin": true, ".cubin": true, ".pyc": true}
+
+// buildOutput: whether a file of the mirror is a build's output. 11/25 23:20:44 a command of
+// the loader part was written back for 45 file(s), 44 of them .bc the qsa part's build had
+// written first: a build of one conversation made them the owner's, and every other
+// conversation's build had its own output written back, stale, under the next build's feet.
+func buildOutput(f string) bool {
+	return buildOutputExts[strings.ToLower(filepath.Ext(f))]
 }
