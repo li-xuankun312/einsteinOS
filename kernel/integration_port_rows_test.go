@@ -35,7 +35,7 @@ func TestTheIntegrationUnitsPortRowsAreChecked(t *testing.T) {
 	}
 	in := GateInput{UnitID: "uint", PortFiles: files, PortFilesRefused: refused, Kernels: map[string][]string{"src/kernels/gpu/gdn_layer.cu": {"gdn_ssm_norm_kernel"}}}
 	kinds, texts := unitGatesAll(in)
-	if len(kinds) == 0 || kinds[0] != "kernel_unported" || !strings.Contains(texts[0], "2 row(s) of the port map do not count") {
+	if len(kinds) == 0 || kinds[0] != "kernel_unported" || !strings.Contains(texts[0], "1 row(s) of the port map do not count") || !strings.Contains(texts[0], "1 other row(s) of the map write into none of these files") {
 		t.Fatalf("%v %v", kinds, texts)
 	}
 }
@@ -71,7 +71,7 @@ func TestTheRowsIntoTheHeldFilesComeFirst(t *testing.T) {
 		held = append(held, fmt.Sprintf("src/k%d.cu", i))
 	}
 	got := refusedRowsText(refused, held)
-	if !strings.HasPrefix(got, "tests/t.cu test_0 → src/k0.cu") || !strings.Contains(got, "src/k8.cu k8_kernel") || !strings.Contains(got, "(+18 more)") {
+	if !strings.HasPrefix(got, "tests/t.cu test_0 → src/k0.cu") || !strings.Contains(got, "src/k8.cu k8_kernel") || !strings.HasSuffix(got, "; 30 other row(s) of the map write into none of these files, and this gate does not judge them") || strings.Contains(got, "src/a00.cpp") {
 		t.Fatal(got)
 	}
 }
@@ -87,7 +87,7 @@ func TestRowsNamingTheSameFileAndFunctionOnBothSidesAreOneLine(t *testing.T) {
 	})
 	_, refused := integrationPortFiles(ws, "uint", readPortMap(ws, "uint"))
 	got := refusedRowsText(refused, []string{"src/k.cu"})
-	if !strings.HasPrefix(got, "tests/t.cu test_k → src/k.cu k_kernel (no unit ports test_k as a kernel; ") || !strings.Contains(got, "missing:<group>, where <group>") {
+	if !strings.HasPrefix(got, "tests/t.cu test_k → src/k.cu k_kernel (no unit ports test_k as a kernel; ") || !strings.Contains(got, "missing:<group>, where <group>") || !strings.HasSuffix(got, "; 2 other row(s) of the map write into none of these files, and this gate does not judge them") {
 		t.Fatal(got)
 	}
 }
@@ -538,5 +538,22 @@ func TestTheIntegrationUnitsCounterpartKeepsTheReferenceName(t *testing.T) {
 	delete(integrationAnswers, "uint")
 	if got := portMissing(ws, "uint", syms); len(got) != 0 {
 		t.Fatalf("another unit is judged by it: %q", got)
+	}
+}
+
+// 11/26 15:00:17 to 15:09:12 the conversation removed the 175 rows naming a test file and function
+// on both sides — port_incomplete's counterparts — given by kernel_unported among rows that "do not
+// count": kernel_unported gives only the rows writing into the files it holds
+func TestKernelUnportedGivesOnlyTheRowsIntoTheFilesItHolds(t *testing.T) {
+	ws := t.TempDir()
+	putTree(t, ws, map[string]string{
+		".einsteinOS/port/uint.tsv": "src/kernels/bf16_gemv_parity.cpp\tcheck\tsrc/kernels/bf16_gemv_parity.cpp\tcheck\n" +
+			"tests/t.cu\ttest_k\tsrc/k.cu\tk_kernel\n",
+	})
+	files, refused := integrationPortFiles(ws, "uint", readPortMap(ws, "uint"))
+	in := GateInput{UnitID: "uint", PortFiles: files, PortFilesRefused: refused, Kernels: map[string][]string{"src/k.cu": {"k_kernel"}}}
+	_, texts := unitGatesAll(in)
+	if len(texts) == 0 || strings.Contains(texts[0], "bf16_gemv_parity") || !strings.Contains(texts[0], "; 1 row(s) of the port map do not count: tests/t.cu test_k → src/k.cu k_kernel") || !strings.Contains(texts[0], "1 other row(s) of the map write into none of these files") {
+		t.Fatalf("%v", texts)
 	}
 }

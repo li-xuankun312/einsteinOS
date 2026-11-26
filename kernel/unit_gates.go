@@ -232,8 +232,8 @@ func unitGatesAll(in GateInput) (kinds, texts []string) {
 				each = append(each, fmt.Sprintf(gateKernelUnportedFileFmt, f, strings.Join(ks, " ")))
 			}
 			t := fmt.Sprintf(gateKernelUnportedFmt, len(files), strings.Join(each, "; "), PortMapPath(in.UnitID))
-			if len(in.PortFilesRefused) > 0 {
-				t += fmt.Sprintf(gateKernelUnportedRowsFmt, len(in.PortFilesRefused), refusedRowsText(in.PortFilesRefused, files), integrationMissingPrefix)
+			if into, _ := refusedRowsIntoHeld(in.PortFilesRefused, files); len(into) > 0 {
+				t += fmt.Sprintf(gateKernelUnportedRowsFmt, len(into), refusedRowsText(in.PortFilesRefused, files), integrationMissingPrefix)
 			}
 			if len(in.MissingGroups) > 0 {
 				// what may follow "missing:": 11/25 06:27:29 the text asked for missing:<group> rows
@@ -798,19 +798,17 @@ func isTestPath(p string) bool {
 	return false
 }
 
-// %[1]d rows, %[2]s the first of them
-const portRowsSameFmt = "%[1]d row(s) name the same file and function in both columns (%[2]s, …)"
+// %[1]d rows
+const portRowsElsewhereFmt = "%[1]d other row(s) of the map write into none of these files, and this gate does not judge them"
 
-// refusedRowsText: the port map rows that do not count, those writing into a file kernel_unported
-// holds on first and all of them, then the others cut at 12. 11/25 06:27:29 the nine rows that
-// wrote into the held files sorted after 184 others and were cut, "(+181 more)".
-func refusedRowsText(refused, held []string) string {
-	var into, rest, same []string
+// refusedRowsIntoHeld: the refused rows writing into a file kernel_unported holds on, and how many
+// others there are. Only those rows are kernel_unported's: 11/26 15:00:17 to 15:09:12 the
+// integration conversation removed 286 rows, the 175 that named the same test file and function
+// on both sides among them — port_incomplete's counterparts, given by kernel_unported as one more
+// line of rows that "do not count" — and port_incomplete went from 1 to 147 of 168. 11/25 06:27:29
+// the nine rows that wrote into the held files had sorted after 184 others and were cut.
+func refusedRowsIntoHeld(refused, held []string) (into []string, others int) {
 	for _, r := range refused {
-		if strings.HasSuffix(r, portRowSameReason) {
-			same = append(same, strings.TrimSuffix(r, portRowSameReason))
-			continue
-		}
 		hit := false
 		for _, f := range held {
 			if strings.Contains(r, " → "+f+" ") {
@@ -821,19 +819,22 @@ func refusedRowsText(refused, held []string) string {
 		if hit {
 			into = append(into, r)
 		} else {
-			rest = append(rest, r)
+			others++
 		}
 	}
+	return into, others
+}
+
+// refusedRowsText: the refused rows writing into the held files, all of them, and the number of
+// the others.
+func refusedRowsText(refused, held []string) string {
+	into, others := refusedRowsIntoHeld(refused, held)
 	var parts []string
 	if len(into) > 0 {
 		parts = append(parts, strings.Join(into, "; "))
 	}
-	if len(rest) > 0 {
-		parts = append(parts, shortList(rest, 12))
-	}
-	if len(same) > 0 {
-		// one line for them: 11/25 06:27:29 they were 165 of 193, each given alone
-		parts = append(parts, fmt.Sprintf(portRowsSameFmt, len(same), same[0]))
+	if others > 0 {
+		parts = append(parts, fmt.Sprintf(portRowsElsewhereFmt, others))
 	}
 	return strings.Join(parts, "; ")
 }
