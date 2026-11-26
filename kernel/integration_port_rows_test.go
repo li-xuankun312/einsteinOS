@@ -296,3 +296,22 @@ func TestTheGroupsAreGivenOnceNotWithEachRow(t *testing.T) {
 		t.Fatalf("the group is given %d times:\n%s", n, texts[0])
 	}
 }
+
+// 11/26 07:28 to 11:34 the planner's 21 missing groups were all model.visual.*, off the text
+// path, and the text gave them as the groups a GDN or router kernel's row may name
+func TestTheMissingGroupsOffTheTextPathAreSaidToBe(t *testing.T) {
+	groups := []string{"model.language_model.layers.{i}.mlp.gate.weight", "model.visual.blocks.{i}.attn.qkv.weight", "model.visual.pos_embed.weight"}
+	in := GateInput{UnitID: "uint", PortFiles: map[string]bool{}, MissingGroups: groups,
+		MissingOff: map[string]bool{"model.visual.blocks.{i}.attn.qkv.weight": true, "model.visual.pos_embed.weight": true},
+		Kernels:    map[string][]string{"src/ix_router_top10_wave.cu": {"router_top10_wave_kernel"}}}
+	_, texts := unitGatesAll(in)
+	want := "; the planner's missing lines give the integration unit 3 tensor group(s), 1 of them on the model's text path: model.language_model.layers.{i}.mlp.gate.weight, and 2 off it, where no part is started: model.visual.blocks.{i}.attn.qkv.weight model.visual.pos_embed.weight"
+	if len(texts) == 0 || !strings.Contains(texts[0], want) {
+		t.Fatalf("lacks %q:\n%v", want, texts)
+	}
+	in.MissingGroups, in.MissingOff = groups[1:], map[string]bool{groups[1]: true, groups[2]: true}
+	_, texts = unitGatesAll(in)
+	if !strings.Contains(texts[0], "0 of them on the model's text path, and 2 off it") {
+		t.Fatalf("none on the path is not said: %v", texts)
+	}
+}

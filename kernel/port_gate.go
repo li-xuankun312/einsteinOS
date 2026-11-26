@@ -493,6 +493,15 @@ func plannerMissingRow(unitID, refFile string) bool {
 	return false
 }
 
+// integrationMissingOff: those of the planner's missing groups off the model's text path.
+func integrationMissingOff(unitID string) map[string]bool {
+	out := map[string]bool{}
+	for _, g := range integrationAnswerOf(unitID).MissingOff {
+		out[g] = true
+	}
+	return out
+}
+
 // integrationMissingGroups: the tensor groups the planner's missing lines give the integration
 // unit, sorted.
 func integrationMissingGroups(unitID string) []string {

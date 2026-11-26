@@ -57,6 +57,8 @@ type GateInput struct {
 	// MissingGroups: the tensor groups the planner's missing lines give the integration unit — the
 	// groups a missing:<group> row of its port map counts for (port_gate.go)
 	MissingGroups []string
+	// MissingOff: those of MissingGroups off the model's text path
+	MissingOff map[string]bool
 	// Shadowed: kernels the port map names that a test file defines too (shadowedKernels)
 	Shadowed []string
 	// EntryStubs: headers defining, inline as a constant, an entry build.sh makes of a test's
@@ -115,6 +117,8 @@ const (
 	gateKernelUnportedFmt = "kernel_unported: %[1]d file(s) define __global__ kernels and are neither test files nor files the unit's port map %[3]s writes a counterpart into: %[2]s"
 	// %[1]d groups, %[2]s them
 	gateKernelUnportedGroupsFmt = "; the planner's missing lines give the integration unit %[1]d tensor group(s): %[2]s"
+	// %[1]d groups, %[2]d on the path, %[3]s them, %[4]d off it, %[5]s them
+	gateKernelUnportedGroupsPathFmt = "; the planner's missing lines give the integration unit %[1]d tensor group(s), %[2]d of them on the model's text path%[3]s, and %[4]d off it, where no part is started: %[5]s"
 	// %[1]s the file, %[2]s its kernels
 	gateKernelUnportedFileFmt  = "%[1]s (%[2]s)"
 	gateGPUKernelMissingFmt    = "gpu_kernel_missing: the unit's modules come from CUDA sources in the reference (%[1]s) but its CUDA files define no __global__ kernel: %[2]s — a host header about a kernel is not the kernel; kernels its port map %[3]s names: %[4]d; kernels its test launched: %[5]s"
@@ -209,7 +213,7 @@ func unitGatesAll(in GateInput) (kinds, texts []string) {
 			if len(in.MissingGroups) > 0 {
 				// what may follow "missing:": 11/25 06:27:29 the text asked for missing:<group> rows
 				// and named no group, and the port map had none since 11/24 04:37
-				t += fmt.Sprintf(gateKernelUnportedGroupsFmt, len(in.MissingGroups), strings.Join(in.MissingGroups, " "))
+				t += missingGroupsText(in.MissingGroups, in.MissingOff)
 			}
 			fail("kernel_unported", t)
 		}
@@ -800,4 +804,27 @@ func refusedRowsText(refused, held []string) string {
 		parts = append(parts, fmt.Sprintf(portRowsSameFmt, len(same), same[0]))
 	}
 	return strings.Join(parts, "; ")
+}
+
+// missingGroupsText: the planner's missing groups, those on the model's text path apart from those
+// off it. 11/26 07:28 to 11:34 every group of the 21 was model.visual.*, the text gave them as
+// the groups a row for a GDN, QSA or router kernel may name, and the port map came to hold
+// missing:model.visual.blocks.{i}.attn.qkv.weight for router_top10_wave_kernel.
+func missingGroupsText(groups []string, off map[string]bool) string {
+	if len(off) == 0 {
+		return fmt.Sprintf(gateKernelUnportedGroupsFmt, len(groups), strings.Join(groups, " "))
+	}
+	var on, offs []string
+	for _, g := range groups {
+		if off[g] {
+			offs = append(offs, g)
+		} else {
+			on = append(on, g)
+		}
+	}
+	onText := ""
+	if len(on) > 0 {
+		onText = ": " + strings.Join(on, " ")
+	}
+	return fmt.Sprintf(gateKernelUnportedGroupsPathFmt, len(groups), len(on), onText, len(offs), shortList(offs, 4))
 }
