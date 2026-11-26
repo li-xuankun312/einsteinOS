@@ -195,7 +195,7 @@ func preVerifyReport(o UnitVerifyOutcome) string {
 		}
 	}
 	if o.Result.GateText != "" {
-		s += ShapeOutput(o.Result.GateText, LocalResultCap()/2) + "\n"
+		s += gatesSentText(o.Result.GateText, o.Result.Gates, LocalResultCap()/2) + "\n"
 	}
 	s += verifiedFilesText(o.Changed, o.Removed)
 	return Bagu(preVerifyWhere, fmt.Sprintf(preVerifyWhatFmt, o.Result.Compile, o.Result.Smoke, gateOrNone(o.Result.Gate)), s+preVerifyTailFmt, "1", spawnTo())
@@ -364,6 +364,35 @@ func gatesLogText(text string, kinds []string, max int) string {
 	if len(kinds) < 2 {
 		return truncStr(text, max)
 	}
+	parts := gatesParts(text, kinds)
+	share := max / len(parts)
+	var out []string
+	for _, p := range parts {
+		out = append(out, truncStr(p, share))
+	}
+	return strings.Join(out, "\n")
+}
+
+// gatesSentText: the gates' text as the conversation is sent it, each failed gate shaped to its
+// share of limit (its head and its end). 11/26 14:27:15 four gates came to 21728 bytes, shaped as
+// one text to its first 4800 bytes and last 3200: port_ref_file_unknown and the start of
+// port_extra, then the end of port_incomplete's 150 lines — kernel_unported, failing at 14:05:49,
+// would have been in the part cut out.
+func gatesSentText(text string, kinds []string, limit int) string {
+	if len(kinds) < 2 || len(text) <= limit {
+		return ShapeOutput(text, limit)
+	}
+	parts := gatesParts(text, kinds)
+	share := limit / len(parts)
+	var out []string
+	for _, p := range parts {
+		out = append(out, ShapeOutput(p, share))
+	}
+	return strings.Join(out, "\n")
+}
+
+// gatesParts: the gates' text cut where each failed gate's text begins.
+func gatesParts(text string, kinds []string) []string {
 	lines := strings.Split(text, "\n")
 	starts := map[string]bool{}
 	for _, k := range kinds {
@@ -381,12 +410,7 @@ func gatesLogText(text string, kinds []string, max int) string {
 	if len(cur) > 0 {
 		parts = append(parts, strings.Join(cur, "\n"))
 	}
-	share := max / len(parts)
-	var out []string
-	for _, p := range parts {
-		out = append(out, truncStr(p, share))
-	}
-	return strings.Join(out, "\n")
+	return parts
 }
 
 // %[1]s repo, %[2]s unit, %[3]s the compile's output — 11/24 03:24:38 and 03:25:36 compile=fail

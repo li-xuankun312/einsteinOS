@@ -29,3 +29,20 @@ func TestTheWholeGateTextIsWrittenWhereTheLogSays(t *testing.T) {
 		t.Fatalf("the log line is not capped: %d bytes", len(line))
 	}
 }
+
+// 11/26 14:27:15 four gates came to 21728 bytes and were shaped as one text: a gate in the middle
+// was cut out whole. Each gate keeps its share, its first line with it.
+func TestEachGateKeepsItsShareOfWhatTheConversationIsSent(t *testing.T) {
+	text := "port_ref_file_unknown: 2 rows\n" + strings.Repeat("r\n", 4000) +
+		"kernel_unported: 1 file(s)\n" + strings.Repeat("k\n", 4000) +
+		"port_incomplete: 150 of 168\n" + strings.Repeat("p\n", 4000)
+	got := gatesSentText(text, []string{"port_ref_file_unknown", "kernel_unported", "port_incomplete"}, 8000)
+	for _, w := range []string{"port_ref_file_unknown: 2 rows", "kernel_unported: 1 file(s)", "port_incomplete: 150 of 168"} {
+		if !strings.Contains(got, w) {
+			t.Fatalf("lacks %q", w)
+		}
+	}
+	if len(got) > 8000+600 {
+		t.Fatalf("over the limit: %d", len(got))
+	}
+}
