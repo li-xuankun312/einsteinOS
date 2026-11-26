@@ -171,7 +171,7 @@ const (
 	// %[1]s the file, %[2]s the rows counting for it
 	portRowCountsFmt = "; column 2 is the reference's function another unit's port map ports as a kernel — rows counting for %[1]s: %[2]s"
 	// %[1]s the file, %[2]s the missing prefix
-	portRowCountsNoneFmt = "; column 2 is the reference's function another unit's port map ports as a kernel, and no unit's map writes a kernel into %[1]s: a row for it counts with column 1 %[2]s<group>"
+	portRowCountsNoneFmt = "; column 2 is the reference's function another unit's port map ports as a kernel, and no unit's map writes a kernel into %[1]s: a row for it counts with column 1 %[2]s<group>, where <group> is one of the %[3]d the planner's missing lines name: %[4]s"
 	// %[1]s the reference file, %[2]s its function, %[3]s the unit, %[4]s its kernel
 	portRowCountsLineFmt = "%[1]s %[2]s (%[3]s ports it as %[4]s)"
 	portExtraFmt         = "  %[1]s %[2]s → %[3]s:%[4]s: the line names no definition this unit ports"
@@ -444,7 +444,9 @@ func integrationPortFiles(ws, unitID string, pm map[string]portEntry) (map[strin
 				sort.Strings(c)
 				why += fmt.Sprintf(portRowCountsFmt, e.file, shortList(dedupStrings(c), 4))
 			} else {
-				why += fmt.Sprintf(portRowCountsNoneFmt, e.file, integrationMissingPrefix)
+				// which groups there are, here too: 11/26 04:27:08 this is the branch almost every
+				// refused row takes, and only a row already written missing: was given them
+				why += fmt.Sprintf(portRowCountsNoneFmt, e.file, integrationMissingPrefix, len(groups), shortList(groups, portMissingGroupsMax))
 			}
 			refused = append(refused, e.refFile+" "+e.refName+" → "+e.file+" "+e.name+why+")")
 		}

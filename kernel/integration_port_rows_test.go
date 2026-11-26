@@ -87,7 +87,7 @@ func TestRowsNamingTheSameFileAndFunctionOnBothSidesAreOneLine(t *testing.T) {
 	})
 	_, refused := integrationPortFiles(ws, "uint", readPortMap(ws, "uint"))
 	got := refusedRowsText(refused, []string{"src/k.cu"})
-	if !strings.HasPrefix(got, "tests/t.cu test_k → src/k.cu k_kernel (no unit ports test_k as a kernel; ") || !strings.Contains(got, "missing:<group>); 2 row(s) name the same file and function in both columns (") {
+	if !strings.HasPrefix(got, "tests/t.cu test_k → src/k.cu k_kernel (no unit ports test_k as a kernel; ") || !strings.Contains(got, "missing:<group>, where <group>") {
 		t.Fatal(got)
 	}
 }
@@ -148,7 +148,7 @@ func TestARefusedRowIsGivenTheRowsThatCountForItsFile(t *testing.T) {
 	all := strings.Join(refused, "\n")
 	for _, want := range []string{
 		"test_rms → src/kernels/gpu/ew_ops.cu rms_norm_weighted (no unit ports test_rms as a kernel; column 2 is the reference's function another unit's port map ports as a kernel — rows counting for src/kernels/gpu/ew_ops.cu: src/kernels/cuda/elementwise.cu rms_norm_kernel (pcd027bc02f ports it as rms_norm_weighted_kernel))",
-		"test_embed_gather16 → src/prefill/kernels.cu gather_rows16_kernel (no unit ports test_embed_gather16 as a kernel; column 2 is the reference's function another unit's port map ports as a kernel, and no unit's map writes a kernel into src/prefill/kernels.cu: a row for it counts with column 1 missing:<group>)",
+		"test_embed_gather16 → src/prefill/kernels.cu gather_rows16_kernel (no unit ports test_embed_gather16 as a kernel; column 2 is the reference's function another unit's port map ports as a kernel, and no unit's map writes a kernel into src/prefill/kernels.cu: a row for it counts with column 1 missing:<group>, where <group>",
 	} {
 		if !strings.Contains(all, want) {
 			t.Fatalf("lacks %q:\n%s", want, all)
@@ -224,5 +224,24 @@ func TestARowWhoseColumn1IsNoReferenceFileIsNamedOnce(t *testing.T) {
 	}
 	if un := portRefFiles(ws, "uint", syms); len(un) != 1 || !strings.Contains(un[0], "elementwise_parity.cu") {
 		t.Fatalf("%q", un)
+	}
+}
+
+// 11/26 04:27:08 216 rows did not count and nearly all took this branch, where the row is told
+// to use column 1 missing:<group>: the groups the planner's missing lines name are given here too
+func TestTheBranchAskingForAMissingRowNamesTheGroups(t *testing.T) {
+	defer delete(integrationAnswers, "uint")
+	integrationAnswers["uint"] = IntegrationModelPlan{Ops: []IntegrationOp{
+		{Group: "model.language_model.layers.{i}.linear_attn.conv1d.weight", What: "depthwise conv1d"},
+	}}
+	ws := t.TempDir()
+	putTree(t, ws, map[string]string{
+		".einsteinOS/port/uint.tsv":         "src/kernels/cuda/native_gdn.cu\tgdn_bf16_conv_step_kernel\tsrc/kernels/gpu/gdn_bf16_layer.cu\tgdn_bf16_conv_step_kernel\n",
+		"src/kernels/gpu/gdn_bf16_layer.cu": "__global__ void gdn_bf16_conv_step_kernel(float* x) {}\n",
+	})
+	_, refused := integrationPortFiles(ws, "uint", readPortMap(ws, "uint"))
+	want := "a row for it counts with column 1 missing:<group>, where <group> is one of the 1 the planner's missing lines name: model.language_model.layers.{i}.linear_attn.conv1d.weight"
+	if all := strings.Join(refused, "\n"); !strings.Contains(all, want) {
+		t.Fatalf("lacks %q:\n%s", want, all)
 	}
 }
