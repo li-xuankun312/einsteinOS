@@ -94,3 +94,24 @@ func TestALinkersMultipleDefinitionIsAnErrorLine(t *testing.T) {
 		t.Fatalf("%q", got)
 	}
 }
+
+// 11/25 23:05:05 entry_stubbed, port_ref_file_unknown and port_extra failed beside
+// kernel_unported, whose 220 refused rows filled the 3000 bytes the log keeps: each failed
+// gate keeps its share, so a line of every one of them is logged
+func TestEachFailedGateKeepsItsShareOfTheLog(t *testing.T) {
+	long := "kernel_unported: 1 file(s) define __global__ kernels: " + strings.Repeat("row; ", 400)
+	text := long + "\nentry_stubbed: 1 header definition(s) give, inline and returning a constant, an entry\n  include/baloon/kg_kernels.hpp:201: inline int e2e_embed_main() { return 0; }\nport_extra: 220 row(s) of the port map do not count\n"
+	got := gatesLogText(text, []string{"kernel_unported", "entry_stubbed", "port_extra"}, 600)
+	for _, want := range []string{"kernel_unported: 1 file(s)", "entry_stubbed: 1 header definition(s)", "port_extra: 220 row(s)"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("lacks %q:\n%s", want, got)
+		}
+	}
+	if len(got) > 700 {
+		t.Fatalf("%d bytes", len(got))
+	}
+	// one gate: the whole of the cap is its own
+	if got := gatesLogText(text, []string{"kernel_unported"}, 600); !strings.HasPrefix(got, "kernel_unported: 1 file(s)") {
+		t.Fatalf("%s", got)
+	}
+}

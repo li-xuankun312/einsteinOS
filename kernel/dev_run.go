@@ -587,7 +587,7 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 			log.Printf("dev_preverify: %s unit %s (%s): %s — %s", r.repo, unit.ID, role,
 				preVerifyLogFields(o), map[bool]string{true: "the conversation may end", false: "sent back to the conversation"}[end])
 			if o.Result.GateText != "" {
-				log.Printf(preVerifyGateTextLogFmt, r.repo, unit.ID, truncStr(o.Result.GateText, preVerifyGateTextLogMax))
+				log.Printf(preVerifyGateTextLogFmt, r.repo, unit.ID, gatesLogText(o.Result.GateText, o.Result.Gates, preVerifyGateTextLogMax))
 			}
 			if o.Result.Compile == "fail" {
 				log.Printf(preVerifyCompileLogFmt, r.repo, unit.ID, failedCompileLogText(o.Result.BuildOut))

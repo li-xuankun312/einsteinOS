@@ -246,6 +246,39 @@ const preVerifyGateTextLogFmt = "dev_preverify: %[1]s unit %[2]s: the gates' tex
 // port_incomplete) and not which rows, kernels or files any of them named.
 const preVerifyGateTextLogMax = 3000
 
+// gatesLogText: the gates' text for the log, each failed gate keeping its share of the cap, so
+// that a long one does not take the whole. 11/25 23:05:05 and 23:21:19 entry_stubbed,
+// kernel_shadowed_in_test, port_ref_file_unknown and port_extra failed beside kernel_unported,
+// whose 220 refused rows filled the 3000 the log keeps, and no line of the others was logged.
+func gatesLogText(text string, kinds []string, max int) string {
+	if len(kinds) < 2 {
+		return truncStr(text, max)
+	}
+	lines := strings.Split(text, "\n")
+	starts := map[string]bool{}
+	for _, k := range kinds {
+		starts[k] = true
+	}
+	var parts []string
+	var cur []string
+	for _, l := range lines {
+		if k, _, ok := strings.Cut(l, ": "); ok && starts[k] && len(cur) > 0 {
+			parts = append(parts, strings.Join(cur, "\n"))
+			cur = nil
+		}
+		cur = append(cur, l)
+	}
+	if len(cur) > 0 {
+		parts = append(parts, strings.Join(cur, "\n"))
+	}
+	share := max / len(parts)
+	var out []string
+	for _, p := range parts {
+		out = append(out, truncStr(p, share))
+	}
+	return strings.Join(out, "\n")
+}
+
 // %[1]s repo, %[2]s unit, %[3]s the compile's output — 11/24 03:24:38 and 03:25:36 compile=fail
 // (exit 1) in 12s was logged with gate="" and nothing of what the compiler said
 // %[1]s repo, %[2]s unit, %[3]s the files with whose they are
