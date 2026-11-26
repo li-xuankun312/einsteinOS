@@ -117,7 +117,12 @@ func assembleWorkspaceKept(unitID, tipDir, mirrorDir string, changed, removed []
 				files[rel] = keptFile{SHA: fileSHA(p), MTime: st.ModTime()}
 			}
 		}
-		os.RemoveAll(keep)
+		// the build directory and the files' times are replaced; what else the unit keeps here
+		// (its build's record, verify_build_memo.go) stays: 11/26 07:21–11:34 each of nine
+		// verifications logged its build "kept, for a verification whose inputs are the same",
+		// this RemoveAll took memo.json with the rest, and each next one rebuilt for 7 minutes
+		os.RemoveAll(filepath.Join(keep, verifyBuildDir))
+		os.Remove(filepath.Join(keep, "files.json"))
 		if os.MkdirAll(keep, 0o755) == nil {
 			if _, serr := os.Stat(filepath.Join(ws, verifyBuildDir)); serr == nil && os.Rename(filepath.Join(ws, verifyBuildDir), filepath.Join(keep, verifyBuildDir)) == nil {
 				b, _ := json.Marshal(files)

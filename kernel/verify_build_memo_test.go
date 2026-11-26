@@ -91,3 +91,46 @@ func TestAMissSaysWhatChanged(t *testing.T) {
 		t.Fatalf("%q", got)
 	}
 }
+
+// 11/26 07:21–11:34 nine verifications of uintegration01529aaa82b9 each logged its build kept,
+// and each next one ran the whole build again: the end of a verification removed the unit's keep
+// directory, its build's record in it. A verification assembled after one has ended finds it.
+func TestABuildKeptOutlivesTheEndOfItsVerification(t *testing.T) {
+	if _, err := exec.LookPath("cc"); err != nil {
+		t.Skip("no C compiler for the probe")
+	}
+	withProbeDir(t)
+	withKeepRoot(t)
+	realRunner(t)
+	t.Setenv("EINSTEINOS_FRESH_BUILD", "")
+	unit := "umemo_end_test"
+	build, test := devVerifyScripts(unit)
+	tip, mirror := t.TempDir(), t.TempDir()
+	put := func(dir, rel, s string) {
+		p := filepath.Join(dir, filepath.FromSlash(rel))
+		os.MkdirAll(filepath.Dir(p), 0o755)
+		os.WriteFile(p, []byte(s), 0o755)
+	}
+	counter := filepath.Join(t.TempDir(), "runs")
+	put(tip, "src/a.c", "a")
+	put(tip, build, "rm -rf build; mkdir -p build; for f in src/*.c; do cat $f >> build/out; done; echo run >> "+counter+"\n")
+	put(tip, test, "test -s build/out\n")
+	put(mirror, ".einsteinOS/port/"+unit+".tsv", "row1\n")
+	runs := func() int { b, _ := os.ReadFile(counter); return len(b) / 4 }
+	verify := func() VerifyResult {
+		ws, _, done, err := assembleWorkspaceKept(unit, tip, mirror, []string{".einsteinOS/port/" + unit + ".tsv"}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer done()
+		return runUnitVerifyAlone(ws, unit, "", UnitRequirements{}, nil, time.Minute, time.Minute)
+	}
+	if r := verify(); r.Compile != "pass" || r.BuildReused || runs() != 1 {
+		t.Fatalf("first: compile=%s reused=%v runs=%d", r.Compile, r.BuildReused, runs())
+	}
+	// only the port map changed: the build did not read it
+	put(mirror, ".einsteinOS/port/"+unit+".tsv", "row1\nrow2\n")
+	if r := verify(); !r.BuildReused || runs() != 1 || r.Smoke != "pass" {
+		t.Fatalf("after the first verification ended: reused=%v runs=%d smoke=%s", r.BuildReused, runs(), r.Smoke)
+	}
+}
