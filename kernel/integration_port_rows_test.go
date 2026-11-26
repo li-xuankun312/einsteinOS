@@ -517,3 +517,26 @@ func TestPortIncompleteIsGroupedByReferenceFile(t *testing.T) {
 		t.Fatalf("gate: %s", all)
 	}
 }
+
+// 11/26 15:07:34 the integration map gave port_incomplete 167 of 168 with check, reference and
+// rel_l1 of src/kernels/bf16_gemv_parity.cpp each mapped to the port's main
+func TestTheIntegrationUnitsCounterpartKeepsTheReferenceName(t *testing.T) {
+	integrationAnswers["uint"] = IntegrationModelPlan{Ops: []IntegrationOp{{Group: "g", Unit: "pA", Kernel: "k"}}}
+	t.Cleanup(func() { delete(integrationAnswers, "uint") })
+	ws := t.TempDir()
+	putTree(t, ws, map[string]string{
+		".einsteinOS/port/uint.tsv": "src/kernels/bf16_gemv_parity.cpp\tcheck\ttests/k39_integration/bf16_gemv_parity.cu\tmain\n" +
+			"src/kernels/bf16_gemv_parity.cpp\tmain\ttests/k39_integration/bf16_gemv_parity.cu\tmain\n",
+		"tests/k39_integration/bf16_gemv_parity.cu": "int main() { return 0; }\n",
+	})
+	syms := []RefSymbol{{File: "src/kernels/bf16_gemv_parity.cpp", Name: "check", Kind: "func"}, {File: "src/kernels/bf16_gemv_parity.cpp", Name: "main", Kind: "func"}}
+	got := portMissing(ws, "uint", syms)
+	want := "  src/kernels/bf16_gemv_parity.cpp check → tests/k39_integration/bf16_gemv_parity.cu:main: the counterpart is named main, the reference's definition check"
+	if len(got) != 1 || got[0] != want {
+		t.Fatalf("got %q", got)
+	}
+	delete(integrationAnswers, "uint")
+	if got := portMissing(ws, "uint", syms); len(got) != 0 {
+		t.Fatalf("another unit is judged by it: %q", got)
+	}
+}

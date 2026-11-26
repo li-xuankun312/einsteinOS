@@ -30,6 +30,7 @@ func PortMapPath(unitID string) string { return fmt.Sprintf(portMapPathFmt, unit
 
 const (
 	gatePortFmt         = "port_incomplete: %[1]d of the %[2]d definitions of the unit's reference files have no counterpart:\n%[3]s"
+	portRenamedFmt      = "  %[1]s %[2]s → %[3]s:%[4]s: the counterpart is named %[4]s, the reference's definition %[2]s"
 	portNoLineFmt       = "  %[1]s %[2]s %[3]s: no line in %[4]s"
 	portNoFileFmt       = "  %[1]s %[2]s → %[3]s: no such file"
 	portNotDefinedFmt   = "  %[1]s %[2]s → %[3]s:%[4]s: not defined in that file"
@@ -91,6 +92,10 @@ func portMissing(ws, unitID string, syms []RefSymbol) []string {
 		}
 		return true, d[symbolBase(name)]
 	}
+	// the integration unit's counterparts keep the reference's names: 11/26 15:07:34 its map
+	// gave port_incomplete 167 of 168 with src/kernels/bf16_gemv_parity.cpp check, reference
+	// and rel_l1 each mapped to tests/k39_integration/bf16_gemv_parity.cu main
+	sameName := len(integrationAnswerOf(unitID).Ops) > 0
 	var out []string
 	for _, s := range syms {
 		e, ok := pm[s.File+"\t"+s.Name]
@@ -103,6 +108,8 @@ func portMissing(ws, unitID string, syms []RefSymbol) []string {
 				out = append(out, fmt.Sprintf(portNoFileFmt, s.File, s.Name, e.file))
 			} else if !def {
 				out = append(out, fmt.Sprintf(portNotDefinedFmt, s.File, s.Name, e.file, e.name))
+			} else if sameName && symbolBase(e.name) != symbolBase(s.Name) {
+				out = append(out, fmt.Sprintf(portRenamedFmt, s.File, s.Name, e.file, e.name))
 			} else if s.Kind == "kernel" && !kernels[e.file][symbolBase(e.name)] {
 				out = append(out, fmt.Sprintf(portNotKernelFmt, s.File, s.Name, e.file, e.name))
 			} else if s.Kind == "kernel" && !definesWithBody(stripCComments(texts[e.file]), symbolBase(e.name)) {
