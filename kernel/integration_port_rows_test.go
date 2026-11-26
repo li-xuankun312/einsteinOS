@@ -451,3 +451,20 @@ func TestAMissingRowOffTheTextPathDoesNotCount(t *testing.T) {
 		t.Fatalf("refused: %v", refused)
 	}
 }
+
+// 11/26 14:05:49 src/ix_moe_combine.cu was told a row counts with column 1 missing:<group>, while
+// every one of the planner's missing groups was off the text path, where such a row counts for
+// nothing
+func TestNoMissingGroupIsOfferedWhenNoneIsOnThePath(t *testing.T) {
+	integrationAnswers["uint"] = IntegrationModelPlan{Ops: []IntegrationOp{{Group: "model.visual.pos_embed.weight", What: "vit"}},
+		GroupsOff: []string{"model.visual.pos_embed.weight"}}
+	t.Cleanup(func() { delete(integrationAnswers, "uint") })
+	ws := t.TempDir()
+	putTree(t, ws, map[string]string{
+		".einsteinOS/port/uint.tsv": "tests/k39_integration/moe_parity.cu\ttest_ix_moe_combine\tsrc/ix_moe_combine.cu\tmoe_combine_kernel\n",
+	})
+	_, refused := integrationPortFiles(ws, "uint", readPortMap(ws, "uint"))
+	if len(refused) != 1 || strings.Contains(refused[0], "column 1 missing:<group>") || !strings.Contains(refused[0], "none of the 1 groups the planner's missing lines name is on the model's text path") {
+		t.Fatalf("got %v", refused)
+	}
+}
