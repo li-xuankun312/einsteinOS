@@ -575,6 +575,8 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 				return false, preVerifyReport(pre.out)
 			}
 			unchanged = 0
+			startedAt := time.Now()
+			mapThen, _ := os.ReadFile(filepath.Join(mirror, PortMapPath(unit.ID)))
 			o := devVerifyOnly(cloneDir, mirror, r.branch, baseRef, unit.ID, r.gpuUsable(), base, r.shown(unit))
 			if errors.Is(o.Err, errBranchMoved) {
 				endWhy = mirrorEndBranchMovedFmt
@@ -582,7 +584,11 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 			}
 			passed := o.Err == nil && o.Verified && o.Result.Passed()
 			changed, removed, _ := treeDelta(mirror, base)
-			pre = &preVerifyResult{ok: passed, digest: deltaDigest(mirror, changed, removed), out: o}
+			regressed := gatesRegressed(pre, o, string(mapThen), PortMapPath(unit.ID))
+			pre = &preVerifyResult{ok: passed, digest: deltaDigest(mirror, changed, removed), out: o, portMap: string(mapThen), at: startedAt}
+			if regressed != "" {
+				log.Printf("dev_preverify: %s unit %s: %s", r.repo, unit.ID, truncStr(strings.TrimSpace(regressed), preVerifyGateTextLogMax))
+			}
 			end := preverifyMayEnd(passed, o.Result.Gate)
 			log.Printf("dev_preverify: %s unit %s (%s): %s — %s", r.repo, unit.ID, role,
 				preVerifyLogFields(o), map[bool]string{true: "the conversation may end", false: "sent back to the conversation"}[end])
@@ -615,7 +621,7 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 					log.Printf("dev_preverify: %s unit %s: the rejected tree is parked on %s — a run stopped before this attempt ends continues from it", r.repo, unit.ID, wip)
 				}
 			}
-			report := preVerifyReport(o) + compileSymbolFacts(o.Result.Compile, mirror)
+			report := preVerifyReport(o) + regressed + compileSymbolFacts(o.Result.Compile, mirror)
 			if o.Result.Compile == "fail" {
 				// build.sh's output once: compile_error is "build.sh exit=N: " and the same output
 				if owners := compileErrorOwners(unit.ID, o.Result.BuildOut); owners != "" {

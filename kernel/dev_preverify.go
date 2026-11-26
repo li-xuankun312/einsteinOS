@@ -27,6 +27,58 @@ type preVerifyResult struct {
 	ok     bool
 	digest string
 	out    UnitVerifyOutcome
+	// portMap: the unit's port map in the mirror as the verification started, and when
+	portMap string
+	at      time.Time
+}
+
+const (
+	// %[1]s the gates, %[2]s when the last verification started, %[3]s the map, %[4]d lines,
+	// %[5]s them
+	gatesRegressedFmt = "\n[GATES THAT PASSED AT THE LAST VERIFICATION AND FAIL NOW — measured from the mirror as each verification started]\n%[1]s passed at the verification that started at %[2]s and fail now; %[3]s held then %[4]d line(s) it does not hold now:\n%[5]s\n"
+	gatesRegressedMax = 60
+)
+
+// gatesRegressed: the gates failing now that passed at the last verification, with the lines of
+// the port map that verification saw and this one does not ("" when no gate went that way, or
+// the map lost no line). 11/26 09:41:43 kernel_unported and port_incomplete passed; at 09:41:51
+// the conversation removed 156 rows of the map, the next verification failed kernel_unported,
+// the one after port_incomplete, and nothing said which lines had made them pass.
+func gatesRegressed(prev *preVerifyResult, now UnitVerifyOutcome, mapNow, mapPath string) string {
+	if prev == nil || prev.out.Err != nil || !prev.out.Verified || now.Err != nil || !now.Verified {
+		return ""
+	}
+	had := map[string]bool{}
+	for _, g := range prev.out.Result.Gates {
+		had[g] = true
+	}
+	var newly []string
+	for _, g := range now.Result.Gates {
+		if !had[g] {
+			newly = append(newly, g)
+		}
+	}
+	if len(newly) == 0 {
+		return ""
+	}
+	holds := map[string]bool{}
+	for _, l := range strings.Split(mapNow, "\n") {
+		holds[l] = true
+	}
+	var lost []string
+	for _, l := range strings.Split(prev.portMap, "\n") {
+		if strings.TrimSpace(l) != "" && !holds[l] {
+			lost = append(lost, l)
+		}
+	}
+	if len(lost) == 0 {
+		return ""
+	}
+	shown := lost
+	if len(shown) > gatesRegressedMax {
+		shown = append(append([]string(nil), shown[:gatesRegressedMax]...), fmt.Sprintf("(+%d more)", len(lost)-gatesRegressedMax))
+	}
+	return fmt.Sprintf(gatesRegressedFmt, strings.Join(newly, ", "), prev.at.Format("15:04:05"), mapPath, len(lost), strings.Join(shown, "\n"))
 }
 
 var (
