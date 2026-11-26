@@ -211,6 +211,7 @@ func portExtra(ws, unitID string, syms []RefSymbol) []string {
 		return nil
 	}
 	ported := integrationPortedRefs(ws, unitID)
+	names := integrationPortedNames(ws, unitID)
 	own := map[string]bool{}
 	for _, s := range syms {
 		own[s.File+"\t"+s.Name] = true
@@ -235,7 +236,7 @@ func portExtra(ws, unitID string, syms []RefSymbol) []string {
 		k := e.refFile + "\t" + e.refName
 		switch {
 		case !own[k]:
-			out = append(out, fmt.Sprintf(portExtraFmt, e.refFile, e.refName, e.file, e.name)+portedElsewhere(ported, e.refName))
+			out = append(out, fmt.Sprintf(portExtraFmt, e.refFile, e.refName, e.file, e.name)+portedElsewhere(ported, e.refName)+portedAsName(names, e))
 		case first[k] > 0:
 			out = append(out, fmt.Sprintf(portDuplicateFmt, e.refFile, e.refName, e.file, e.name, first[k]))
 		default:
@@ -335,6 +336,7 @@ func portRefFiles(ws, unitID string, syms []RefSymbol) []string {
 	seen := map[string]bool{}
 	var out []string
 	ported := integrationPortedRefs(ws, unitID)
+	names := integrationPortedNames(ws, unitID)
 	lines, _ := readPortLines(ws, unitID)
 	for _, e := range lines {
 		if plannerMissingRow(unitID, e.refFile) {
@@ -345,7 +347,7 @@ func portRefFiles(ws, unitID string, syms []RefSymbol) []string {
 		}
 		if !refFiles[e.refFile] && !seen[e.refFile] {
 			seen[e.refFile] = true
-			line := fmt.Sprintf(portRefFileFmt, e.refFile, e.refName, e.file, e.name) + portedElsewhere(ported, e.refName)
+			line := fmt.Sprintf(portRefFileFmt, e.refFile, e.refName, e.file, e.name) + portedElsewhere(ported, e.refName) + portedAsName(names, e)
 			// the group written without its prefix: 11/26 05:43:17 a command of the moe part wrote
 			// model.language_model.layers.{i}.mlp.gate.weight in column 1 and the row fell here
 			if isPlannerGroup(unitID, e.refFile) {
@@ -698,4 +700,51 @@ func markPortIncompleteRows(refused []string, syms []RefSymbol) []string {
 		}
 	}
 	return out
+}
+
+// integrationPortedNames: for the integration unit, per kernel name another unit's port map
+// writes, the row of that map: "<unit> <ref file> <ref name> → <file>".
+func integrationPortedNames(ws, unitID string) map[string][]string {
+	if len(integrationAnswerOf(unitID).Ops) == 0 {
+		return nil
+	}
+	out := map[string][]string{}
+	maps, _ := filepath.Glob(filepath.Join(ws, ".einsteinOS", "port", "*.tsv"))
+	for _, m := range maps {
+		u := strings.TrimSuffix(filepath.Base(m), ".tsv")
+		if u == unitID {
+			continue
+		}
+		ks := portKernels(ws, u)
+		for _, e := range readPortMap(ws, u) {
+			if n := symbolBase(e.name); ks[n] {
+				out[n] = append(out[n], u+" "+e.refFile+" "+e.refName+" → "+e.file)
+			}
+		}
+	}
+	for n := range out {
+		sort.Strings(out[n])
+	}
+	return out
+}
+
+// %[1]s the name, %[2]s the rows
+const portPortedNameFmt = " — %[1]s is the name of a kernel a unit ported: %[2]s"
+
+// portedAsName: the rows of other units' maps writing a kernel of the name column 4 gives, into a
+// file other than column 3. 11/26 14:19:15 tests/k39_integration/qsa_layer_parity.cu
+// test_qsa_bf16_kv_proj → src/ix_bf16_gemv.cu bf16_gemv_warp_kernel was refused with nothing
+// saying that bf16_gemv_warp_kernel is the kernel the planner's op lines give pcd027bc02f for the
+// projections, ported from a reference file of its own.
+func portedAsName(names map[string][]string, e portEntry) string {
+	var rows []string
+	for _, r := range names[symbolBase(e.name)] {
+		if !strings.HasSuffix(r, " → "+e.file) {
+			rows = append(rows, r)
+		}
+	}
+	if len(rows) == 0 {
+		return ""
+	}
+	return fmt.Sprintf(portPortedNameFmt, symbolBase(e.name), strings.Join(rows, "; "))
 }

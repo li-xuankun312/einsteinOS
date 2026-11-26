@@ -468,3 +468,21 @@ func TestNoMissingGroupIsOfferedWhenNoneIsOnThePath(t *testing.T) {
 		t.Fatalf("got %v", refused)
 	}
 }
+
+// 11/26 14:19:15 a row writing src/ix_bf16_gemv.cu bf16_gemv_warp_kernel was refused with nothing
+// saying that a unit ported a kernel of that name from a reference file of its own
+func TestARefusedRowIsGivenTheUnitRowOfItsKernelsName(t *testing.T) {
+	integrationAnswers["uint"] = IntegrationModelPlan{Ops: []IntegrationOp{{Group: "g", Unit: "pA", Kernel: "bf16_gemv_warp_kernel"}}}
+	t.Cleanup(func() { delete(integrationAnswers, "uint") })
+	ws := t.TempDir()
+	putTree(t, ws, map[string]string{
+		".einsteinOS/port/pA.tsv":      "src/kernels/cuda/bf16_gemv.cu\tbf16_gemv_warp_kernel\tsrc/kernels/gpu/bf16_native.cu\tbf16_gemv_warp_kernel\n",
+		"src/kernels/gpu/bf16_native.cu": "__global__ void bf16_gemv_warp_kernel(float* x) {}\n",
+		".einsteinOS/port/uint.tsv":    "tests/k39_integration/qsa_layer_parity.cu\ttest_qsa_bf16_kv_proj\tsrc/ix_bf16_gemv.cu\tbf16_gemv_warp_kernel\n",
+	})
+	r := portRefFiles(ws, "uint", []RefSymbol{{File: "src/kernels/qsa_parity.cpp", Name: "main"}})
+	want := " — bf16_gemv_warp_kernel is the name of a kernel a unit ported: pA src/kernels/cuda/bf16_gemv.cu bf16_gemv_warp_kernel → src/kernels/gpu/bf16_native.cu"
+	if len(r) != 1 || !strings.HasSuffix(r[0], want) {
+		t.Fatalf("got %v", r)
+	}
+}
