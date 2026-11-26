@@ -163,6 +163,9 @@ func portKernels(ws, unitID string) map[string]bool {
 }
 
 const (
+	// %[1]d how many groups, %[2]s them
+	portMissingGroupsFmt = " (no missing line of the planner's names this group; its %[1]d missing line(s) name these group(s): %[2]s)"
+	portMissingGroupsMax = 8
 	// %[1]s the file, %[2]s the rows counting for it
 	portRowCountsFmt = "; column 2 is the reference's function another unit's port map ports as a kernel — rows counting for %[1]s: %[2]s"
 	// %[1]s the file, %[2]s the missing prefix
@@ -392,6 +395,7 @@ func integrationPortFiles(ws, unitID string, pm map[string]portEntry) (map[strin
 			}
 		}
 	}
+	groups := integrationMissingGroups(unitID)
 	out := map[string]bool{}
 	var refused []string
 	for _, e := range pm {
@@ -400,7 +404,11 @@ func integrationPortFiles(ws, unitID string, pm map[string]portEntry) (map[strin
 			if missing[strings.TrimPrefix(e.refFile, integrationMissingPrefix)] {
 				out[e.file] = true
 			} else {
-				refused = append(refused, e.refFile+" → "+e.file+" "+e.name+" (no missing line of the planner's names this group)")
+				// which groups there are: 11/25 23:05:05 220 rows did not count, the conversation
+				// having written missing:router_top10_kernel, missing:router_top10_wave and two
+				// tensor names of the model as groups, and nothing named the planner's own
+				refused = append(refused, e.refFile+" → "+e.file+" "+e.name+
+					fmt.Sprintf(portMissingGroupsFmt, len(groups), shortList(groups, portMissingGroupsMax)))
 			}
 		case refKernels[e.refName]:
 			out[e.file] = true

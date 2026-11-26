@@ -155,3 +155,34 @@ func TestARefusedRowIsGivenTheRowsThatCountForItsFile(t *testing.T) {
 		}
 	}
 }
+
+// 11/25 23:05:05 220 rows did not count, the conversation having written
+// missing:router_top10_kernel, missing:router_top10_wave and two tensor names of the model as
+// groups: a refused missing: row is given the groups the planner's own missing lines name
+func TestARefusedMissingRowIsGivenThePlannersGroups(t *testing.T) {
+	defer delete(integrationAnswers, "uint")
+	integrationAnswers["uint"] = IntegrationModelPlan{Ops: []IntegrationOp{
+		{Group: "model.language_model.layers.{i}.mlp.experts.gate_up_proj", What: "the MoE experts"},
+		{Group: "model.language_model.layers.{i}.linear_attn.conv1d.weight", What: "depthwise conv1d"},
+		{Group: "model.language_model.layers.{i}.mlp.router", What: "the router", Unit: "u1"},
+	}}
+	ws := t.TempDir()
+	putTree(t, ws, map[string]string{
+		".einsteinOS/port/uint.tsv": "missing:router_top10_kernel\t-\tsrc/ix_router_top10_wave.cu\trouter_top10_wave_kernel\n" +
+			"missing:model.language_model.layers.{i}.mlp.experts.gate_up_proj\t-\tsrc/ix_moe.cu\tmoe_kernel\n",
+		"src/ix_router_top10_wave.cu": "__global__ void router_top10_wave_kernel(float* x) {}\n",
+		"src/ix_moe.cu":               "__global__ void moe_kernel(float* x) {}\n",
+	})
+	files, refused := integrationPortFiles(ws, "uint", readPortMap(ws, "uint"))
+	if !files["src/ix_moe.cu"] {
+		t.Fatalf("a row naming a group of the planner did not count: %v", files)
+	}
+	all := strings.Join(refused, "\n")
+	want := "missing:router_top10_kernel → src/ix_router_top10_wave.cu router_top10_wave_kernel (no missing line of the planner's names this group; its 2 missing line(s) name these group(s): model.language_model.layers.{i}.linear_attn.conv1d.weight model.language_model.layers.{i}.mlp.experts.gate_up_proj)"
+	if !strings.Contains(all, want) {
+		t.Fatalf("lacks %q:\n%s", want, all)
+	}
+	if strings.Contains(all, "mlp.router") {
+		t.Fatalf("a group a unit holds named as missing:\n%s", all)
+	}
+}
