@@ -237,8 +237,8 @@ func (r *devRun) integrationModelAnswer(unit DevPlanNode, baseRef string) Integr
 	// which missing groups the text never goes through: 11/26 07:12 all 21 were model.visual.*,
 	// and kernel_unported gave them as the groups a GDN kernel's row may name
 	for _, o := range p.Ops {
-		if o.Unit == "" && o.Group != "" && measureModelPath(ms).Off(o.Group) {
-			p.MissingOff = append(p.MissingOff, o.Group)
+		if o.Group != "" && measureModelPath(ms).Off(o.Group) {
+			p.GroupsOff = append(p.GroupsOff, o.Group)
 		}
 	}
 	// where the port's tree stands is the unit's to know too, not the planner's alone
@@ -284,8 +284,8 @@ type IntegrationModelPlan struct {
 	OffPath []string
 	// Inventory: where the port's tree stands toward running the model (integration_inventory.go)
 	Inventory string
-	// MissingOff: the groups of its missing lines off the model's text path (model_path.go)
-	MissingOff []string
+	// GroupsOff: the groups of its lines off the model's text path (model_path.go)
+	GroupsOff []string
 	// Dropped: lines of the answer's kinds that named something the data does not have
 	Dropped int
 }

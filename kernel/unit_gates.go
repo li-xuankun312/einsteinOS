@@ -59,6 +59,9 @@ type GateInput struct {
 	MissingGroups []string
 	// MissingOff: those of MissingGroups off the model's text path
 	MissingOff map[string]bool
+	// OpKernels: the kernels units ported that the planner's op lines give the text path's
+	// groups, each with the row of its unit's map (port_gate.go)
+	OpKernels []string
 	// Shadowed: kernels the port map names that a test file defines too (shadowedKernels)
 	Shadowed []string
 	// EntryStubs: headers defining, inline as a constant, an entry build.sh makes of a test's
@@ -117,6 +120,8 @@ const (
 	gateKernelUnportedFmt = "kernel_unported: %[1]d file(s) define __global__ kernels and are neither test files nor files the unit's port map %[3]s writes a counterpart into: %[2]s"
 	// %[1]d groups, %[2]s them
 	gateKernelUnportedGroupsFmt = "; the planner's missing lines give the integration unit %[1]d tensor group(s): %[2]s"
+	// %[1]d kernels, %[2]s each with its unit's row and groups
+	gateKernelUnportedOpsFmt = "; the planner's op lines give the model's text path %[1]d kernel(s) units ported, each with the row of its unit's port map and the groups: %[2]s"
 	// %[1]d groups, %[2]d on the path, %[3]s them, %[4]d off it, %[5]s them
 	gateKernelUnportedGroupsPathFmt = "; the planner's missing lines give the integration unit %[1]d tensor group(s), %[2]d of them on the model's text path%[3]s, and %[4]d off it, where no part is started: %[5]s"
 	// %[1]s the file, %[2]s its kernels
@@ -214,6 +219,9 @@ func unitGatesAll(in GateInput) (kinds, texts []string) {
 				// what may follow "missing:": 11/25 06:27:29 the text asked for missing:<group> rows
 				// and named no group, and the port map had none since 11/24 04:37
 				t += missingGroupsText(in.MissingGroups, in.MissingOff)
+			}
+			if len(in.OpKernels) > 0 {
+				t += fmt.Sprintf(gateKernelUnportedOpsFmt, len(in.OpKernels), strings.Join(in.OpKernels, "; "))
 			}
 			fail("kernel_unported", t)
 		}

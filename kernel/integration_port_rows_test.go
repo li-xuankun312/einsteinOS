@@ -365,3 +365,32 @@ func TestARefusedRowSaysWhereAUnitPortsItsName(t *testing.T) {
 		t.Fatalf("lacks %q: %v", want, r)
 	}
 }
+
+// 11/26 07:12 the parts wrote kernels of their own for groups the planner's op lines gave to
+// pcd027bc02f's kernels, and kernel_unported named none of those kernels
+func TestKernelUnportedNamesTheKernelsTheOpLinesGive(t *testing.T) {
+	integrationAnswers["uint"] = IntegrationModelPlan{Ops: []IntegrationOp{
+		{Group: "model.language_model.layers.{i}.linear_attn.conv1d.weight", Unit: "pA", Kernel: "gdn_conv_kernel"},
+		{Group: "mtp.layers.{i}.mlp.gate.weight", Unit: "pA", Kernel: "router_top10_kernel"},
+		{Group: "model.visual.pos_embed.weight"},
+	}, GroupsOff: []string{"model.visual.pos_embed.weight", "mtp.layers.{i}.mlp.gate.weight"}}
+	t.Cleanup(func() { delete(integrationAnswers, "uint") })
+	ws := t.TempDir()
+	putTree(t, ws, map[string]string{
+		".einsteinOS/port/pA.tsv": "src/kernels/cuda/gdn.cu\tgdn_conv_kernel\tsrc/kernels/gpu/gdn.cu\tgdn_conv_kernel\n",
+	})
+	got := integrationOpKernels(ws, "uint")
+	want := []string{
+		"pA gdn_conv_kernel (src/kernels/cuda/gdn.cu gdn_conv_kernel → src/kernels/gpu/gdn.cu): model.language_model.layers.{i}.linear_attn.conv1d.weight",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("got\n%s", strings.Join(got, "\n"))
+	}
+	got = append(got, "pA router_top10_kernel (no row of its map names it): model.language_model.layers.{i}.mlp.gate.weight")
+	in := GateInput{UnitID: "uint", PortFiles: map[string]bool{}, OpKernels: got,
+		Kernels: map[string][]string{"src/kernels/gpu/gdn_bf16_layer.cu": {"gdn_bf16_conv_step_kernel"}}}
+	_, texts := unitGatesAll(in)
+	if len(texts) == 0 || !strings.Contains(texts[0], "; the planner's op lines give the model's text path 2 kernel(s) units ported, each with the row of its unit's port map and the groups: pA gdn_conv_kernel") || strings.Contains(texts[0], "mtp.") {
+		t.Fatalf("not in the gate: %v", texts)
+	}
+}

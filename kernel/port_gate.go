@@ -548,11 +548,23 @@ func plannerMissingRow(unitID, refFile string) bool {
 	return false
 }
 
+// integrationGroupsOff: the groups of the planner's lines off the model's text path.
+func integrationGroupsOff(unitID string) map[string]bool {
+	out := map[string]bool{}
+	for _, g := range integrationAnswerOf(unitID).GroupsOff {
+		out[g] = true
+	}
+	return out
+}
+
 // integrationMissingOff: those of the planner's missing groups off the model's text path.
 func integrationMissingOff(unitID string) map[string]bool {
+	off := integrationGroupsOff(unitID)
 	out := map[string]bool{}
-	for _, g := range integrationAnswerOf(unitID).MissingOff {
-		out[g] = true
+	for _, o := range integrationAnswerOf(unitID).Ops {
+		if o.Unit == "" && off[o.Group] {
+			out[o.Group] = true
+		}
 	}
 	return out
 }
@@ -567,5 +579,51 @@ func integrationMissingGroups(unitID string) []string {
 		}
 	}
 	sort.Strings(out)
+	return out
+}
+
+// integrationOpKernels: the kernels the planner's op lines give the groups of the model's text
+// path, each as its unit's map writes it — "<unit> <kernel> (<ref file> <ref name> → <file>):
+// <groups>". 11/26 07:12 the integration conversation was given the op lines (gdn_conv_kernel
+// of pcd027bc02f for linear_attn.conv1d.weight, …) and its parts' text, which named no kernel;
+// the parts wrote eleven files of kernels of their own for those groups, and kernel_unported
+// held them with nothing naming the kernels the op lines meant.
+func integrationOpKernels(ws, unitID string) []string {
+	a := integrationAnswerOf(unitID)
+	off := integrationGroupsOff(unitID)
+	type key struct{ unit, kernel string }
+	groups := map[key][]string{}
+	var order []key
+	for _, o := range a.Ops {
+		if o.Unit == "" || o.Kernel == "" || off[o.Group] {
+			continue
+		}
+		k := key{o.Unit, o.Kernel}
+		if _, ok := groups[k]; !ok {
+			order = append(order, k)
+		}
+		groups[k] = append(groups[k], o.Group)
+	}
+	maps := map[string]map[string]portEntry{}
+	var out []string
+	for _, k := range order {
+		m, ok := maps[k.unit]
+		if !ok {
+			m = readPortMap(ws, k.unit)
+			maps[k.unit] = m
+		}
+		var rows []string
+		for _, e := range m {
+			if symbolBase(e.name) == k.kernel {
+				rows = append(rows, e.refFile+" "+e.refName+" → "+e.file)
+			}
+		}
+		sort.Strings(rows)
+		where := "no row of its map names it"
+		if len(rows) > 0 {
+			where = strings.Join(rows, ", ")
+		}
+		out = append(out, fmt.Sprintf("%s %s (%s): %s", k.unit, k.kernel, where, shortList(groups[k], 4)))
+	}
 	return out
 }
