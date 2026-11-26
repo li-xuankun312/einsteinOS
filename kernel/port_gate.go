@@ -29,7 +29,9 @@ const portMapPathFmt = ".einsteinOS/port/%[1]s.tsv"
 func PortMapPath(unitID string) string { return fmt.Sprintf(portMapPathFmt, unitID) }
 
 const (
-	gatePortFmt         = "port_incomplete: %[1]d of the %[2]d definitions of the unit's reference files have no counterpart:\n%[3]s"
+	// the gate passes when every one has a counterpart: 11/26 15:44 the embed part wrote "141
+	// missing → port_incomplete passes", below a threshold it took to be "about 144"
+	gatePortFmt         = "port_incomplete: %[1]d of the %[2]d definitions of the unit's reference files have no counterpart, and the gate passes when every one has:\n%[3]s"
 	portRenamedFmt      = "  %[1]s %[2]s → %[3]s:%[4]s: the counterpart is named %[4]s, the reference's definition %[2]s"
 	portNoLineFmt       = "  %[1]s %[2]s %[3]s: no line in %[4]s"
 	portNoFileFmt       = "  %[1]s %[2]s → %[3]s: no such file"

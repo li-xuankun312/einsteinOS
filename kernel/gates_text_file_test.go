@@ -46,3 +46,12 @@ func TestEachGateKeepsItsShareOfWhatTheConversationIsSent(t *testing.T) {
 		t.Fatalf("over the limit: %d", len(got))
 	}
 }
+
+// 11/26 15:44 the embed part took port_incomplete to pass below a threshold of "about 144": the
+// gate says it passes when every definition has a counterpart
+func TestPortIncompleteSaysWhenItPasses(t *testing.T) {
+	_, texts := unitGatesAll(GateInput{PortMissing: []string{"  a.cpp func main: no line in m"}, Req: UnitRequirements{Symbols: make([]RefSymbol, 168)}})
+	if all := strings.Join(texts, "\n"); !strings.Contains(all, "port_incomplete: 1 of the 168 definitions of the unit's reference files have no counterpart, and the gate passes when every one has:") {
+		t.Fatal(all)
+	}
+}
