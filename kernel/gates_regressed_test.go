@@ -60,3 +60,28 @@ func TestTheReportSaysWhatChangedTheMirrorAfterItWasTaken(t *testing.T) {
 		t.Fatal("nothing changed and something is said")
 	}
 }
+
+// 11/26 15:16:22 port_incomplete failed on 147 of 168 and at 15:55:28 on all 168, every row of the
+// reference's definitions taken out of the map, and nothing said which rows had gone
+func TestPortIncompleteFailingOnMoreIsGivenTheRowsThatWent(t *testing.T) {
+	prev := &preVerifyResult{
+		out:     UnitVerifyOutcome{Verified: true, Result: VerifyResult{Gates: []string{"port_incomplete"}, GateText: "port_incomplete: 147 of the 168 definitions of the unit's reference files have no counterpart:\n  …"}},
+		portMap: "src/kernels/bf16_gemv_parity.cpp\tcheck\tsrc/kernels/bf16_gemv_parity.cpp\tcheck\nsrc/x.cu\tk\tsrc/k.cu\tk\n",
+		at:      time.Date(2026, 11, 26, 15, 9, 12, 0, time.UTC),
+	}
+	now := UnitVerifyOutcome{Verified: true, Result: VerifyResult{Gates: []string{"port_incomplete"}, GateText: "port_incomplete: 168 of the 168 definitions of the unit's reference files have no counterpart:\n  …"}}
+	syms := []RefSymbol{{File: "src/kernels/bf16_gemv_parity.cpp", Name: "check"}}
+	got := portIncompleteGrew(prev, now, "", ".einsteinOS/port/u.tsv", syms)
+	for _, w := range []string{"147 of the 168 definitions had no counterpart at the verification that started at 15:09:12, 168 now", "held then 1 line(s)", "src/kernels/bf16_gemv_parity.cpp\tcheck\tsrc/kernels/bf16_gemv_parity.cpp\tcheck"} {
+		if !strings.Contains(got, w) {
+			t.Fatalf("lacks %q:\n%s", w, got)
+		}
+	}
+	if strings.Contains(got, "src/k.cu") {
+		t.Fatalf("a row of no reference definition is given:\n%s", got)
+	}
+	now.Result.GateText = "port_incomplete: 140 of the 168 definitions of the unit's reference files have no counterpart:"
+	if s := portIncompleteGrew(prev, now, "", "m", syms); s != "" {
+		t.Fatalf("it did not grow: %q", s)
+	}
+}

@@ -17,7 +17,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -434,4 +436,61 @@ func failedCompileLogText(out string) string {
 		out = errs + "…\n" + tailText(out, preVerifyGateTextLogMax/2)
 	}
 	return tailText(out, preVerifyGateTextLogMax)
+}
+
+// %[1]d missing then, %[2]d of, %[3]s when that verification started, %[4]d missing now, %[5]s the
+// map, %[6]d lines, %[7]s them
+const portIncompleteGrewFmt = "\n[PORT_INCOMPLETE FAILS ON MORE DEFINITIONS THAN AT THE LAST VERIFICATION — measured from the mirror as each verification started]\nport_incomplete: %[1]d of the %[2]d definitions had no counterpart at the verification that started at %[3]s, %[4]d now; %[5]s held then %[6]d line(s) giving a reference definition a counterpart that it does not hold now:\n%[7]s\n"
+
+var portIncompleteCountRe = regexp.MustCompile(`(?m)^port_incomplete: (\d+) of the (\d+) `)
+
+// portIncompleteCount: port_incomplete's number of definitions with no counterpart, and of all,
+// from a verification's gate text (ok false when it did not fail).
+func portIncompleteCount(o UnitVerifyOutcome) (n, of int, ok bool) {
+	m := portIncompleteCountRe.FindStringSubmatch(o.Result.GateText)
+	if m == nil {
+		return 0, 0, false
+	}
+	n, _ = strconv.Atoi(m[1])
+	of, _ = strconv.Atoi(m[2])
+	return n, of, true
+}
+
+// portIncompleteGrew: when port_incomplete failed at the last verification and fails now on more
+// definitions, the lines of the port map that verification saw giving a reference definition a
+// counterpart and this one does not. 11/26 15:16:22 port_incomplete failed on 147 of 168 and at
+// 15:55:28 on all 168, the unit's conversations having taken every row of the reference's
+// definitions out of the map, and only a gate going from pass to fail was given what went.
+func portIncompleteGrew(prev *preVerifyResult, now UnitVerifyOutcome, mapNow, mapPath string, syms []RefSymbol) string {
+	if prev == nil {
+		return ""
+	}
+	was, of, ok1 := portIncompleteCount(prev.out)
+	is, _, ok2 := portIncompleteCount(now)
+	if !ok1 || !ok2 || is <= was {
+		return ""
+	}
+	own := map[string]bool{}
+	for _, s := range syms {
+		own[s.File+"\t"+s.Name] = true
+	}
+	holds := map[string]bool{}
+	for _, l := range strings.Split(mapNow, "\n") {
+		holds[l] = true
+	}
+	var lost []string
+	for _, l := range strings.Split(prev.portMap, "\n") {
+		f := strings.Split(l, "\t")
+		if len(f) >= 4 && own[strings.TrimSpace(f[0])+"\t"+strings.TrimSpace(f[1])] && !holds[l] {
+			lost = append(lost, l)
+		}
+	}
+	if len(lost) == 0 {
+		return ""
+	}
+	shown := lost
+	if len(shown) > gatesRegressedMax {
+		shown = append(append([]string(nil), shown[:gatesRegressedMax]...), fmt.Sprintf("(+%d more)", len(lost)-gatesRegressedMax))
+	}
+	return fmt.Sprintf(portIncompleteGrewFmt, was, of, prev.at.Format("15:04:05"), is, mapPath, len(lost), strings.Join(shown, "\n"))
 }
