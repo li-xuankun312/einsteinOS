@@ -166,12 +166,14 @@ const (
 	// %[1]s the unit, %[2]s the file it writes, %[3]s the name there
 	portRefPortedFmt = " (%[1]s's map does port it, into %[2]s %[3]s, which defines no __global__ kernel)"
 	// %[1]d how many groups, %[2]s them
-	portMissingGroupsFmt = " (no missing line of the planner's names this group; its %[1]d missing line(s) name these group(s): %[2]s)"
-	portMissingGroupsMax = 8
+	// the groups themselves are given once, after the rows (gateKernelUnportedGroupsFmt): 11/26
+	// 09:49:16 each of 168 refused rows carried the same list, the gate text came to 14355 bytes
+	// and the conversation was shown 8000 of them
+	portMissingGroupsFmt = " (no missing line of the planner's names this group; its %[1]d missing line(s) name the groups given after the rows)"
 	// %[1]s the file, %[2]s the rows counting for it
 	portRowCountsFmt = "; column 2 is the reference's function another unit's port map ports as a kernel — rows counting for %[1]s: %[2]s"
 	// %[1]s the file, %[2]s the missing prefix
-	portRowCountsNoneFmt = "; column 2 is the reference's function another unit's port map ports as a kernel, and no unit's map writes a kernel into %[1]s: a row for it counts with column 1 %[2]s<group>, where <group> is one of the %[3]d the planner's missing lines name: %[4]s"
+	portRowCountsNoneFmt = "; column 2 is the reference's function another unit's port map ports as a kernel, and no unit's map writes a kernel into %[1]s: a row for it counts with column 1 %[2]s<group>, where <group> is one of the %[3]d the planner's missing lines name, given after the rows"
 	// %[1]s the reference file, %[2]s its function, %[3]s the unit, %[4]s its kernel
 	portRowCountsLineFmt = "%[1]s %[2]s (%[3]s ports it as %[4]s)"
 	portExtraFmt         = "  %[1]s %[2]s → %[3]s:%[4]s: the line names no definition this unit ports"
@@ -440,7 +442,7 @@ func integrationPortFiles(ws, unitID string, pm map[string]portEntry) (map[strin
 				// having written missing:router_top10_kernel, missing:router_top10_wave and two
 				// tensor names of the model as groups, and nothing named the planner's own
 				refused = append(refused, e.refFile+" → "+e.file+" "+e.name+
-					fmt.Sprintf(portMissingGroupsFmt, len(groups), shortList(groups, portMissingGroupsMax)))
+					fmt.Sprintf(portMissingGroupsFmt, len(groups)))
 			}
 		case refKernels[e.refName]:
 			out[e.file] = true
@@ -465,7 +467,7 @@ func integrationPortFiles(ws, unitID string, pm map[string]portEntry) (map[strin
 			} else {
 				// which groups there are, here too: 11/26 04:27:08 this is the branch almost every
 				// refused row takes, and only a row already written missing: was given them
-				why += fmt.Sprintf(portRowCountsNoneFmt, e.file, integrationMissingPrefix, len(groups), shortList(groups, portMissingGroupsMax))
+				why += fmt.Sprintf(portRowCountsNoneFmt, e.file, integrationMissingPrefix, len(groups))
 			}
 			refused = append(refused, e.refFile+" "+e.refName+" → "+e.file+" "+e.name+why+")")
 		}

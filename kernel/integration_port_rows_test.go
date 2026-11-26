@@ -178,7 +178,7 @@ func TestARefusedMissingRowIsGivenThePlannersGroups(t *testing.T) {
 		t.Fatalf("a row naming a group of the planner did not count: %v", files)
 	}
 	all := strings.Join(refused, "\n")
-	want := "missing:router_top10_kernel → src/ix_router_top10_wave.cu router_top10_wave_kernel (no missing line of the planner's names this group; its 2 missing line(s) name these group(s): model.language_model.layers.{i}.linear_attn.conv1d.weight model.language_model.layers.{i}.mlp.experts.gate_up_proj)"
+	want := "missing:router_top10_kernel → src/ix_router_top10_wave.cu router_top10_wave_kernel (no missing line of the planner's names this group; its 2 missing line(s) name the groups given after the rows)"
 	if !strings.Contains(all, want) {
 		t.Fatalf("lacks %q:\n%s", want, all)
 	}
@@ -240,7 +240,7 @@ func TestTheBranchAskingForAMissingRowNamesTheGroups(t *testing.T) {
 		"src/kernels/gpu/gdn_bf16_layer.cu": "__global__ void gdn_bf16_conv_step_kernel(float* x) {}\n",
 	})
 	_, refused := integrationPortFiles(ws, "uint", readPortMap(ws, "uint"))
-	want := "a row for it counts with column 1 missing:<group>, where <group> is one of the 1 the planner's missing lines name: model.language_model.layers.{i}.linear_attn.conv1d.weight"
+	want := "a row for it counts with column 1 missing:<group>, where <group> is one of the 1 the planner's missing lines name, given after the rows"
 	if all := strings.Join(refused, "\n"); !strings.Contains(all, want) {
 		t.Fatalf("lacks %q:\n%s", want, all)
 	}
@@ -264,5 +264,35 @@ func TestAGroupWrittenWithoutItsPrefixIsTold(t *testing.T) {
 	}
 	if n := strings.Count(got, "it is a group of the planner's"); n != 1 {
 		t.Fatalf("a file that is no group was told so too:\n%s", got)
+	}
+}
+
+// 11/26 09:49:16 each of 168 refused rows carried the same list of the planner's groups and the
+// text came to 14355 bytes, of which the conversation was shown 8000: the rows name no group and
+// the gate gives them once
+func TestTheGroupsAreGivenOnceNotWithEachRow(t *testing.T) {
+	integrationAnswers["uint"] = IntegrationModelPlan{Ops: []IntegrationOp{
+		{Group: "model.visual.blocks.{i}.attn.proj.bias", What: "vit"},
+		{Group: "model.visual.blocks.{i}.attn.qkv.bias", What: "vit"},
+	}}
+	t.Cleanup(func() { delete(integrationAnswers, "uint") })
+	ws := t.TempDir()
+	var rows strings.Builder
+	for _, f := range []string{"check", "main", "rel_l1"} {
+		rows.WriteString("src/kernels/shared_expert_parity.cpp\t" + f + "\tsrc/ix_shared_expert.cu\tswiglu_kernel\n")
+	}
+	putTree(t, ws, map[string]string{
+		".einsteinOS/port/uint.tsv": rows.String(),
+		"src/ix_shared_expert.cu":   "__global__ void swiglu_kernel(float* x) {}\n",
+	})
+	files, refused := integrationPortFiles(ws, "uint", readPortMap(ws, "uint"))
+	in := GateInput{UnitID: "uint", PortFiles: files, PortFilesRefused: refused, MissingGroups: integrationMissingGroups("uint"),
+		Kernels: map[string][]string{"src/ix_shared_expert.cu": {"swiglu_kernel"}}}
+	_, texts := unitGatesAll(in)
+	if len(texts) == 0 {
+		t.Fatal("no gate")
+	}
+	if n := strings.Count(texts[0], "model.visual.blocks.{i}.attn.proj.bias"); n != 1 {
+		t.Fatalf("the group is given %d times:\n%s", n, texts[0])
 	}
 }
