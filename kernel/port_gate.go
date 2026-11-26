@@ -425,6 +425,12 @@ const integrationMissingPrefix = "missing:"
 // counterpart, and at 16:43 the conversation wrote rows naming the reference's test helpers
 // (gdn_parity.cpp check, shared_expert_parity.cpp s2_weight, sigmoid_f) as their counterparts.
 func integrationPortFiles(ws, unitID string, pm map[string]portEntry) (map[string]bool, []string) {
+	files, _, refused := integrationPortRows(ws, unitID, pm)
+	return files, refused
+}
+
+// integrationPortRows: integrationPortFiles, with the kernels per file the rows count for.
+func integrationPortRows(ws, unitID string, pm map[string]portEntry) (map[string]bool, map[string]map[string]bool, []string) {
 	missing := map[string]bool{}
 	for _, o := range integrationAnswerOf(unitID).Ops {
 		if o.Unit == "" {
@@ -461,6 +467,14 @@ func integrationPortFiles(ws, unitID string, pm map[string]portEntry) (map[strin
 		}
 	}
 	out := map[string]bool{}
+	kernels := map[string]map[string]bool{}
+	count := func(e portEntry) {
+		out[e.file] = true
+		if kernels[e.file] == nil {
+			kernels[e.file] = map[string]bool{}
+		}
+		kernels[e.file][symbolBase(e.name)] = true
+	}
 	var refused []string
 	for _, e := range pm {
 		switch {
@@ -474,7 +488,7 @@ func integrationPortFiles(ws, unitID string, pm map[string]portEntry) (map[strin
 				// written under groups of the vision encoder
 				refused = append(refused, e.refFile+" → "+e.file+" "+e.name+portMissingOffFmt)
 			case missing[g]:
-				out[e.file] = true
+				count(e)
 			default:
 				// which groups there are: 11/25 23:05:05 220 rows did not count, the conversation
 				// having written missing:router_top10_kernel, missing:router_top10_wave and two
@@ -483,7 +497,7 @@ func integrationPortFiles(ws, unitID string, pm map[string]portEntry) (map[strin
 					fmt.Sprintf(portMissingGroupsFmt, len(groups)))
 			}
 		case refKernels[e.refName]:
-			out[e.file] = true
+			count(e)
 		case e.refFile == e.file && e.refName == e.name:
 			// 11/25 06:27:29 165 of the 193 rows that did not count named a file and function of
 			// this repository on both sides — src/core/device_main.cpp main → the same
@@ -518,7 +532,7 @@ func integrationPortFiles(ws, unitID string, pm map[string]portEntry) (map[strin
 		}
 	}
 	sort.Strings(refused)
-	return out, refused
+	return out, kernels, refused
 }
 
 // integrationPortedRefs: for the integration unit, the reference definitions another unit's port

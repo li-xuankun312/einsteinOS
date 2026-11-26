@@ -62,6 +62,8 @@ type GateInput struct {
 	MissingGroups []string
 	// MissingOff: those of MissingGroups off the model's text path
 	MissingOff map[string]bool
+	// RowKernels: for the integration unit, per file, the kernels its rows count for
+	RowKernels map[string]map[string]bool
 	// OtherPorted: per file, the kernels in it other units' port maps write — for the
 	// integration unit, which changes files of the units it puts together (port_gate.go)
 	OtherPorted map[string]map[string]bool
@@ -204,7 +206,7 @@ func unitGatesAll(in GateInput) (kinds, texts []string) {
 		var files []string
 		held := map[string][]string{}
 		for f, ks := range in.Kernels {
-			if len(ks) == 0 || isTestPath(f) || in.PortFiles[f] {
+			if len(ks) == 0 || isTestPath(f) || (in.RowKernels == nil && in.PortFiles[f]) {
 				continue
 			}
 			// a kernel another unit's map writes is that unit's port: 11/26 07:28 to 11:34
@@ -212,7 +214,11 @@ func unitGatesAll(in GateInput) (kinds, texts []string) {
 			// every kernel in the file
 			var own []string
 			for _, k := range ks {
-				if !in.OtherPorted[f][symbolBase(k)] {
+				// for the integration unit a row counts for the kernel it names, not for its
+				// file: 11/26 17:3x src/kernels/gpu/ew_ops.cu was held for
+				// rms_norm_bf16w_inplace_kernel alone, and one counting row for any other kernel
+				// of the file would have let that one through with no row naming it
+				if !in.OtherPorted[f][symbolBase(k)] && !(in.RowKernels != nil && in.RowKernels[f][symbolBase(k)]) {
 					own = append(own, k)
 				}
 			}

@@ -570,3 +570,26 @@ func TestARenamedRowIsNotSaidToBeCountedByPortIncomplete(t *testing.T) {
 		t.Fatalf("%q", got)
 	}
 }
+
+// 11/26 17:3x ew_ops.cu was held for rms_norm_bf16w_inplace_kernel alone, and a counting row for
+// another kernel of the file would have let it through: the integration unit's rows count for
+// the kernels they name
+func TestAnIntegrationRowCountsForTheKernelItNames(t *testing.T) {
+	ws := t.TempDir()
+	putTree(t, ws, map[string]string{
+		".einsteinOS/port/pA.tsv":   "src/kernels/cuda/elementwise.cu\tadd_kernel\tsrc/kernels/gpu/ew.cu\tadd_kernel\n",
+		"src/kernels/gpu/ew.cu":     "__global__ void add_kernel(float* x) {}\n",
+		".einsteinOS/port/uint.tsv": "src/kernels/cuda/elementwise.cu\tadd_kernel\tsrc/kernels/gpu/ew_ops.cu\tadd2_kernel\n",
+	})
+	files, rows, refused := integrationPortRows(ws, "uint", readPortMap(ws, "uint"))
+	in := GateInput{UnitID: "uint", PortFiles: files, RowKernels: rows, PortFilesRefused: refused,
+		Kernels: map[string][]string{"src/kernels/gpu/ew_ops.cu": {"add2_kernel", "rms_norm_bf16w_inplace_kernel"}}}
+	kinds, texts := unitGatesAll(in)
+	if len(kinds) == 0 || kinds[0] != "kernel_unported" || !strings.Contains(texts[0], "src/kernels/gpu/ew_ops.cu (rms_norm_bf16w_inplace_kernel)") {
+		t.Fatalf("%v %v", kinds, texts)
+	}
+	in.Kernels = map[string][]string{"src/kernels/gpu/ew_ops.cu": {"add2_kernel"}}
+	if kinds, _ := unitGatesAll(in); len(kinds) > 0 && kinds[0] == "kernel_unported" {
+		t.Fatal("the kernel its row names is held")
+	}
+}
