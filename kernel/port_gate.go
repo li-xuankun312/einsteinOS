@@ -703,8 +703,13 @@ func markPortIncompleteRows(refused []string, syms []RefSymbol) []string {
 	out := make([]string, len(refused))
 	for i, r := range refused {
 		out[i] = r
-		head, _, ok := strings.Cut(r, " → ")
-		if ok && own[head] && !strings.HasSuffix(r, portRowSameReason) { // those are given as one line
+		head, tail, ok := strings.Cut(r, " → ")
+		// port_incomplete counts the row only when its counterpart keeps the reference's name
+		// (portMissing): 11/26 17:3x src/kernels/elementwise_parity.cpp check → ew_ops.cu
+		// to_bf16_kernel was said to be counted, port_incomplete refusing it as renamed
+		f := strings.Fields(tail)
+		sameName := len(f) >= 2 && symbolBase(f[1]) == symbolBase(head[strings.LastIndex(head, " ")+1:])
+		if ok && own[head] && sameName && !strings.HasSuffix(r, portRowSameReason) { // those are given as one line
 			f, n, _ := strings.Cut(head, " ")
 			out[i] = r + fmt.Sprintf(portRowIncompleteCountsFmt, f, n)
 		}

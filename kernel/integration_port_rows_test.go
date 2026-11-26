@@ -420,7 +420,7 @@ func TestKernelUnportedHoldsOnlyTheKernelsNoUnitPorted(t *testing.T) {
 // reference definition; the conversation removed them and port_incomplete failed
 func TestARefusedRowPortIncompleteCountsIsSaidToBe(t *testing.T) {
 	refused := []string{
-		"src/kernels/shared_expert_parity.cpp check → src/ix_shared_expert.cu swiglu_kernel (no unit ports check as a kernel)",
+		"src/kernels/shared_expert_parity.cpp check → src/ix_shared_expert.cu check (no unit ports check as a kernel)",
 		"missing:gdn → src/ix_gdn.cu gdn_step_kernel (no missing line of the planner's names this group)",
 	}
 	got := markPortIncompleteRows(refused, []RefSymbol{{File: "src/kernels/shared_expert_parity.cpp", Name: "check"}})
@@ -555,5 +555,18 @@ func TestKernelUnportedGivesOnlyTheRowsIntoTheFilesItHolds(t *testing.T) {
 	_, texts := unitGatesAll(in)
 	if len(texts) == 0 || strings.Contains(texts[0], "bf16_gemv_parity") || !strings.Contains(texts[0], "; 1 row(s) of the port map do not count: tests/t.cu test_k → src/k.cu k_kernel") || !strings.Contains(texts[0], "1 other row(s) of the map write into none of these files") {
 		t.Fatalf("%v", texts)
+	}
+}
+
+// 11/26 17:3x a row giving src/kernels/elementwise_parity.cpp check to ew_ops.cu to_bf16_kernel was
+// said to be counted by port_incomplete, which refuses it as renamed
+func TestARenamedRowIsNotSaidToBeCountedByPortIncomplete(t *testing.T) {
+	refused := []string{
+		"src/kernels/elementwise_parity.cpp check → src/kernels/gpu/ew_ops.cu to_bf16_kernel (no unit ports check as a kernel)",
+		"src/kernels/elementwise_parity.cpp check_k → src/kernels/gpu/ew_ops.cu check_k (no unit ports check_k as a kernel)",
+	}
+	got := markPortIncompleteRows(refused, []RefSymbol{{File: "src/kernels/elementwise_parity.cpp", Name: "check"}, {File: "src/kernels/elementwise_parity.cpp", Name: "check_k"}})
+	if got[0] != refused[0] || !strings.Contains(got[1], "port_incomplete counts this row") {
+		t.Fatalf("%q", got)
 	}
 }
