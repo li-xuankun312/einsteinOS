@@ -186,3 +186,21 @@ func TestARefusedMissingRowIsGivenThePlannersGroups(t *testing.T) {
 		t.Fatalf("a group a unit holds named as missing:\n%s", all)
 	}
 }
+
+// 11/25 18:58:58 the conversation wrote the reference's own kernel names in column 2, names no
+// map ports as a kernel: a refused row says when another unit's map does hold that reference
+// function and what it ports it into
+func TestARefusedRowSaysWhereTheReferenceFunctionIsPorted(t *testing.T) {
+	ws := t.TempDir()
+	putTree(t, ws, map[string]string{
+		".einsteinOS/port/pcd027bc02f.tsv": "src/kernels/cuda/native_moe.cu\tmoe_router_logits_kernel\tsrc/moe_host.cpp\tmoe_router_logits_host\n",
+		"src/moe_host.cpp":                 "void moe_router_logits_host(float* x) {}\n",
+		".einsteinOS/port/uint.tsv":        "src/kernels/cuda/native_moe.cu\tmoe_router_logits_kernel\tsrc/kernels/gpu/moe_native.cu\tmoe_router_logits_kernel\n",
+		"src/kernels/gpu/moe_native.cu":    "__global__ void moe_router_logits_kernel(float* x) {}\n",
+	})
+	_, refused := integrationPortFiles(ws, "uint", readPortMap(ws, "uint"))
+	want := "(pcd027bc02f's map does port it, into src/moe_host.cpp moe_router_logits_host, which defines no __global__ kernel)"
+	if all := strings.Join(refused, "\n"); !strings.Contains(all, want) {
+		t.Fatalf("lacks %q:\n%s", want, all)
+	}
+}

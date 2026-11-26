@@ -163,6 +163,8 @@ func portKernels(ws, unitID string) map[string]bool {
 }
 
 const (
+	// %[1]s the unit, %[2]s the file it writes, %[3]s the name there
+	portRefPortedFmt = " (%[1]s's map does port it, into %[2]s %[3]s, which defines no __global__ kernel)"
 	// %[1]d how many groups, %[2]s them
 	portMissingGroupsFmt = " (no missing line of the planner's names this group; its %[1]d missing line(s) name these group(s): %[2]s)"
 	portMissingGroupsMax = 8
@@ -381,6 +383,8 @@ func integrationPortFiles(ws, unitID string, pm map[string]portEntry) (map[strin
 	refKernels := map[string]bool{}
 	// file -> the rows that count for it: what column 2 holds, measured from the other units' maps
 	countsFor := map[string][]string{}
+	// a reference function another unit's map ports into something that is no kernel
+	portedNotKernel := map[string]string{}
 	maps, _ := filepath.Glob(filepath.Join(ws, ".einsteinOS", "port", "*.tsv"))
 	for _, m := range maps {
 		u := strings.TrimSuffix(filepath.Base(m), ".tsv")
@@ -392,6 +396,8 @@ func integrationPortFiles(ws, unitID string, pm map[string]portEntry) (map[strin
 			if ks[symbolBase(e.name)] {
 				refKernels[e.refName] = true
 				countsFor[e.file] = append(countsFor[e.file], fmt.Sprintf(portRowCountsLineFmt, e.refFile, e.refName, u, e.name))
+			} else if _, had := portedNotKernel[e.refName]; !had {
+				portedNotKernel[e.refName] = fmt.Sprintf(portRefPortedFmt, u, e.file, e.name)
 			}
 		}
 	}
@@ -421,6 +427,12 @@ func integrationPortFiles(ws, unitID string, pm map[string]portEntry) (map[strin
 			// test_X names as kernels, wrote each file's rows twice, launcher and kernel names,
 			// "to cover two possible check formats"
 			why := " (no unit ports " + e.refName + " as a kernel"
+			// 11/25 18:58:58 the conversation wrote the reference's own kernel names in column 2
+			// (native_moe.cu moe_router_logits_kernel, qsa.cu qsa_bf16_qk_norm_kernel), names no
+			// map ports as a kernel, and nothing said whether any map holds them at all
+			if p, ok := portedNotKernel[e.refName]; ok {
+				why += p
+			}
 			if c := countsFor[e.file]; len(c) > 0 {
 				sort.Strings(c)
 				why += fmt.Sprintf(portRowCountsFmt, e.file, shortList(dedupStrings(c), 4))
