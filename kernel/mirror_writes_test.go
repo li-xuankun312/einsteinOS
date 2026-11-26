@@ -792,3 +792,48 @@ func TestWhatABuildWritesIsNoConversationsFile(t *testing.T) {
 		t.Fatalf("a source of another conversation not said: %q", got)
 	}
 }
+
+// 11/26 15:00 to 15:44 the qsa, gdn, layer_norm and embed parts each wrote the port map over as
+// their sandboxes held it, each taking out the rows the others had put in: a part takes out of a
+// shared file the lines it put in itself, and a line another conversation put in is written back
+func TestAPartTakesOutOfASharedFileOnlyTheLinesItPutIn(t *testing.T) {
+	resetMirrorUnits()
+	defer resetMirrorUnits()
+	defer func() {
+		mirrorBranchMu.Lock()
+		delete(mirrorBranch, "uint")
+		delete(mirrorBranchAt, "uint")
+		mirrorBranchMu.Unlock()
+	}()
+	clone := t.TempDir()
+	git := func(args ...string) {
+		if out, err := exec.Command("git", append([]string{"-C", clone}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	pm := ".einsteinOS/port/uint.tsv"
+	git("init", "-q", "-b", "dev")
+	putTree(t, clone, map[string]string{pm: "kept\trow\tsrc/a.cu\tk\n"})
+	git("add", ".")
+	git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "dev")
+	dir := t.TempDir()
+	putTree(t, dir, map[string]string{pm: "kept\trow\tsrc/a.cu\tk\n"})
+	noteMirrorBranch("uint", clone, "dev")
+	noteMirrorConv("uint", dir, "unitconv1", "")
+	noteMirrorConv("uint", dir, "qsaconv01", "qsa: the attention sub-layer")
+	noteMirrorConv("uint", dir, "embedconv", "embed: the embedding")
+	read := func() string { b, _ := os.ReadFile(filepath.Join(dir, pm)); return string(b) }
+	write := func(conv, s string) {
+		MirrorCommand(conv, func() string { os.WriteFile(filepath.Join(dir, pm), []byte(s), 0o644); return "" })
+	}
+	write("qsaconv01", "kept\trow\tsrc/a.cu\tk\nsrc/kernels/x_parity.cpp\tcheck\tsrc/kernels/x_parity.cpp\tcheck\n")
+	write("embedconv", "kept\trow\tsrc/a.cu\tk\nembed\trow\tsrc/e.cu\te\n")
+	if got := read(); !strings.Contains(got, "x_parity.cpp\tcheck") {
+		t.Fatalf("a part took out a row another part put in: %q", got)
+	}
+	// the part that put a row in takes it out
+	write("qsaconv01", "kept\trow\tsrc/a.cu\tk\n")
+	if got := read(); strings.Contains(got, "x_parity.cpp") {
+		t.Fatalf("a part could not take out its own row: %q", got)
+	}
+}

@@ -85,6 +85,9 @@ type mirrorUnit struct {
 	base map[string]bool
 	// start: each base file's bytes when the conversations began (at most mirrorKeepMax each)
 	start map[string][]byte
+	// linesBy: per file, each line a command added to it in this attempt and the conversation
+	// whose command first added it
+	linesBy map[string]map[string]string
 }
 
 // mirrorKeepMax: a file larger than this is not kept and cannot be written back.
@@ -228,6 +231,7 @@ func MirrorCommand(conv string, run func() string) string {
 			said = append(said, w.File)
 		}
 	}
+	u.noteAddedLines(conv, kept)             // before keep: what the mirror held is still u.content
 	setBack := u.setBackToBranch(conv, said) // before keep: what the mirror held is still u.content
 	u.keep(kept)
 	if len(said) > 0 {
@@ -363,7 +367,7 @@ func (u *mirrorUnit) undo(conv string, before, after map[string]mirrorStat) []st
 			if whose == "" {
 				continue
 			}
-			if (whose == mirrorSharedFmt || whose == mirrorUnitsOwnFmt) && !w.Removed && (u.onlyAdded(w.File) || u.takesOutOnlyAttemptLines(w.File)) {
+			if (whose == mirrorSharedFmt || whose == mirrorUnitsOwnFmt) && !w.Removed && (u.onlyAdded(w.File) || u.takesOutOnlyAttemptLines(w.File, conv)) {
 				continue // lines added to a shared file, or lines the attempt put in taken out again
 			}
 			if w.Removed || before[w.File].size > 0 {
@@ -936,7 +940,7 @@ func partSharedBlock(unitID string) string {
 // failed on embed_parity.cu:133, the e2e_embed_main the embed part had added at 12:2x: a part
 // could add a line to a shared file and no part take it out again, and the file is not on
 // einsteinOS/dev-c880662efd at all. Called with u.mu held.
-func (u *mirrorUnit) takesOutOnlyAttemptLines(f string) bool {
+func (u *mirrorUnit) takesOutOnlyAttemptLines(f, conv string) bool {
 	was, ok := u.content[f]
 	if !ok {
 		return false
@@ -969,8 +973,41 @@ func (u *mirrorUnit) takesOutOnlyAttemptLines(f string) bool {
 		if nowN[l] < baseN[l] {
 			return false // a line the branch holds taken out
 		}
+		// a line another conversation of the attempt put in: 11/26 15:00 to 15:44 the qsa,
+		// gdn, layer_norm and embed parts each wrote the port map over as their sandboxes held
+		// it, each taking out the rows the others had put in — the embed part's of 15:44:12 left
+		// 74 of the 181, and port_incomplete went to 168 of 168
+		if by := u.linesBy[f][l]; by != "" && by != conv && nowN[l] == 0 {
+			return false
+		}
 	}
 	return true
+}
+
+// noteAddedLines records, for each file a command of conv changed, the lines it added that no
+// command of the attempt had added before. Called with u.mu held, before keep.
+func (u *mirrorUnit) noteAddedLines(conv string, files []string) {
+	for _, f := range files {
+		now, err := os.ReadFile(filepath.Join(u.dir, filepath.FromSlash(f)))
+		if err != nil {
+			continue
+		}
+		_, in := lineChanges(string(u.content[f]), string(now))
+		for _, l := range in {
+			if l == "" {
+				continue
+			}
+			if u.linesBy == nil {
+				u.linesBy = map[string]map[string]string{}
+			}
+			if u.linesBy[f] == nil {
+				u.linesBy[f] = map[string]string{}
+			}
+			if _, had := u.linesBy[f][l]; !had {
+				u.linesBy[f][l] = conv
+			}
+		}
+	}
 }
 
 // buildOutputExts: what a compiler or a linker writes, not what a conversation ports.
