@@ -245,3 +245,24 @@ func TestTheBranchAskingForAMissingRowNamesTheGroups(t *testing.T) {
 		t.Fatalf("lacks %q:\n%s", want, all)
 	}
 }
+
+// 11/26 05:43:17 a command of the moe part wrote a planner group in column 1 without its
+// missing: prefix, and the row was told only that it is no reference file: the prefix is named
+func TestAGroupWrittenWithoutItsPrefixIsTold(t *testing.T) {
+	defer delete(integrationAnswers, "uint")
+	integrationAnswers["uint"] = IntegrationModelPlan{Ops: []IntegrationOp{
+		{Group: "model.language_model.layers.{i}.mlp.gate.weight", What: "the router"},
+	}}
+	ws := t.TempDir()
+	putTree(t, ws, map[string]string{
+		".einsteinOS/port/uint.tsv": "model.language_model.layers.{i}.mlp.gate.weight\trouter_top10\tsrc/ix_router_top10_wave.cu\trouter_top10_wave_kernel\n" +
+			"include/baloon/kg_kernels.hpp\tf\tsrc/a.cu\tg\n",
+	})
+	got := strings.Join(portRefFiles(ws, "uint", []RefSymbol{{File: "src/kernels/cuda/router_top10.cu", Name: "x"}}), "\n")
+	if !strings.Contains(got, "— it is a group of the planner's missing lines, which column 1 holds as missing:model.language_model.layers.{i}.mlp.gate.weight") {
+		t.Fatalf("%s", got)
+	}
+	if n := strings.Count(got, "it is a group of the planner's"); n != 1 {
+		t.Fatalf("a file that is no group was told so too:\n%s", got)
+	}
+}

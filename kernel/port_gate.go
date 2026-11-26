@@ -294,6 +294,19 @@ func unitPortScripts(ws, unitID string, req UnitRequirements) []string {
 	return scriptsReadingPortMap(ws, unitID)
 }
 
+// isPlannerGroup: whether a planner missing line of the unit names this group.
+func isPlannerGroup(unitID, group string) bool {
+	for _, g := range integrationMissingGroups(unitID) {
+		if g == group {
+			return true
+		}
+	}
+	return false
+}
+
+// %[1]s the prefix, %[2]s the group
+const portRefFileGroupFmt = " — it is a group of the planner's missing lines, which column 1 holds as %[1]s%[2]s"
+
 const portRefFileFmt = "  %[1]s %[2]s → %[3]s:%[4]s: %[1]s is not one of the unit's reference files"
 
 // portRefFiles returns one line per port map line whose reference file is not one of the
@@ -319,7 +332,13 @@ func portRefFiles(ws, unitID string, syms []RefSymbol) []string {
 		}
 		if !refFiles[e.refFile] && !seen[e.refFile] {
 			seen[e.refFile] = true
-			out = append(out, fmt.Sprintf(portRefFileFmt, e.refFile, e.refName, e.file, e.name))
+			line := fmt.Sprintf(portRefFileFmt, e.refFile, e.refName, e.file, e.name)
+			// the group written without its prefix: 11/26 05:43:17 a command of the moe part wrote
+			// model.language_model.layers.{i}.mlp.gate.weight in column 1 and the row fell here
+			if isPlannerGroup(unitID, e.refFile) {
+				line += fmt.Sprintf(portRefFileGroupFmt, integrationMissingPrefix, e.refFile)
+			}
+			out = append(out, line)
 		}
 	}
 	return out
