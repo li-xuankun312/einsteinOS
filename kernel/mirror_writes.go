@@ -238,6 +238,12 @@ func MirrorCommand(conv string, run func() string) string {
 		}
 		mirrorChanged(u.unit, wrote...)
 		out += setBack
+		for _, f := range kept {
+			if f == PortMapPath(u.unit) {
+				out += portCheckNow(u.unit)
+				break
+			}
+		}
 	}
 	out += mirrorVerifyNews(u.unit, conv)
 	out += u.sinceHeard(conv)

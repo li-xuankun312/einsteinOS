@@ -646,6 +646,16 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 		}
 		RegisterPreVerify(role, check)
 		if unit.Integration {
+			// a change of its port map is answered at once by the map's gates (port_check_now.go)
+			portReq := r.shown(unit)
+			registerPortCheck(unit.ID, func() string {
+				changed, _, err := treeDelta(mirror, base)
+				if err != nil {
+					return ""
+				}
+				in := unitGateInput(mirror, unit.ID, portReq, changed, ProcTrace{}, ProcTrace{}, NoToolchainBuild{})
+				return portGatesNow(in, PortMapPath(unit.ID))
+			})
 			// a change of the mirror by any of the unit's conversations is verified too
 			// (mirror_verify.go)
 			registerMirrorVerify(unit.ID, func() (bool, string) {
@@ -660,6 +670,7 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 		if ferr != nil {
 			UnregisterPreVerify(role)
 			registerMirrorVerify(unit.ID, nil)
+			registerPortCheck(unit.ID, nil)
 			log.Printf("dev_from_theorems: %s unit %s fork failed (try %d/5): %v", r.repo, unit.ID, try, ferr)
 			continue
 		}
@@ -679,6 +690,7 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 			waitAbandoned(child, r.repo, unit.ID)
 		})
 		registerMirrorVerify(unit.ID, nil)
+		registerPortCheck(unit.ID, nil)
 		UnregisterPreVerify(role)
 		if m := getMeta(child); m != nil && m.ConvID != "" {
 			convID = m.ConvID
