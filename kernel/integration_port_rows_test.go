@@ -734,3 +734,26 @@ func TestARowCountsOnlyWhenItsKernelTakesTheUnitsKernelsTypes(t *testing.T) {
 		t.Fatalf("%q", refused)
 	}
 }
+
+// 11/27 16:08:02 kernel_unported passed while src/ix_gdn.cu defined five kernels with the names
+// and parameter types of pcd027bc02f's kernels in src/kernels/gpu/gdn_core.cu: such a kernel is a
+// gate of its own, and the unit's own file, where it ports the kernel, is not one
+func TestAnIntegrationKernelWithAUnitKernelsNameAndTypesIsAGate(t *testing.T) {
+	ws := t.TempDir()
+	putTree(t, ws, map[string]string{
+		".einsteinOS/port/pcd027bc02f.tsv": "src/kernels/cuda/gdn.cu\tgdn_step_kernel\tsrc/kernels/gpu/gdn_core.cu\tgdn_step_kernel\n" +
+			"src/kernels/cuda/gdn.cu\tgdn_l2_kernel\tsrc/kernels/gpu/gdn_core.cu\tgdn_l2_kernel\n",
+		"src/kernels/gpu/gdn_core.cu": "__global__ void gdn_step_kernel(float* __restrict__ s, int cols) {}\n__global__ void gdn_l2_kernel(float* x, int cols, float eps) {}\n",
+		"src/ix_gdn.cu":               "__global__ void gdn_step_kernel(float* state, int n) {}\n__global__ void gdn_l2_kernel(float* x, int cols) {}\n",
+		"tests/k39/gdn_test.cu":       "__global__ void gdn_step_kernel(float* state, int n) {}\n",
+	})
+	ks := unitKernels(ws, []string{"src/ix_gdn.cu", "src/kernels/gpu/gdn_core.cu", "tests/k39/gdn_test.cu"})
+	got := integrationCopiedKernels(ws, "uint", ks)
+	if len(got) != 1 || got[0] != "  src/ix_gdn.cu gdn_step_kernel — pcd027bc02f ports it into src/kernels/gpu/gdn_core.cu, both taking (float*, int)" {
+		t.Fatalf("%q", got)
+	}
+	kinds, texts := unitGatesAll(GateInput{UnitID: "uint", Copied: got})
+	if len(kinds) != 1 || kinds[0] != "kernel_copied" || !strings.HasPrefix(texts[0], "kernel_copied: 1 kernel(s) of the integration unit's files outside the tests have the name and the parameter types of a kernel another unit's port map ports into another file:\n  src/ix_gdn.cu gdn_step_kernel") {
+		t.Fatalf("%v %q", kinds, texts)
+	}
+}

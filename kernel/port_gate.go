@@ -1015,3 +1015,62 @@ func integrationPortedInto(ws, unitID string) map[string][]string {
 	}
 	return out
 }
+
+// %[1]s the integration unit's file, %[2]s its kernel, %[3]s the unit, %[4]s its file, %[5]s the
+// parameters' types
+const kernelCopiedLineFmt = "  %[1]s %[2]s — %[3]s ports it into %[4]s, both taking (%[5]s)"
+
+// integrationCopiedKernels: the kernels the integration unit's changed files outside the tests
+// define with the name and the parameter types of a kernel another unit's port map ports into
+// another file. 11/27 16:08:02 kernel_unported passed for uintegration01529aaa82b9 while
+// src/ix_gdn.cu still defined gdn_step_kernel, gdn_conv_kernel, gdn_l2_kernel, gdn_out_norm_kernel
+// and gdn_beta_gate_kernel, each with the parameter types of pcd027bc02f's kernel of that name in
+// src/kernels/gpu/gdn_core.cu: between 12:19 and 16:08 the unit changed its port map alone.
+func integrationCopiedKernels(ws, unitID string, kernels map[string][]string) []string {
+	type theirs struct{ unit, file string }
+	byName := map[string][]theirs{}
+	maps, _ := filepath.Glob(filepath.Join(ws, ".einsteinOS", "port", "*.tsv"))
+	for _, m := range maps {
+		u := strings.TrimSuffix(filepath.Base(m), ".tsv")
+		if u == unitID {
+			continue
+		}
+		ks := portKernels(ws, u)
+		for _, e := range readPortMap(ws, u) {
+			if n := symbolBase(e.name); ks[n] {
+				byName[n] = append(byName[n], theirs{u, e.file})
+			}
+		}
+	}
+	read := func(file, name string) ([]string, bool) {
+		b, err := os.ReadFile(filepath.Join(ws, filepath.FromSlash(file)))
+		if err != nil {
+			return nil, false
+		}
+		return kernelParamTypes(string(b), name)
+	}
+	var out []string
+	seen := map[string]bool{}
+	for f, ks := range kernels {
+		if isTestPath(f) {
+			continue
+		}
+		for _, k := range ks {
+			mine, ok := read(f, k)
+			if !ok {
+				continue
+			}
+			for _, o := range byName[symbolBase(k)] {
+				if o.file == f || seen[f+"\x00"+k] {
+					continue
+				}
+				if t, ok := read(o.file, symbolBase(k)); ok && strings.Join(t, ", ") == strings.Join(mine, ", ") {
+					seen[f+"\x00"+k] = true
+					out = append(out, fmt.Sprintf(kernelCopiedLineFmt, f, k, o.unit, o.file, strings.Join(mine, ", ")))
+				}
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}

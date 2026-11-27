@@ -74,6 +74,9 @@ type GateInput struct {
 	OpKernels []string
 	// Shadowed: kernels the port map names that a test file defines too (shadowedKernels)
 	Shadowed []string
+	// Copied: the integration unit's kernels outside the tests with the name and parameter types
+	// of a kernel another unit's port map ports into another file (integrationCopiedKernels)
+	Copied []string
 	// EntryStubs: headers defining, inline as a constant, an entry build.sh makes of a test's
 	// main (entryStubs)
 	EntryStubs []string
@@ -149,15 +152,17 @@ const (
 	gateKernelNotLaunchedFmt   = "gpu_kernel_not_launched: test.sh exited 0 but launched none of the unit's kernels (%[1]s); kernels its processes launched: %[2]s; executables the launch probe was in: %[3]s — a test that opens the device and checks on the CPU proves nothing about the kernels"
 	gateLaunchUnmeasuredFmt    = "gpu_launch_unmeasured: whether the unit's kernels ran on the device could not be measured: %[1]s"
 	gateIntegrationNoKernelFmt = "integration_kernel_not_launched: the reference builds CUDA and its %[1]d registered tests passed here, but none of them launched a kernel of this repository (it defines %[2]d: %[3]s); kernels launched: %[4]s"
-	gateKernelShadowedFmt      = "kernel_shadowed_in_test: %[1]s define a __global__ kernel of the same name as a counterpart in the unit's port map %[2]s. The launch probe reads a launch by name, so a test that launches its own copy proves nothing about the ported kernel: remove these definitions and call the ported kernel (or its launcher) from the test instead"
-	gatePortRefFileFmt         = "port_ref_file_unknown: %[1]d reference file(s) in %[2]s are not files of the reference the kernel measured — that column is the reference's, and a header written in this repository is not one of its files, whatever it is called:\n%[3]s\nthe unit's reference files: %[4]s"
-	gateRefPathWrittenFmt      = "ref_path_written: %[1]d file(s) the unit wrote are at the path of a reference file as it is shown here (%[2]s) — the reference's files are the kernel's to read, not this repository's; the unit's counterparts are files of its own:\n%[3]s"
-	gatePortExtraFmt           = "port_extra: %[1]d line(s) of %[2]s name no definition this unit ports — the map holds exactly the %[3]d the kernel measured from the reference:\n%[4]s"
-	gatePortForeignFmt         = "port_name_foreign: %[1]d line(s) of %[2]s give a counterpart the reference file does not define — a port keeps the reference's names:\n%[3]s"
-	gatePortScriptFmt          = "port_count_in_script: %[1]s read the port map — the kernel checks %[2]s against the %[3]d definitions it measured from the reference, and a count a script checks is the conversation's own number (remove the port check from the scripts; they test the code)"
-	gateResultUncheckedFmt     = "gpu_result_unchecked: %[1]s still exits 0 with the body of %[2]s skipped (rebuilt so each returns at once): the test checks that the kernel ran, not what it computed — compare its outputs with what the reference computes for the same input"
-	gateLeanCopiedFmt          = "lean_copied: %[1]d declaration(s) of the unit's Lean are the theory's own text, not the unit's (.einsteinOS/theory.md holds each, comments and white space aside):\n%[2]s"
-	gateToolchainFmt           = "toolchain_missing: the unit's sources are CUDA but none of %[1]s exists in %[2]s on this machine; a build that skips the GPU here proves nothing"
+	// %[1]d how many, %[2]s each kernel with the unit's kernel of its name and their types
+	gateKernelCopiedFmt    = "kernel_copied: %[1]d kernel(s) of the integration unit's files outside the tests have the name and the parameter types of a kernel another unit's port map ports into another file:\n%[2]s"
+	gateKernelShadowedFmt  = "kernel_shadowed_in_test: %[1]s define a __global__ kernel of the same name as a counterpart in the unit's port map %[2]s. The launch probe reads a launch by name, so a test that launches its own copy proves nothing about the ported kernel: remove these definitions and call the ported kernel (or its launcher) from the test instead"
+	gatePortRefFileFmt     = "port_ref_file_unknown: %[1]d reference file(s) in %[2]s are not files of the reference the kernel measured — that column is the reference's, and a header written in this repository is not one of its files, whatever it is called:\n%[3]s\nthe unit's reference files: %[4]s"
+	gateRefPathWrittenFmt  = "ref_path_written: %[1]d file(s) the unit wrote are at the path of a reference file as it is shown here (%[2]s) — the reference's files are the kernel's to read, not this repository's; the unit's counterparts are files of its own:\n%[3]s"
+	gatePortExtraFmt       = "port_extra: %[1]d line(s) of %[2]s name no definition this unit ports — the map holds exactly the %[3]d the kernel measured from the reference:\n%[4]s"
+	gatePortForeignFmt     = "port_name_foreign: %[1]d line(s) of %[2]s give a counterpart the reference file does not define — a port keeps the reference's names:\n%[3]s"
+	gatePortScriptFmt      = "port_count_in_script: %[1]s read the port map — the kernel checks %[2]s against the %[3]d definitions it measured from the reference, and a count a script checks is the conversation's own number (remove the port check from the scripts; they test the code)"
+	gateResultUncheckedFmt = "gpu_result_unchecked: %[1]s still exits 0 with the body of %[2]s skipped (rebuilt so each returns at once): the test checks that the kernel ran, not what it computed — compare its outputs with what the reference computes for the same input"
+	gateLeanCopiedFmt      = "lean_copied: %[1]d declaration(s) of the unit's Lean are the theory's own text, not the unit's (.einsteinOS/theory.md holds each, comments and white space aside):\n%[2]s"
+	gateToolchainFmt       = "toolchain_missing: the unit's sources are CUDA but none of %[1]s exists in %[2]s on this machine; a build that skips the GPU here proves nothing"
 )
 
 // GateToolchainMissing is the gate a retry cannot fix: the run stops on it (dev_run).
@@ -414,6 +419,9 @@ func unitGatesAll(in GateInput) (kinds, texts []string) {
 	}
 	if len(in.Shadowed) > 0 {
 		fail("kernel_shadowed_in_test", fmt.Sprintf(gateKernelShadowedFmt, strings.Join(in.Shadowed, ", "), PortMapPath(in.UnitID)))
+	}
+	if len(in.Copied) > 0 {
+		fail("kernel_copied", fmt.Sprintf(gateKernelCopiedFmt, len(in.Copied), strings.Join(in.Copied, "\n")))
 	}
 	if len(in.RefPathsWritten) > 0 {
 		fail("ref_path_written", fmt.Sprintf(gateRefPathWrittenFmt, len(in.RefPathsWritten), shortList(sortedCopy(refFilesOf(in.Req.Symbols)), 12), strings.Join(in.RefPathsWritten, "\n")))

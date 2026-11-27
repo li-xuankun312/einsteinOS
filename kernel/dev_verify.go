@@ -730,7 +730,9 @@ func unitGateInput(ws, unitID string, req UnitRequirements, changed []string, bu
 	var rowKernels map[string]map[string]bool
 	var portedInto map[string][]string
 	var otherPorted map[string]map[string]bool
+	var copied []string
 	if len(req.Tests) > 0 {
+		copied = integrationCopiedKernels(ws, unitID, unitKernels(ws, changed))
 		// the integration unit's kernels: their rows are checked against the planner's missing
 		// lines and the kernels the units ported (port_gate.go)
 		pf, rowKernels, pfRefused = integrationPortRows(ws, unitID, pm)
@@ -750,7 +752,7 @@ func unitGateInput(ws, unitID string, req UnitRequirements, changed []string, bu
 	return GateInput{Req: req, Changed: changed, Build: build, Test: test, Compilers: presentGPUCompilers(),
 		PortMissing: portMissingLines, PortMissingText: portMissingText, PortExtra: portExtra(ws, unitID, req.Symbols), PortRefFiles: portRefFiles(ws, unitID, req.Symbols), RefPathsWritten: refPathsWritten(withRefPathsPresent(ws, changed, req), req),
 		PortForeign: portForeignNames(ws, unitID, req.FileNames), PortScripts: unitPortScripts(ws, unitID, req), MutatesMissingScript: mutScript, MutatesMissing: mutMissing, Kernels: unitKernels(ws, changed), KernelsMeasured: true,
-		Shadowed:   shadowedKernels(unitKernels(ws, changed), portKernels(ws, unitID)),
+		Shadowed: shadowedKernels(unitKernels(ws, changed), portKernels(ws, unitID)), Copied: copied,
 		EntryStubs: entryStubs(ws, unitBuildScript(unitID)),
 		ISAFuncs:   isaPortFuncs(pm, req.FlagFiles), PortKernels: portKernels(ws, unitID), UnitID: unitID,
 		PortFiles: pf, PortFilesRefused: pfRefused, MissingGroups: missingGroups, MissingOff: missingOff, OpKernels: opKernels, RowKernels: rowKernels, PortedInto: portedInto, OtherPorted: otherPorted,
