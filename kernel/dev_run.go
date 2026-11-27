@@ -587,7 +587,12 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 			judged := pre.lastJudged()
 			regressed := gatesRegressed(judged, o, string(mapThen), PortMapPath(unit.ID)) +
 				portIncompleteGrew(judged, o, string(mapThen), PortMapPath(unit.ID), r.shown(unit).Symbols)
-			pre = &preVerifyResult{ok: passed, digest: deltaDigest(mirror, changed, removed), out: o, portMap: string(mapThen), at: startedAt, judged: judged}
+			filesNow := deltaFiles(mirror, changed, removed)
+			onMap := gatesPassedOnMap(judged, o, filesNow, string(mapThen), PortMapPath(unit.ID))
+			pre = &preVerifyResult{ok: passed, digest: deltaDigest(mirror, changed, removed), out: o, portMap: string(mapThen), at: startedAt, judged: judged, files: filesNow}
+			if onMap != "" {
+				log.Printf("dev_preverify: %s unit %s: %s", r.repo, unit.ID, onMap)
+			}
 			if regressed != "" {
 				log.Printf("dev_preverify: %s unit %s: %s", r.repo, unit.ID, truncStr(strings.TrimSpace(regressed), preVerifyGateTextLogMax))
 			}

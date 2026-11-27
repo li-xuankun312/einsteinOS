@@ -34,6 +34,99 @@ type preVerifyResult struct {
 	at      time.Time
 	// judged: the last verification before this one whose gates were judged
 	judged *preVerifyResult
+	// files: each file of the unit's delta as the verification ended, with the hash of its
+	// content ("" for a file the delta removes) — deltaFiles
+	files map[string]string
+}
+
+// deltaFiles: each file of a delta with the hash of what the mirror holds of it, "" for removed.
+func deltaFiles(mirror string, changed, removed []string) map[string]string {
+	out := map[string]string{}
+	for _, f := range changed {
+		b, _ := os.ReadFile(filepath.Join(mirror, f))
+		sum := sha256.Sum256(b)
+		out[f] = hex.EncodeToString(sum[:])
+	}
+	for _, f := range removed {
+		out[f] = ""
+	}
+	return out
+}
+
+// %[1]s the gates, %[2]s when the last judged verification took the mirror, %[3]s the map,
+// %[4]d its lines put in, %[5]d those taken out
+const gatesPassedOnMapFmt = "%[1]s failed at the verification that started at %[2]s and pass now, and of the unit's files only %[3]s differs between the two: %[4]d line(s) in, %[5]d out"
+
+// gatesPassedOnMap: the gates that failed at the last judged verification and pass at this one
+// when, between the two, the unit's port map is the only file that differs, with the map's
+// lines put in and taken out; "" otherwise. 11/27 16:08:02 kernel_unported, port_extra,
+// port_incomplete and port_ref_file_unknown passed for uintegration01529aaa82b9, and the tree
+// parked at 16:08 (8ed8619) differed from that of 12:19 (f05a254) in its port map alone, 40 lines
+// in and 79 out, which nothing in the log said.
+func gatesPassedOnMap(prev *preVerifyResult, now UnitVerifyOutcome, filesNow map[string]string, mapNow, mapPath string) string {
+	if prev == nil || prev.files == nil || prev.out.Err != nil || !prev.out.Verified || prev.out.Result.Compile != "pass" || now.Err != nil || !now.Verified || now.Result.Compile != "pass" {
+		return ""
+	}
+	has := map[string]bool{}
+	for _, g := range now.Result.Gates {
+		has[g] = true
+	}
+	var passed []string
+	for _, g := range prev.out.Result.Gates {
+		if !has[g] {
+			passed = append(passed, g)
+		}
+	}
+	if len(passed) == 0 {
+		return ""
+	}
+	differ := 0
+	for f, h := range filesNow {
+		if prev.files[f] != h {
+			if f != mapPath {
+				return ""
+			}
+			differ++
+		}
+	}
+	for f := range prev.files {
+		if _, ok := filesNow[f]; !ok {
+			if f != mapPath {
+				return ""
+			}
+			differ++
+		}
+	}
+	if differ == 0 {
+		return ""
+	}
+	in, out := lineDelta(prev.portMap, mapNow)
+	return fmt.Sprintf(gatesPassedOnMapFmt, strings.Join(passed, ", "), prev.at.Format("15:04:05"), mapPath, in, out)
+}
+
+// lineDelta: how many lines of now then does not hold, and of then now does not.
+func lineDelta(then, now string) (in, out int) {
+	count := func(s string) map[string]int {
+		m := map[string]int{}
+		for _, l := range strings.Split(s, "\n") {
+			if strings.TrimSpace(l) != "" {
+				m[l]++
+			}
+		}
+		return m
+	}
+	a, b := count(then), count(now)
+	for l, n := range b {
+		if n > a[l] {
+			in += n - a[l]
+		}
+	}
+	for l, n := range a {
+		if n > b[l] {
+			out += n - b[l]
+		}
+	}
+	return in, out
 }
 
 // lastJudged: the last verification whose gates were judged — this one when its build compiled,
