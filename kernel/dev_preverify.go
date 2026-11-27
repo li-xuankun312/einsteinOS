@@ -206,7 +206,7 @@ func preVerifyReport(o UnitVerifyOutcome) string {
 		return Bagu(preVerifyWhere, fmt.Sprintf(preVerifyWhatFmt, "error", "error", o.Err.Error()),
 			fmt.Sprintf(preVerifyHeadFmt, "error", -1, "error", -1, o.Err.Error())+preVerifyTailFmt, "1", spawnTo())
 	}
-	s := fmt.Sprintf(preVerifyHeadFmt, o.Result.Compile, o.Result.BuildExit, o.Result.Smoke, o.Result.TestExit, gateOrNone(o.Result.Gate))
+	s := fmt.Sprintf(preVerifyHeadFmt, o.Result.Compile, o.Result.BuildExit, o.Result.Smoke, o.Result.TestExit, gateOf(o.Result))
 	for _, k := range []string{"compile_error", "smoke_error"} {
 		if v := o.Status[k]; v != "" {
 			s += k + ":\n" + ShapeOutput(v, LocalResultCap()/2) + "\n"
@@ -216,7 +216,7 @@ func preVerifyReport(o UnitVerifyOutcome) string {
 		s += gatesSentText(o.Result.GateText, o.Result.Gates, LocalResultCap()/2) + "\n"
 	}
 	s += verifiedFilesText(o.Changed, o.Removed)
-	return Bagu(preVerifyWhere, fmt.Sprintf(preVerifyWhatFmt, o.Result.Compile, o.Result.Smoke, gateOrNone(o.Result.Gate)), s+preVerifyTailFmt, "1", spawnTo())
+	return Bagu(preVerifyWhere, fmt.Sprintf(preVerifyWhatFmt, o.Result.Compile, o.Result.Smoke, gateOf(o.Result)), s+preVerifyTailFmt, "1", spawnTo())
 }
 
 // verifiedFilesText: the files the verification ran on, or that there were none of the

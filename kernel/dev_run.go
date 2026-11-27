@@ -615,7 +615,7 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 			}
 			if parkRejectedTree(r.branch, baseRef, o.Verified && o.Err == nil) {
 				wip := parkTarget(r.branch, baseRef, unit.ID)
-				msg := fmt.Sprintf("unit %s: rejected at a done line, parked [compile=%s smoke=%s gate=%s]", unit.ID, o.Result.Compile, o.Result.Smoke, gateOrNone(o.Result.Gate))
+				msg := fmt.Sprintf("unit %s: rejected at a done line, parked [compile=%s smoke=%s gate=%s]", unit.ID, o.Result.Compile, o.Result.Smoke, gateOf(o.Result))
 				if err := commitDelta(cloneDir, r.devRepo, baseRef, wip, mirror, changed, removed, msg); err != nil {
 					log.Printf("dev_preverify: %s unit %s: the rejected tree was not parked on %s: %v", r.repo, unit.ID, wip, err)
 				} else {
@@ -769,7 +769,7 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 				// let the conversation end, and the same tree was built and run again from 16:59:06)
 				log.Printf("dev_verify: unit %s: the tree is the one verified at the done line — that verification is used", unit.ID)
 				out = pre.out
-				out.msg = fmt.Sprintf("unit %s: %s [compile=%s smoke=%s gate=%s kernels=%s, verified by the kernel]", unit.ID, truncStr(nodeDesc(unit), 120), out.Result.Compile, out.Result.Smoke, gateOrNone(out.Result.Gate), out.Result.Test.LaunchCount())
+				out.msg = fmt.Sprintf("unit %s: %s [compile=%s smoke=%s gate=%s kernels=%s, verified by the kernel]", unit.ID, truncStr(nodeDesc(unit), 120), out.Result.Compile, out.Result.Smoke, gateOf(out.Result), out.Result.Test.LaunchCount())
 				out = devRetryPush(cloneDir, mirror, r.devRepo, r.branch, baseRef, unit.ID, out)
 			} else {
 				out = devVerifyAndPush(cloneDir, mirror, r.devRepo, r.branch, baseRef, unit.ID, nodeDesc(unit), r.gpuUsable(), base, r.shown(unit))

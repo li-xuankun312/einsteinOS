@@ -19,3 +19,20 @@ func TestTheLinesOfAFailedTestAreGivenFirst(t *testing.T) {
 		t.Fatal("a passing output gave lines")
 	}
 }
+
+// 11/26 20:42:55 to 21:39:21 six verifications whose test.sh exited 1 were sent back as gate=ok
+func TestAVerificationWhoseTestFailedJudgedNoGate(t *testing.T) {
+	for _, c := range []struct {
+		r    VerifyResult
+		want string
+	}{
+		{VerifyResult{Compile: "pass", Smoke: "fail"}, "not judged"},
+		{VerifyResult{Compile: "fail", Smoke: "skipped"}, "not judged"},
+		{VerifyResult{Compile: "pass", Smoke: "pass"}, "ok"},
+		{VerifyResult{Compile: "pass", Smoke: "pass", Gate: "kernel_unported"}, "kernel_unported"},
+	} {
+		if got := gateOf(c.r); got != c.want {
+			t.Fatalf("%+v: %q", c.r, got)
+		}
+	}
+}

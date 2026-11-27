@@ -871,7 +871,7 @@ func devVerifyAndPush(cloneDir, mirror, devRepo, branch, baseRef, unitID, unitDe
 	if !out.Verified || out.Err != nil || out.Status["existing_code"] == "true" {
 		return out
 	}
-	out.msg = fmt.Sprintf("unit %s: %s [compile=%s smoke=%s gate=%s kernels=%s, verified by the kernel]", unitID, truncStr(unitDesc, 120), out.Result.Compile, out.Result.Smoke, gateOrNone(out.Result.Gate), out.Result.Test.LaunchCount())
+	out.msg = fmt.Sprintf("unit %s: %s [compile=%s smoke=%s gate=%s kernels=%s, verified by the kernel]", unitID, truncStr(unitDesc, 120), out.Result.Compile, out.Result.Smoke, gateOf(out.Result), out.Result.Test.LaunchCount())
 	out.Pushed, out.Err = devPushVerdict(cloneDir, mirror, devRepo, branch, baseRef, unitID, out.Changed, out.Removed, out.msg, out.Result.Passed())
 	return out
 }
@@ -1064,6 +1064,16 @@ func gateOrNone(g string) string {
 		return "ok"
 	}
 	return g
+}
+
+// gateOf: the gate a verification is reported with — "not judged" when its build or test.sh
+// failed and no gate was judged. 11/26 20:42:55 to 21:39:21 six verifications of
+// uintegration01529aaa82b9 whose test.sh exited 1 were each sent back as gate=ok.
+func gateOf(r VerifyResult) string {
+	if r.Gate == "" && (r.Compile != "pass" || r.Smoke != "pass") {
+		return "not judged"
+	}
+	return gateOrNone(r.Gate)
 }
 
 // integrationRepoKernels: the working tree's kernels, measured for the integration unit only.
