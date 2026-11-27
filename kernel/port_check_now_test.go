@@ -26,7 +26,8 @@ func TestACommandChangingThePortMapIsAnsweredByItsGates(t *testing.T) {
 	})
 	registerPortCheck(unit, func() string {
 		in := GateInput{UnitID: unit, PortFiles: map[string]bool{}, PortMissing: []string{"  a.cpp func main: no line"},
-			Req: UnitRequirements{Symbols: []RefSymbol{{File: "a.cpp", Name: "main"}}}}
+			RowKernels: map[string]map[string]bool{"src/a.cu": {"k": true}},
+			Req:        UnitRequirements{Symbols: []RefSymbol{{File: "a.cpp", Name: "main"}}}}
 		return portGatesNow(in, PortMapPath(unit))
 	})
 	t.Cleanup(func() { registerPortCheck(unit, nil) })
@@ -36,7 +37,7 @@ func TestACommandChangingThePortMapIsAnsweredByItsGates(t *testing.T) {
 		os.WriteFile(p, []byte("x\ty\tz\tw\n"), 0o644)
 		return "ran"
 	})
-	if !strings.Contains(out, "[THE PORT MAP AS THIS COMMAND LEFT IT") || !strings.Contains(out, "port_incomplete: 1 of the 1") || !strings.Contains(out, "kernel_unported, port_ref_file_unknown, port_extra, port_name_foreign: pass") {
+	if !strings.Contains(out, "the map holds 1 row(s)") || !strings.Contains(out, "[THE PORT MAP AS THIS COMMAND LEFT IT") || !strings.Contains(out, "port_incomplete: 1 of the 1") || !strings.Contains(out, "kernel_unported, port_ref_file_unknown, port_extra, port_name_foreign: pass") {
 		t.Fatalf("got %q", out)
 	}
 	// a command not changing the map is answered as before

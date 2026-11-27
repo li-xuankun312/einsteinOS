@@ -46,6 +46,8 @@ const (
 	portCheckHeadFmt = "\n[THE PORT MAP AS THIS COMMAND LEFT IT — %[1]s, judged now on the mirror by the gates that read the map and the sources, with no build]\n"
 	// %[1]s the gates
 	portCheckPassFmt = "%[1]s: pass\n"
+	// %[1]d rows of the map as this command left it
+	portCheckRowsFmt = "the map holds %[1]d row(s)\n"
 )
 
 // portGatesNow: the port map's gates of in, as the command result gives them.
@@ -70,6 +72,9 @@ func portGatesNow(in GateInput, mapPath string) string {
 		}
 	}
 	s := fmt.Sprintf(portCheckHeadFmt, mapPath)
+	if n := portMapRows(in); n > 0 {
+		s += fmt.Sprintf(portCheckRowsFmt, n)
+	}
 	if len(passed) > 0 {
 		s += fmt.Sprintf(portCheckPassFmt, strings.Join(passed, ", "))
 	}
@@ -77,4 +82,16 @@ func portGatesNow(in GateInput, mapPath string) string {
 		s += ShapeOutput(strings.Join(failed, "\n"), LocalResultCap()/2) + "\n"
 	}
 	return s
+}
+
+// portMapRows: how many rows of the port map the gates read — those that count for a kernel and
+// those refused — as this command left it. 11/27 05:28:59 port_incomplete went from passing to
+// 168 of 168 and port_extra to a row mapping a definition twice, uintegration01529aaa82b9's map
+// having been written over while its gates were checked row by row.
+func portMapRows(in GateInput) int {
+	n := len(in.PortFilesRefused)
+	for _, ks := range in.RowKernels {
+		n += len(ks)
+	}
+	return n
 }
