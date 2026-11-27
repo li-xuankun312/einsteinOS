@@ -604,3 +604,18 @@ func TestAnIntegrationRowCountsForTheKernelItNames(t *testing.T) {
 		t.Fatal("the kernel its row names is held")
 	}
 }
+
+// 11/27 03:54:47 thirteen refused rows each carried the same reason: it is given once after them
+func TestRowsRefusedForOneReasonAreGivenTheReasonOnce(t *testing.T) {
+	why := " (the planner's missing lines give this group, and it is off the model's text path, where no part is started)"
+	rows := []string{
+		"missing:model.visual.a → src/a.cu k1" + why,
+		"x.cpp check → src/a.cu k2 (no unit ports check as a kernel)",
+		"missing:model.visual.b → src/b.cu k3" + why,
+	}
+	got := strings.Join(groupRowsByReason(rows), "; ")
+	want := "missing:model.visual.a → src/a.cu k1, missing:model.visual.b → src/b.cu k3" + why + "; x.cpp check → src/a.cu k2 (no unit ports check as a kernel)"
+	if got != want {
+		t.Fatalf("got\n%s", got)
+	}
+}

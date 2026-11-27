@@ -850,12 +850,37 @@ func refusedRowsText(refused, held []string) string {
 	into, others := refusedRowsIntoHeld(refused, held)
 	var parts []string
 	if len(into) > 0 {
-		parts = append(parts, strings.Join(into, "; "))
+		parts = append(parts, strings.Join(groupRowsByReason(into), "; "))
 	}
 	if others > 0 {
 		parts = append(parts, fmt.Sprintf(portRowsElsewhereFmt, others))
 	}
 	return strings.Join(parts, "; ")
+}
+
+// groupRowsByReason: rows refused for the same reason given once, the rows then the reason, in
+// the order their reasons first come. 11/27 03:54:47 thirteen missing:model.visual… rows each
+// carried the same 110-byte reason, 1.4 KB of a 9.8 KB gate text.
+func groupRowsByReason(rows []string) []string {
+	var order []string
+	by := map[string][]string{}
+	for _, r := range rows {
+		head, why := r, ""
+		if i := strings.Index(r, " → "); i >= 0 {
+			if j := strings.Index(r[i:], " ("); j >= 0 {
+				head, why = r[:i+j], r[i+j:]
+			}
+		}
+		if _, ok := by[why]; !ok {
+			order = append(order, why)
+		}
+		by[why] = append(by[why], head)
+	}
+	var out []string
+	for _, why := range order {
+		out = append(out, strings.Join(by[why], ", ")+why)
+	}
+	return out
 }
 
 // missingGroupsText: the planner's missing groups, those on the model's text path apart from those
