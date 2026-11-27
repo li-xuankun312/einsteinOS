@@ -690,3 +690,21 @@ func TestAMissingRowOfNoPlannerGroupIsGivenItsGroup(t *testing.T) {
 		t.Fatalf("got %q", r)
 	}
 }
+
+// 11/27 12:19:20 the map's 242 rows were read as 185, and the rows the reading left out were not
+// among those said not to count: each is named, with the line read in its place
+func TestARowALaterRowReplacesIsNamed(t *testing.T) {
+	ws := t.TempDir()
+	putTree(t, ws, map[string]string{
+		".einsteinOS/port/pcd027bc02f.tsv": "src/kernels/cuda/gdn.cu\tgdn_step_kernel\tsrc/kernels/gpu/gdn_core.cu\tgdn_step_kernel\n",
+		"src/kernels/gpu/gdn_core.cu":      "__global__ void gdn_step_kernel(float* s) {}\n",
+		".einsteinOS/port/uint.tsv": "src/kernels/cuda/gdn.cu\tgdn_step_kernel\tsrc/ilu_gdn_prep.cu\trow_norm_kernel\n" +
+			"src/kernels/cuda/gdn.cu\tgdn_step_kernel\tsrc/ix_gdn.cu\tgdn_step_kernel\n" +
+			"src/kernels/cuda/gdn.cu\tgdn_step_kernel\tsrc/ix_gdn.cu\tgdn_step_kernel\n",
+	})
+	_, _, refused := integrationPortRows(ws, "uint", readPortMap(ws, "uint"))
+	all := strings.Join(refused, "\n")
+	if len(refused) != 1 || !strings.Contains(all, "src/kernels/cuda/gdn.cu gdn_step_kernel → src/ilu_gdn_prep.cu row_norm_kernel (line 3 of the map gives the same column 1 and 2, and the kernel reads that line for them)") {
+		t.Fatalf("%q", refused)
+	}
+}

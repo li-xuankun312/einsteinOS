@@ -570,8 +570,35 @@ func integrationPortRows(ws, unitID string, pm map[string]portEntry) (map[string
 			refused = append(refused, e.refFile+" "+e.refName+" → "+e.file+" "+e.name+why+")")
 		}
 	}
+	refused = append(refused, portRowsReplaced(ws, unitID)...)
 	sort.Strings(refused)
 	return out, kernels, refused
+}
+
+// %[1]d the line of the map the kernel reads for the row's column 1 and 2
+const portRowReplacedFmt = " (line %[1]d of the map gives the same column 1 and 2, and the kernel reads that line for them)"
+
+// portRowsReplaced: the rows of unitID's map that a later row with the same column 1 and 2 and
+// another column 3 or 4 replaces — readPortMap keeps one row for each reference definition, the
+// last. 11/27 12:19:20 uintegration01529aaa82b9's map held 242 rows and was read as 185: src/
+// kernels/cuda/gdn.cu gdn_step_kernel was written for eight kernels, shared_expert.cu
+// swiglu_kernel for eight, and kernel_unported held five kernels of src/ilu_gdn_prep.cu each
+// with a row, those rows named nowhere among the rows that did not count.
+func portRowsReplaced(ws, unitID string) []string {
+	lines, nums := readPortLines(ws, unitID)
+	last := map[string]int{}
+	for i, e := range lines {
+		last[e.refFile+"\t"+e.refName] = i
+	}
+	var out []string
+	for i, e := range lines {
+		j := last[e.refFile+"\t"+e.refName]
+		if j == i || (lines[j].file == e.file && lines[j].name == e.name) {
+			continue
+		}
+		out = append(out, e.refFile+" "+e.refName+" → "+e.file+" "+e.name+fmt.Sprintf(portRowReplacedFmt, nums[j]))
+	}
+	return out
 }
 
 // integrationPortedRefs: for the integration unit, the reference definitions another unit's port
