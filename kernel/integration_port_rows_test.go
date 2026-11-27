@@ -708,3 +708,29 @@ func TestARowALaterRowReplacesIsNamed(t *testing.T) {
 		t.Fatalf("%q", refused)
 	}
 }
+
+// 11/27 16:08:02 kernel_unported passed on rows each giving a kernel of the integration unit a
+// reference kernel no other row named — qsa.cu qsa_attend_kernel → src/ilu_gdn_prep.cu
+// out_norm_kernel — and nothing measured whether they were one kernel: a row counts only when its
+// kernel takes the types the unit's kernel for column 2 takes
+func TestARowCountsOnlyWhenItsKernelTakesTheUnitsKernelsTypes(t *testing.T) {
+	ws := t.TempDir()
+	putTree(t, ws, map[string]string{
+		".einsteinOS/port/u02c65ed515.tsv": "src/kernels/cuda/qsa.cu\tqsa_attend_kernel\tsrc/ilu_qsa_step.cu\tqsa_attend_kernel\n",
+		"src/ilu_qsa_step.cu":              "__global__ void qsa_attend_kernel(const float* q, const uint16_t* __restrict__ kpool, int n) {}\n",
+		".einsteinOS/port/pcd027bc02f.tsv": "src/kernels/cuda/gdn.cu\tgdn_step_kernel\tsrc/kernels/gpu/gdn_core.cu\tgdn_step_kernel\n",
+		"src/kernels/gpu/gdn_core.cu":      "__global__ void gdn_step_kernel(float* __restrict__ s, int cols) {}\n",
+		"src/ilu_gdn_prep.cu":              "__global__ void out_norm_kernel(const float* o, float eps) {}\n",
+		"src/ix_gdn.cu":                    "__global__ void gdn_step_kernel(float* state, int n) {}\n",
+		".einsteinOS/port/uint.tsv": "src/kernels/cuda/qsa.cu\tqsa_attend_kernel\tsrc/ilu_gdn_prep.cu\tout_norm_kernel\n" +
+			"src/kernels/cuda/gdn.cu\tgdn_step_kernel\tsrc/ix_gdn.cu\tgdn_step_kernel\n",
+	})
+	_, rk, refused := integrationPortRows(ws, "uint", readPortMap(ws, "uint"))
+	if !rk["src/ix_gdn.cu"]["gdn_step_kernel"] || rk["src/ilu_gdn_prep.cu"]["out_norm_kernel"] {
+		t.Fatalf("%v", rk)
+	}
+	want := "src/kernels/cuda/qsa.cu qsa_attend_kernel → src/ilu_gdn_prep.cu out_norm_kernel (src/ilu_gdn_prep.cu out_norm_kernel takes (const float*, float); u02c65ed515 ports qsa_attend_kernel as src/ilu_qsa_step.cu qsa_attend_kernel, which takes (const float*, const uint16_t*, int))"
+	if len(refused) != 1 || refused[0] != want {
+		t.Fatalf("%q", refused)
+	}
+}

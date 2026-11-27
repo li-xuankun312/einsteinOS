@@ -181,3 +181,87 @@ func shadowedKernels(perFile map[string][]string, portKernels map[string]bool) [
 	sort.Strings(out)
 	return out
 }
+
+var (
+	paramTokenRe = regexp.MustCompile(`[A-Za-z_]\w*|::|\*|&|\[[^\]]*\]`)
+	// builtinTypeWords: the words a parameter's type may end with when it is written unnamed
+	builtinTypeWords = map[string]bool{"int": true, "char": true, "short": true, "long": true, "float": true, "double": true,
+		"unsigned": true, "signed": true, "bool": true, "void": true, "half": true, "__half": true, "__nv_bfloat16": true}
+	paramQualifiers = map[string]bool{"__restrict__": true, "__restrict": true, "restrict": true}
+)
+
+// kernelParamTypes: the types of the parameters of the __global__ kernel name in CUDA source
+// text, in order, each without its parameter's name, its default and __restrict__ — "const
+// float*", "int" — and whether the kernel was found with its parameter list closed.
+func kernelParamTypes(src, name string) ([]string, bool) {
+	src = blockCommentRe.ReplaceAllString(src, " ")
+	src = lineCommentRe.ReplaceAllString(src, " ")
+	src = launchBoundsRe.ReplaceAllString(src, " ")
+	re := regexp.MustCompile(`\b__global__\b[^;{}()]*?\b` + regexp.QuoteMeta(name) + `\s*\(`)
+	loc := re.FindStringIndex(src)
+	if loc == nil {
+		return nil, false
+	}
+	depth, start, end := 1, loc[1], -1
+	for i := loc[1]; i < len(src) && end < 0; i++ {
+		switch src[i] {
+		case '(':
+			depth++
+		case ')':
+			if depth--; depth == 0 {
+				end = i
+			}
+		}
+	}
+	if end < 0 {
+		return nil, false
+	}
+	var params []string
+	depth, from := 0, start
+	for i := start; i <= end; i++ {
+		if i == end || (src[i] == ',' && depth == 0) {
+			params = append(params, src[from:i])
+			from = i + 1
+			continue
+		}
+		switch src[i] {
+		case '(', '<', '[':
+			depth++
+		case ')', '>', ']':
+			depth--
+		}
+	}
+	var out []string
+	for _, p := range params {
+		if i := strings.Index(p, "="); i >= 0 {
+			p = p[:i]
+		}
+		var toks []string
+		for _, t := range paramTokenRe.FindAllString(p, -1) {
+			if !paramQualifiers[t] {
+				toks = append(toks, t)
+			}
+		}
+		if len(toks) == 0 {
+			continue
+		}
+		if n := len(toks); n > 1 && isIdentWord(toks[n-1]) && !builtinTypeWords[toks[n-1]] && toks[n-2] != "::" {
+			toks = toks[:n-1]
+		}
+		var b strings.Builder
+		for i, t := range toks {
+			if i > 0 && isIdentWord(t) && isIdentWord(toks[i-1]) {
+				b.WriteByte(' ')
+			}
+			b.WriteString(t)
+		}
+		if s := b.String(); s != "void" || len(params) > 1 {
+			out = append(out, s)
+		}
+	}
+	return out, true
+}
+
+func isIdentWord(t string) bool {
+	return t != "" && (t[0] == '_' || (t[0] >= 'A' && t[0] <= 'Z') || (t[0] >= 'a' && t[0] <= 'z'))
+}

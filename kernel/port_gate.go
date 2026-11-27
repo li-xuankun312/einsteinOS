@@ -476,6 +476,8 @@ func integrationPortRows(ws, unitID string, pm map[string]portEntry) (map[string
 		}
 	}
 	refKernels := map[string]bool{}
+	// reference name -> each unit's kernel for it: the unit, its file, the kernel's name
+	portedAs := map[string][][3]string{}
 	// file -> the rows that count for it: what column 2 holds, measured from the other units' maps
 	countsFor := map[string][]string{}
 	// a reference function another unit's map ports into something that is no kernel
@@ -490,6 +492,7 @@ func integrationPortRows(ws, unitID string, pm map[string]portEntry) (map[string
 		for _, e := range readPortMap(ws, u) {
 			if ks[symbolBase(e.name)] {
 				refKernels[e.refName] = true
+				portedAs[e.refName] = append(portedAs[e.refName], [3]string{u, e.file, e.name})
 				countsFor[e.file] = append(countsFor[e.file], fmt.Sprintf(portRowCountsLineFmt, e.refFile, e.refName, u, e.name))
 			} else if _, had := portedNotKernel[e.refName]; !had {
 				portedNotKernel[e.refName] = fmt.Sprintf(portRefPortedFmt, u, e.file, e.name)
@@ -535,6 +538,10 @@ func integrationPortRows(ws, unitID string, pm map[string]portEntry) (map[string
 					fmt.Sprintf(portMissingGroupsFmt, len(groups)))
 			}
 		case refKernels[e.refName]:
+			if why := portRowParamsDiffer(ws, e, portedAs[e.refName]); why != "" {
+				refused = append(refused, e.refFile+" "+e.refName+" → "+e.file+" "+e.name+why)
+				break
+			}
 			count(e)
 		case e.refFile == e.file && e.refName == e.name:
 			// 11/25 06:27:29 165 of the 193 rows that did not count named a file and function of
@@ -573,6 +580,43 @@ func integrationPortRows(ws, unitID string, pm map[string]portEntry) (map[string
 	refused = append(refused, portRowsReplaced(ws, unitID)...)
 	sort.Strings(refused)
 	return out, kernels, refused
+}
+
+// %[1]s the row's file, %[2]s its kernel, %[3]s its parameters' types, %[4]s the unit, %[5]s
+// the reference name, %[6]s the unit's file, %[7]s its kernel, %[8]s that kernel's parameters' types
+const portRowParamsFmt = " (%[1]s %[2]s takes (%[3]s); %[4]s ports %[5]s as %[6]s %[7]s, which takes (%[8]s))"
+
+// portRowParamsDiffer: why a row of the integration map whose column 2 is a reference kernel a
+// unit ported does not count — the kernel column 4 names takes parameters of other types than
+// every kernel a unit ported for column 2 — or "" when one takes the same types, or when either
+// side cannot be read. 11/27 16:08:02 kernel_unported passed for uintegration01529aaa82b9 on
+// rows such as qsa.cu qsa_attend_kernel → src/ilu_gdn_prep.cu out_norm_kernel and
+// s2_expert_grouped.cu down_grouped_kernel → qsa_bf16_layer.cu qsa_kv_append_kernel, each
+// kernel given a reference kernel no other row named, and nothing measured whether the two were
+// one kernel.
+func portRowParamsDiffer(ws string, e portEntry, ported [][3]string) string {
+	read := func(file, name string) ([]string, bool) {
+		b, err := os.ReadFile(filepath.Join(ws, filepath.FromSlash(file)))
+		if err != nil {
+			return nil, false
+		}
+		return kernelParamTypes(string(b), symbolBase(name))
+	}
+	mine, ok := read(e.file, e.name)
+	if !ok {
+		return ""
+	}
+	why := ""
+	for _, p := range ported {
+		theirs, ok := read(p[1], p[2])
+		if !ok || strings.Join(theirs, ", ") == strings.Join(mine, ", ") {
+			return ""
+		}
+		if why == "" {
+			why = fmt.Sprintf(portRowParamsFmt, e.file, e.name, strings.Join(mine, ", "), p[0], e.refName, p[1], p[2], strings.Join(theirs, ", "))
+		}
+	}
+	return why
 }
 
 // %[1]d the line of the map the kernel reads for the row's column 1 and 2
