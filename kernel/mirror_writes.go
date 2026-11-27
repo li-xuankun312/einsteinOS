@@ -370,6 +370,9 @@ func (u *mirrorUnit) undo(conv string, before, after map[string]mirrorStat) []st
 			if (whose == mirrorSharedFmt || whose == mirrorUnitsOwnFmt) && !w.Removed && (u.onlyAdded(w.File) || u.takesOutOnlyAttemptLines(w.File, conv)) {
 				continue // lines added to a shared file, or lines the attempt put in taken out again
 			}
+			if d := u.portRefTakenOut(w.File); d != "" {
+				whose = fmt.Sprintf(mirrorPortRefFmt, d) // the branch holding no port map, it is not why
+			}
 			if w.Removed || before[w.File].size > 0 {
 				if u.writeBack(w.File) {
 					out = append(out, w.File+" ("+whose+")")
@@ -934,6 +937,24 @@ func partSharedBlock(unitID string) string {
 	return fmt.Sprintf(partSharedFmt, mirrorSharedFmt, len(files), b.String(), len(u.base))
 }
 
+// %[1]s the reference definition whose row was taken out
+const mirrorPortRefFmt = "the port map, shared by all the unit's parts: a part takes out no row of a reference definition of the unit's, port_incomplete's, while no other row maps it — its command left %[1]s with none"
+
+// portRefTakenOut: for the unit's port map, a reference definition a row of the kept map maps and
+// no row of the map as it is now does ("" when none, or for another file). Called with u.mu held.
+func (u *mirrorUnit) portRefTakenOut(f string) string {
+	if f != PortMapPath(u.unit) {
+		return ""
+	}
+	was, ok := u.content[f]
+	if !ok {
+		return ""
+	}
+	now, _ := os.ReadFile(filepath.Join(u.dir, filepath.FromSlash(f)))
+	d, _ := refRowTakenOut(portMapRefSymbols(u.unit), string(was), string(now))
+	return d
+}
+
 // takesOutOnlyAttemptLines: whether every line the file as it is now lacks of the kept one is a
 // line the attempt put in — not one of the branch the unit started from (or, that branch not
 // known, of the mirror as its conversations began). 11/25 16:03:11 and 16:22:14 the compile
@@ -947,6 +968,11 @@ func (u *mirrorUnit) takesOutOnlyAttemptLines(f, conv string) bool {
 	}
 	now, err := os.ReadFile(filepath.Join(u.dir, filepath.FromSlash(f)))
 	if err != nil {
+		return false
+	}
+	// the rows of the port map that map the unit's reference definitions, whether or not the
+	// branch holds the map (port_check_now.go)
+	if u.portRefTakenOut(f) != "" {
 		return false
 	}
 	var base []byte

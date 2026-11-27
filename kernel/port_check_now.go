@@ -95,3 +95,59 @@ func portMapRows(in GateInput) int {
 	}
 	return n
 }
+
+// The reference definitions of the integration unit's port map, keyed "<file>\t<name>" as its
+// rows write them: a part's command that leaves one of them with no row, where the map had one, is
+// written back (mirror_writes.go). 11/27 the branch the unit started from has no port map, so a
+// part could take out any row: at 08:09, 08:52 and 09:02 the map held none of the 168 rows
+// port_incomplete counts, the gdn part's command of 09:12:27 put them back, and the qsa part's of
+// 09:31:45 took them out again.
+var (
+	portSymsMu sync.Mutex
+	portSyms   = map[string]map[string]bool{}
+)
+
+// registerPortSymbols sets (nil clears) unitID's reference definitions.
+func registerPortSymbols(unitID string, syms []RefSymbol) {
+	portSymsMu.Lock()
+	defer portSymsMu.Unlock()
+	if syms == nil {
+		delete(portSyms, unitID)
+		return
+	}
+	m := map[string]bool{}
+	for _, s := range syms {
+		m[s.File+"\t"+s.Name] = true
+	}
+	portSyms[unitID] = m
+}
+
+// portMapRefSymbols: unitID's registered reference definitions (nil when none).
+func portMapRefSymbols(unitID string) map[string]bool {
+	portSymsMu.Lock()
+	defer portSymsMu.Unlock()
+	return portSyms[unitID]
+}
+
+// portRowKey: "<column 1>\t<column 2>" of a port map line ("" for a line that is no row).
+func portRowKey(line string) string {
+	f := strings.Split(strings.TrimRight(line, "\r"), "\t")
+	if len(f) < 4 {
+		return ""
+	}
+	return strings.TrimSpace(f[0]) + "\t" + strings.TrimSpace(f[1])
+}
+
+// refRowTakenOut: a reference definition of refs that a row of was maps and no row of now does.
+func refRowTakenOut(refs map[string]bool, was, now string) (string, bool) {
+	held := map[string]bool{}
+	for _, l := range strings.Split(now, "\n") {
+		held[portRowKey(l)] = true
+	}
+	for _, l := range strings.Split(was, "\n") {
+		if k := portRowKey(l); k != "" && refs[k] && !held[k] {
+			return strings.Replace(k, "\t", " ", 1), true
+		}
+	}
+	return "", false
+}

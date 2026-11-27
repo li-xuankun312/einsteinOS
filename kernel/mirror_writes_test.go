@@ -837,3 +837,65 @@ func TestAPartTakesOutOfASharedFileOnlyTheLinesItPutIn(t *testing.T) {
 		t.Fatalf("a part could not take out its own row: %q", got)
 	}
 }
+
+// 11/27 the branch the unit started from had no port map, and a part could take any row out of
+// it: at 08:09, 08:52 and 09:02 the map held none of the 168 rows port_incomplete counts, the gdn
+// part's command of 09:12:27 put them back and the qsa part's of 09:31:45 took them out again. A
+// part's command that leaves a reference definition with no row is written back; the rows it puts
+// in, and those mapping no reference definition, it may take out
+func TestAPartLeavesTheRowsOfTheReferenceDefinitions(t *testing.T) {
+	resetMirrorUnits()
+	defer resetMirrorUnits()
+	defer registerPortSymbols("uint", nil)
+	defer func() {
+		mirrorBranchMu.Lock()
+		delete(mirrorBranch, "uint")
+		delete(mirrorBranchAt, "uint")
+		mirrorBranchMu.Unlock()
+	}()
+	clone := t.TempDir()
+	git := func(args ...string) {
+		if out, err := exec.Command("git", append([]string{"-C", clone}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	git("init", "-q", "-b", "dev")
+	putTree(t, clone, map[string]string{"README": "x\n"})
+	git("add", ".")
+	git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "dev")
+	dir := t.TempDir()
+	pm := ".einsteinOS/port/uint.tsv"
+	ref1 := "src/kernels/gdn_parity.cpp\tcheck\ttests/k39_integration/gdn_parity.cu\tcheck"
+	ref2 := "src/core/device_main.cpp\tmain\tsrc/rt/device_main.cpp\tmain"
+	vis := "missing:model.visual.pos_embed.weight\tgate_kernel\tsrc/ilu_gdn_prep.cu\tgate_kernel"
+	putTree(t, dir, map[string]string{pm: ref1 + "\n" + ref2 + "\n" + vis + "\n"})
+	noteMirrorBranch("uint", clone, "dev")
+	registerPortSymbols("uint", []RefSymbol{{File: "src/kernels/gdn_parity.cpp", Name: "check"}, {File: "src/core/device_main.cpp", Name: "main"}})
+	noteMirrorConv("uint", dir, "35f20970", "")
+	noteMirrorConv("uint", dir, "ad448056", "qsa: runs one QSA sub-layer")
+	read := func() string { b, _ := os.ReadFile(filepath.Join(dir, pm)); return string(b) }
+	write := func(conv, s string) {
+		MirrorCommand(conv, func() string { os.WriteFile(filepath.Join(dir, pm), []byte(s), 0o644); return "" })
+	}
+	// the qsa part writes the map over without ref2's row: written back
+	said := MirrorCommand("ad448056", func() string {
+		os.WriteFile(filepath.Join(dir, pm), []byte(ref1+"\n"+vis+"\nsrc/kernels/cuda/gdn.cu\tgdn_step_kernel\tsrc/ix_gdn.cu\tgdn_step_kernel\n"), 0o644)
+		return ""
+	})
+	if !strings.Contains(said, "its command left src/core/device_main.cpp main with none") || strings.Contains(said, "none the branch the unit started from holds") {
+		t.Fatalf("the part was told: %q", said)
+	}
+	if got := read(); !strings.Contains(got, ref2) || strings.Contains(got, "gdn_step_kernel") {
+		t.Fatalf("a reference definition's row taken out and kept: %q", got)
+	}
+	// it takes out a row mapping no reference definition, and keeps ref2 mapped by another row
+	write("ad448056", ref1+"\nsrc/core/device_main.cpp\tmain\tsrc/core/device_main.cpp\tmain\n")
+	if got := read(); strings.Contains(got, "missing:model.visual") || strings.Contains(got, ref2) {
+		t.Fatalf("a row of no reference definition, or a definition mapped again, written back: %q", got)
+	}
+	// the unit's own conversation is no part
+	write("35f20970", vis+"\n")
+	if got := read(); got != vis+"\n" {
+		t.Fatalf("the unit's conversation was written back: %q", got)
+	}
+}

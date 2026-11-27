@@ -663,6 +663,7 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 		if unit.Integration {
 			// a change of its port map is answered at once by the map's gates (port_check_now.go)
 			portReq := r.shown(unit)
+			registerPortSymbols(unit.ID, portReq.Symbols)
 			registerPortCheck(unit.ID, func() string {
 				changed, _, err := treeDelta(mirror, base)
 				if err != nil {
@@ -686,6 +687,7 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 			UnregisterPreVerify(role)
 			registerMirrorVerify(unit.ID, nil)
 			registerPortCheck(unit.ID, nil)
+			registerPortSymbols(unit.ID, nil)
 			log.Printf("dev_from_theorems: %s unit %s fork failed (try %d/5): %v", r.repo, unit.ID, try, ferr)
 			continue
 		}
@@ -706,6 +708,7 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 		})
 		registerMirrorVerify(unit.ID, nil)
 		registerPortCheck(unit.ID, nil)
+		registerPortSymbols(unit.ID, nil)
 		UnregisterPreVerify(role)
 		if m := getMeta(child); m != nil && m.ConvID != "" {
 			convID = m.ConvID
