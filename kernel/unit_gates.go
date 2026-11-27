@@ -128,6 +128,11 @@ const (
 	gateKernelUnportedRowsFmt = "; %[1]d row(s) of the port map do not count: %[2]s — a kernel for a tensor group the planner's missing lines give the integration unit is written in a row whose first column is %[3]s<group>"
 	// %[1]d files, %[2]s each with its kernels, %[3]s the port map
 	gateKernelUnportedFmt = "kernel_unported: %[1]d file(s) define __global__ kernels and are neither test files nor files the unit's port map %[3]s writes a counterpart into: %[2]s"
+	// %[1]d files, %[2]s them with their kernels, %[3]s the map, %[4]d the planner's missing groups,
+	// none of them on the model's text path
+	gateKernelUnportedIntegrationNoPathFmt = "kernel_unported: %[1]d file(s) outside the test files define __global__ kernels for which no row of the unit's port map %[3]s counts — a row counts for the kernel its column 4 names, when its column 2 is a reference kernel another unit's port map ports as a kernel; none of the %[4]d groups the planner's missing lines name is on the model's text path, and no row with column 1 missing:<group> counts: %[2]s"
+	// %[1]d rows, %[2]s them — the planner's missing groups all off the model's text path
+	gateKernelUnportedRowsNoPathFmt = "; %[1]d row(s) of the port map do not count: %[2]s"
 	// %[1]d files, %[2]s them with their kernels, %[3]s the map, %[4]s the missing prefix
 	gateKernelUnportedIntegrationFmt = "kernel_unported: %[1]d file(s) outside the test files define __global__ kernels for which no row of the unit's port map %[3]s counts — a row counts for the kernel its column 4 names, when its column 2 is a reference kernel another unit's port map ports as a kernel, or its column 1 is %[4]s<group> of a group on the model's text path: %[2]s"
 	// %[1]d groups, %[2]s them
@@ -244,6 +249,13 @@ func unitGatesAll(in GateInput) (kinds, texts []string) {
 				each = append(each, fmt.Sprintf(gateKernelUnportedFileFmt, f, strings.Join(ks, " ")))
 			}
 			t := fmt.Sprintf(gateKernelUnportedFmt, len(files), strings.Join(each, "; "), PortMapPath(in.UnitID))
+			// none of the planner's missing groups on the model's text path: 11/27 08:09 to 09:31
+			// five verifications held the same 12 files, the text's first line and the line after
+			// the refused rows each giving missing:<group> as a row that counts, its end giving
+			// 21 groups, 0 on the path; the port map came to hold 44 missing:model.visual.… rows
+			// at 09:31 and missing:model.language_model.layers.{i}.linear_attn.A_log and the like at
+			// 09:22, none counting
+			noPath := in.RowKernels != nil && len(in.MissingGroups) > 0 && missingOnPath(in.MissingGroups, in.MissingOff) == 0
 			if in.RowKernels != nil {
 				// what a row of the integration unit's map counts for (integrationPortRows): 11/27
 				// 04:58 to 05:07 its conversation took 289 rows out of the map, port_incomplete's 168
@@ -251,9 +263,16 @@ func unitGatesAll(in GateInput) (kinds, texts []string) {
 				// gate_kernel and fifteen like it — rows writing into the held files, as the line
 				// above read, of which none counts
 				t = fmt.Sprintf(gateKernelUnportedIntegrationFmt, len(files), strings.Join(each, "; "), PortMapPath(in.UnitID), integrationMissingPrefix)
+				if noPath {
+					t = fmt.Sprintf(gateKernelUnportedIntegrationNoPathFmt, len(files), strings.Join(each, "; "), PortMapPath(in.UnitID), len(in.MissingGroups))
+				}
 			}
 			if into, _ := refusedRowsIntoHeld(in.PortFilesRefused, files); len(into) > 0 {
-				t += fmt.Sprintf(gateKernelUnportedRowsFmt, len(into), refusedRowsText(in.PortFilesRefused, files), integrationMissingPrefix)
+				if noPath {
+					t += fmt.Sprintf(gateKernelUnportedRowsNoPathFmt, len(into), refusedRowsText(in.PortFilesRefused, files))
+				} else {
+					t += fmt.Sprintf(gateKernelUnportedRowsFmt, len(into), refusedRowsText(in.PortFilesRefused, files), integrationMissingPrefix)
+				}
 			}
 			var into []string
 			for _, f := range files {
@@ -891,6 +910,17 @@ func groupRowsByReason(rows []string) []string {
 		out = append(out, strings.Join(by[why], ", ")+why)
 	}
 	return out
+}
+
+// missingOnPath: how many of the planner's missing groups are on the model's text path.
+func missingOnPath(groups []string, off map[string]bool) int {
+	n := 0
+	for _, g := range groups {
+		if !off[g] {
+			n++
+		}
+	}
+	return n
 }
 
 // missingGroupsText: the planner's missing groups, those on the model's text path apart from those

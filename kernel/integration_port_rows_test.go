@@ -637,3 +637,33 @@ func TestKernelUnportedSaysWhatAnIntegrationRowCountsFor(t *testing.T) {
 		t.Fatalf("another unit: %v", texts)
 	}
 }
+
+// 11/27 08:09 to 09:31 five verifications held the same 12 files: the first line of kernel_unported
+// and the line after its refused rows gave missing:<group> as a row that counts, its end gave the
+// planner's 21 missing groups, 0 of them on the model's text path, and the map came to hold
+// missing:model.visual.… and missing:model.language_model.… rows, none counting. With no group on
+// the path neither line gives that row
+func TestKernelUnportedGivesNoMissingRowWhenNoGroupIsOnThePath(t *testing.T) {
+	in := GateInput{UnitID: "uint", PortFiles: map[string]bool{}, RowKernels: map[string]map[string]bool{},
+		PortFilesRefused: []string{"missing:model.visual.pos_embed.weight → src/ilu_gdn_prep.cu gate_kernel" + portMissingOffFmt},
+		MissingGroups:    []string{"model.visual.pos_embed.weight", "mtp.fc.weight"},
+		MissingOff:       map[string]bool{"model.visual.pos_embed.weight": true, "mtp.fc.weight": true},
+		Kernels:          map[string][]string{"src/ilu_gdn_prep.cu": {"gate_kernel"}}}
+	_, texts := unitGatesAll(in)
+	want := "kernel_unported: 1 file(s) outside the test files define __global__ kernels for which no row of the unit's port map .einsteinOS/port/uint.tsv counts — a row counts for the kernel its column 4 names, when its column 2 is a reference kernel another unit's port map ports as a kernel; none of the 2 groups the planner's missing lines name is on the model's text path, and no row with column 1 missing:<group> counts: src/ilu_gdn_prep.cu (gate_kernel)"
+	if len(texts) == 0 || !strings.HasPrefix(texts[0], want) {
+		t.Fatalf("%v", texts)
+	}
+	if strings.Contains(texts[0], "is written in a row whose first column is missing:<group>") {
+		t.Fatalf("the line after the rows still gives the row: %v", texts[0])
+	}
+	if !strings.Contains(texts[0], "; 1 row(s) of the port map do not count: missing:model.visual.pos_embed.weight → src/ilu_gdn_prep.cu gate_kernel") {
+		t.Fatalf("the refused row: %v", texts[0])
+	}
+	// one group on the path: both lines give the row, as before
+	in.MissingOff = map[string]bool{"model.visual.pos_embed.weight": true}
+	_, texts = unitGatesAll(in)
+	if !strings.Contains(texts[0], "or its column 1 is missing:<group> of a group on the model's text path") || !strings.Contains(texts[0], "is written in a row whose first column is missing:<group>") {
+		t.Fatalf("one group on the path: %v", texts[0])
+	}
+}
