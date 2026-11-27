@@ -127,8 +127,8 @@ func TestTheReferencesProgramsAreGivenWithWhetherE2ERunsThem(t *testing.T) {
 		".einsteinOS/verify/uintegration/e2e.sh": "\"$BUILD/gr_parity_port\" --selftest\n",
 	})
 	got := strings.Join(refPrograms(ws), "\n")
-	want := "src/kernels/gr_parity.cpp main → tests/gr_parity_port.cpp main; .einsteinOS/verify/uintegration/e2e.sh names gr_parity_port\n" +
-		"src/program/generate.cpp main → src/driver/generate_cli.cpp main; no e2e.sh of the tree names generate_cli"
+	want := "src/kernels/gr_parity.cpp main → tests/gr_parity_port.cpp main; .einsteinOS/verify/uintegration/e2e.sh names gr_parity_port; no build.sh beside an e2e.sh names tests/gr_parity_port.cpp (0 other build.sh do)\n" +
+		"src/program/generate.cpp main → src/driver/generate_cli.cpp main; no e2e.sh of the tree names generate_cli; no build.sh beside an e2e.sh names src/driver/generate_cli.cpp (0 other build.sh do)"
 	if got != want {
 		t.Fatalf("%s", got)
 	}
@@ -777,5 +777,27 @@ func TestAVerifyScriptWritingARateIsAGate(t *testing.T) {
 	kinds, texts := unitGatesAll(GateInput{UnitID: "uint", RateLines: got})
 	if len(kinds) != 1 || kinds[0] != "rate_in_script" || !strings.Contains(texts[0], "rate_in_script: 1 line(s) of the unit's verify scripts write a rate in tok/s themselves") {
 		t.Fatalf("%v %q", kinds, texts)
+	}
+}
+
+// 11/27 src/driver/generate_cli.cpp, the counterpart of the reference's generate.cpp, was named by
+// no build.sh of the integration unit and printed tokens: from a synthetic backend, no generated:
+// line: each program is given which build.sh name it and whether it prints generated:
+func TestTheReferencesProgramsAreGivenWhetherBuiltAndWhetherTheyPrintGenerated(t *testing.T) {
+	ws := t.TempDir()
+	putTree(t, ws, map[string]string{
+		".einsteinOS/port/ub25e8eba7f.tsv":         "src/program/generate.cpp\tmain\tsrc/driver/generate_cli.cpp\tmain\n",
+		"src/driver/generate_cli.cpp":              "int main() {\n  std::printf(\"tokens: %s\\n\", t);\n}\n",
+		".einsteinOS/port/u2.tsv":                  "src/program/bench.cpp\tmain\tsrc/driver/bench_cli.cpp\tmain\n",
+		"src/driver/bench_cli.cpp":                 "int main() {\n  // generated: below\n  std::printf(\"generated: %s\\n\", ids);\n}\n",
+		".einsteinOS/verify/ub25e8eba7f/build.sh":  "clang++ src/driver/bench_cli.cpp -o build/bench_cli\n",
+		".einsteinOS/verify/uintegration/build.sh": "clang++ src/driver/bench_cli.cpp\n",
+		".einsteinOS/verify/uintegration/e2e.sh":   "./build/bench_cli\n",
+	})
+	got := strings.Join(refPrograms(ws), "\n")
+	want := "src/program/bench.cpp main → src/driver/bench_cli.cpp main; .einsteinOS/verify/uintegration/e2e.sh names bench_cli; .einsteinOS/verify/uintegration/build.sh, beside an e2e.sh, names src/driver/bench_cli.cpp; src/driver/bench_cli.cpp prints \"generated:\" at line 3\n" +
+		"src/program/generate.cpp main → src/driver/generate_cli.cpp main; no e2e.sh of the tree names generate_cli; no build.sh beside an e2e.sh names src/driver/generate_cli.cpp (0 other build.sh do); src/driver/generate_cli.cpp prints no \"generated:\" line"
+	if got != want {
+		t.Fatalf("%s", got)
 	}
 }

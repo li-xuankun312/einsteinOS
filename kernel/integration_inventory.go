@@ -249,9 +249,64 @@ func refPrograms(tree string) []string {
 					break
 				}
 			}
-			out = append(out, line)
+			out = append(out, line+refProgramBuiltText(tree, e.file, exe)+refProgramPrintsText(tree, e.file))
 		}
 	}
 	sort.Strings(out)
 	return out
+}
+
+const (
+	// %[1]s the build.sh beside an e2e.sh, %[2]s the counterpart's source
+	refProgramBuiltFmt = "; %[1]s, beside an e2e.sh, names %[2]s"
+	// %[1]s the counterpart's source, %[2]d the other build.sh naming it
+	refProgramNotBuiltFmt = "; no build.sh beside an e2e.sh names %[1]s (%[2]d other build.sh do)"
+	// %[1]s the counterpart's source, %[2]d the line
+	refProgramPrintsFmt = "; %[1]s prints \"generated:\" at line %[2]d"
+	// %[1]s the counterpart's source
+	refProgramNoPrintFmt = "; %[1]s prints no \"generated:\" line"
+)
+
+// refProgramBuiltText: whether a build.sh under .einsteinOS/verify with an e2e.sh beside it — the
+// build whose output that e2e.sh runs — names the counterpart's source (its base name) or its
+// executable, and how many other build.sh do. 11/27 36 build.sh of the units named
+// src/driver/generate_cli.cpp and uintegration01529aaa82b9's, beside its e2e.sh, did not.
+func refProgramBuiltText(tree, src, exe string) string {
+	builds, _ := filepath.Glob(filepath.Join(tree, ".einsteinOS", "verify", "*", "build.sh"))
+	re := regexp.MustCompile(`(^|[^A-Za-z0-9_.-])(` + regexp.QuoteMeta(filepath.Base(src)) + `|` + regexp.QuoteMeta(exe) + `)([^A-Za-z0-9_-]|$)`)
+	var beside []string
+	others := 0
+	for _, b := range builds {
+		body, err := os.ReadFile(b)
+		if err != nil || !re.Match(body) {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(filepath.Dir(b), "e2e.sh")); err == nil {
+			rel, _ := filepath.Rel(tree, b)
+			beside = append(beside, filepath.ToSlash(rel))
+		} else {
+			others++
+		}
+	}
+	if len(beside) == 0 {
+		return fmt.Sprintf(refProgramNotBuiltFmt, src, others)
+	}
+	sort.Strings(beside)
+	return fmt.Sprintf(refProgramBuiltFmt, strings.Join(beside, ", "), src)
+}
+
+// refProgramPrintsText: whether the counterpart's source writes "generated:", the line the kernel
+// measures the rate by. 11/27 src/driver/generate_cli.cpp ran its decode loop on the synthetic
+// backend (synthetic_drive) and printed tokens:, rows: and positions:, and no generated: line.
+func refProgramPrintsText(tree, src string) string {
+	b, err := os.ReadFile(filepath.Join(tree, filepath.FromSlash(src)))
+	if err != nil {
+		return ""
+	}
+	for i, l := range strings.Split(string(b), "\n") {
+		if printsGeneratedRe.MatchString(l) && !strings.HasPrefix(strings.TrimSpace(l), "//") {
+			return fmt.Sprintf(refProgramPrintsFmt, src, i+1)
+		}
+	}
+	return fmt.Sprintf(refProgramNoPrintFmt, src)
 }
