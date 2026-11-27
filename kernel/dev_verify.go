@@ -42,6 +42,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -622,6 +623,9 @@ func runUnitTestStage(ws, unitID, gpuUsable string, req UnitRequirements, change
 	}
 	res.Test = ttrace
 	res.TestExit, res.TestOut = code, tailText(out, 3000)
+	if code != 0 {
+		res.TestOut = smokeFailLines(out, 60) + res.TestOut
+	}
 	// a build that built nothing, and a test that ran executables of the workspace it did not
 	// write: what ran is what an earlier verification left (builtNothing)
 	if res.BuiltNothing != "" {
@@ -1259,4 +1263,47 @@ func CrashNote(line string) {
 	defer f.Close()
 	fmt.Fprintf(f, "%s %s\n", time.Now().Format("2006/01/02 15:04:05.000"), line)
 	f.Sync()
+}
+
+const smokeFailHead = "[THE LINES OF test.sh'S OUTPUT THAT TELL OF A FAILURE — every one of its whole output, each under the last \"== \" line before it]\n"
+const smokeFailEnd = "[THE END OF test.sh'S OUTPUT]\n"
+
+// smokeFailRe: a line telling of a failure — and not one counting none (failures=0, 0 failed).
+var (
+	smokeFailRe   = regexp.MustCompile(`(?i)(\bFAIL(ED|URE)?\b|failures?[=:]\s*[1-9]|\berror\b|\babort|segmentation fault|core dumped|assert|mismatch|\bnot ok\b|exit(ed)? (code |status )?[1-9])`)
+	smokeNoneRe   = regexp.MustCompile(`(?i)(failures?[=:]\s*0\b|\b0 (failed|failures|mismatches|errors)\b|\bPASS(ED)?\b)`)
+	smokeHeaderRe = regexp.MustCompile(`^== `)
+)
+
+// smokeFailLines: each line of a failed test.sh's output that tells of a failure, under the last
+// "== " line before it, at most max lines, then the head of its end ("" when no line does). 11/26
+// 19:55:15 the smoke_fail text kept the output's last 3000 bytes, the sections from pool_test to
+// suffix_drafter_test that all passed, and the test that failed was in none of it.
+func smokeFailLines(out string, max int) string {
+	var b strings.Builder
+	header, shown := "", ""
+	n := 0
+	for _, l := range strings.Split(out, "\n") {
+		if smokeHeaderRe.MatchString(l) {
+			header = l
+			continue
+		}
+		if !smokeFailRe.MatchString(l) || smokeNoneRe.MatchString(l) {
+			continue
+		}
+		if n >= max {
+			fmt.Fprintf(&b, "(+ more)\n")
+			break
+		}
+		if header != "" && header != shown {
+			b.WriteString(header + "\n")
+			shown = header
+		}
+		b.WriteString("  " + strings.TrimSpace(l) + "\n")
+		n++
+	}
+	if n == 0 {
+		return ""
+	}
+	return smokeFailHead + b.String() + smokeFailEnd
 }
