@@ -1,6 +1,7 @@
 package kernel
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -53,5 +54,19 @@ func TestPortIncompleteSaysWhenItPasses(t *testing.T) {
 	_, texts := unitGatesAll(GateInput{PortMissing: []string{"  a.cpp func main: no line in m"}, Req: UnitRequirements{Symbols: make([]RefSymbol, 168)}})
 	if all := strings.Join(texts, "\n"); !strings.Contains(all, "port_incomplete: 1 of the 168 definitions of the unit's reference files have no counterpart, and the gate passes when every one has:") {
 		t.Fatal(all)
+	}
+}
+
+// 11/26 19:55:06 test.sh exited 1 and at 19:55:15 the attempt failed on smoke_fail, and the log
+// held nothing of which test or why: the failed test.sh's end and the failure's text are logged
+func TestTheFailedTestShAndTheFailureTextAreLogged(t *testing.T) {
+	out := "ok gdn_parity\nFAIL moe_parity: rel_l1 0.31 > 1e-3\n"
+	got := fmt.Sprintf(preVerifySmokeLogFmt, "o/r", "uint", 1, truncStr(tailText(out, preVerifyGateTextLogMax), preVerifyGateTextLogMax))
+	if !strings.Contains(got, "(exit 1, its end): ") || !strings.Contains(got, "FAIL moe_parity") {
+		t.Fatal(got)
+	}
+	got = fmt.Sprintf(failureTextLogFmt, "o/r", "uint", "smoke_fail", "test.sh exit=1: FAIL moe_parity")
+	if !strings.Contains(got, "the smoke_fail failure's text, as the next attempt is given it: test.sh exit=1") {
+		t.Fatal(got)
 	}
 }

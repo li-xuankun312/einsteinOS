@@ -597,6 +597,10 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 			if o.Result.GateText != "" {
 				log.Print(gatesLogLine(r.repo, unit.ID, o.Result.GateText, o.Result.Gates, time.Now()))
 			}
+			if o.Result.Smoke == "fail" {
+				// 11/26 19:55:06 test.sh exited 1 and the log held nothing of why
+				log.Printf(preVerifySmokeLogFmt, r.repo, unit.ID, o.Result.TestExit, truncStr(tailText(o.Result.TestOut, preVerifyGateTextLogMax), preVerifyGateTextLogMax))
+			}
 			if o.Result.Compile == "fail" {
 				log.Printf(preVerifyCompileLogFmt, r.repo, unit.ID, failedCompileLogText(o.Result.BuildOut))
 			}
@@ -842,6 +846,10 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 		n := plan.Fail(unit.ID, DevFailure{Kind: kind, Text: text, BaseRef: next, BaseSHA: KernelPushed(r.devRepo, next)})
 		log.Printf("dev_from_theorems: %s unit %d/%d id=%s FAILED verification (%s), attempt %d; code on %q",
 			r.repo, idx+1, total, unit.ID, kind, n, out.Pushed)
+		// what failed, as the next attempt is given it: 11/26 19:55:15 uintegration01529aaa82b9
+		// FAILED verification (smoke_fail) with test.sh exiting 1, and nothing in the log said
+		// which test or why
+		log.Printf(failureTextLogFmt, r.repo, unit.ID, kind, truncStr(text, preVerifyGateTextLogMax))
 		devPlanSave(r.repo, r.devRepo, r.branch, plan, fmt.Sprintf("plan: %s %s attempt %d", unit.ID, kind, n))
 		return stdout, false, false
 	}
