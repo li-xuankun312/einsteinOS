@@ -619,3 +619,21 @@ func TestRowsRefusedForOneReasonAreGivenTheReasonOnce(t *testing.T) {
 		t.Fatalf("got\n%s", got)
 	}
 }
+
+// 11/27 04:58 to 05:07 the integration conversation took 289 rows out of its map and wrote rows of
+// gdn_parity.cpp main into the held files, as kernel_unported's first line read — "files the
+// unit's port map writes a counterpart into"; for the integration unit it says what a row counts
+// for
+func TestKernelUnportedSaysWhatAnIntegrationRowCountsFor(t *testing.T) {
+	in := GateInput{UnitID: "uint", PortFiles: map[string]bool{}, RowKernels: map[string]map[string]bool{},
+		Kernels: map[string][]string{"src/ilu_gdn_prep.cu": {"gate_kernel"}}}
+	_, texts := unitGatesAll(in)
+	want := "kernel_unported: 1 file(s) outside the test files define __global__ kernels for which no row of the unit's port map .einsteinOS/port/uint.tsv counts — a row counts for the kernel its column 4 names, when its column 2 is a reference kernel another unit's port map ports as a kernel, or its column 1 is missing:<group> of a group on the model's text path: src/ilu_gdn_prep.cu (gate_kernel)"
+	if len(texts) == 0 || !strings.HasPrefix(texts[0], want) {
+		t.Fatalf("%v", texts)
+	}
+	in.RowKernels = nil
+	if _, texts := unitGatesAll(in); !strings.HasPrefix(texts[0], "kernel_unported: 1 file(s) define __global__ kernels and are neither test files nor files") {
+		t.Fatalf("another unit: %v", texts)
+	}
+}

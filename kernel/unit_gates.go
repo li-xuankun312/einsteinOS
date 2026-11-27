@@ -128,6 +128,8 @@ const (
 	gateKernelUnportedRowsFmt = "; %[1]d row(s) of the port map do not count: %[2]s — a kernel for a tensor group the planner's missing lines give the integration unit is written in a row whose first column is %[3]s<group>"
 	// %[1]d files, %[2]s each with its kernels, %[3]s the port map
 	gateKernelUnportedFmt = "kernel_unported: %[1]d file(s) define __global__ kernels and are neither test files nor files the unit's port map %[3]s writes a counterpart into: %[2]s"
+	// %[1]d files, %[2]s them with their kernels, %[3]s the map, %[4]s the missing prefix
+	gateKernelUnportedIntegrationFmt = "kernel_unported: %[1]d file(s) outside the test files define __global__ kernels for which no row of the unit's port map %[3]s counts — a row counts for the kernel its column 4 names, when its column 2 is a reference kernel another unit's port map ports as a kernel, or its column 1 is %[4]s<group> of a group on the model's text path: %[2]s"
 	// %[1]d groups, %[2]s them
 	gateKernelUnportedGroupsFmt = "; the planner's missing lines give the integration unit %[1]d tensor group(s): %[2]s"
 	// %[1]s each held file with the reference kernels units ported into it
@@ -242,6 +244,14 @@ func unitGatesAll(in GateInput) (kinds, texts []string) {
 				each = append(each, fmt.Sprintf(gateKernelUnportedFileFmt, f, strings.Join(ks, " ")))
 			}
 			t := fmt.Sprintf(gateKernelUnportedFmt, len(files), strings.Join(each, "; "), PortMapPath(in.UnitID))
+			if in.RowKernels != nil {
+				// what a row of the integration unit's map counts for (integrationPortRows): 11/27
+				// 04:58 to 05:07 its conversation took 289 rows out of the map, port_incomplete's 168
+				// among them, and wrote src/kernels/gdn_parity.cpp main → src/ilu_gdn_prep.cu
+				// gate_kernel and fifteen like it — rows writing into the held files, as the line
+				// above read, of which none counts
+				t = fmt.Sprintf(gateKernelUnportedIntegrationFmt, len(files), strings.Join(each, "; "), PortMapPath(in.UnitID), integrationMissingPrefix)
+			}
 			if into, _ := refusedRowsIntoHeld(in.PortFilesRefused, files); len(into) > 0 {
 				t += fmt.Sprintf(gateKernelUnportedRowsFmt, len(into), refusedRowsText(in.PortFilesRefused, files), integrationMissingPrefix)
 			}
