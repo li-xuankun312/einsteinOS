@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"fmt"
+	"path"
 	"strings"
 	"testing"
 )
@@ -754,6 +755,27 @@ func TestAnIntegrationKernelWithAUnitKernelsNameAndTypesIsAGate(t *testing.T) {
 	}
 	kinds, texts := unitGatesAll(GateInput{UnitID: "uint", Copied: got})
 	if len(kinds) != 1 || kinds[0] != "kernel_copied" || !strings.HasPrefix(texts[0], "kernel_copied: 1 kernel(s) of the integration unit's files outside the tests have the name and the parameter types of a kernel another unit's port map ports into another file:\n  src/ix_gdn.cu gdn_step_kernel") {
+		t.Fatalf("%v %q", kinds, texts)
+	}
+}
+
+// 11/27 the integration unit's e2e.sh printed "decode: {:.1f} tok/s" from a rate it worked out of
+// shared_expert_parity's time: each line of its verify scripts writing tok/s, comments aside,
+// is a gate
+func TestAVerifyScriptWritingARateIsAGate(t *testing.T) {
+	ws := t.TempDir()
+	build, _ := devVerifyScripts("uint")
+	dir := path.Dir(build)
+	putTree(t, ws, map[string]string{
+		dir + "/e2e.sh":  "# prints tok/s at the end\nT0=$(date)\npython3 - <<EOF\nprint(\"decode: {:.1f} tok/s\".format(r))\nEOF\n",
+		dir + "/test.sh": "./bin/run\n",
+	})
+	got := scriptRateLines(ws, "uint")
+	if len(got) != 1 || got[0] != "  "+dir+"/e2e.sh:4: print(\"decode: {:.1f} tok/s\".format(r))" {
+		t.Fatalf("%q", got)
+	}
+	kinds, texts := unitGatesAll(GateInput{UnitID: "uint", RateLines: got})
+	if len(kinds) != 1 || kinds[0] != "rate_in_script" || !strings.Contains(texts[0], "rate_in_script: 1 line(s) of the unit's verify scripts write a rate in tok/s themselves") {
 		t.Fatalf("%v %q", kinds, texts)
 	}
 }

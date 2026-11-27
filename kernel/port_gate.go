@@ -1074,3 +1074,35 @@ func integrationCopiedKernels(ws, unitID string, kernels map[string][]string) []
 	sort.Strings(out)
 	return out
 }
+
+// scriptRateLines: the lines, comments aside, of the files of the unit's verify directory that
+// write "tok/s", each as <script>:<line>: <text>. 11/27 the integration unit's e2e.sh timed
+// shared_expert_parity, worked a decode rate out of that time, n_embd and n_layers in an inline
+// python ("dec_ms = ms_per * n_layers / 0.10") and printed "decode: {:.1f} tok/s" and a prefill
+// rate thirty times it, no process of the run printing a generated token.
+func scriptRateLines(ws, unitID string) []string {
+	build, _ := devVerifyScripts(unitID)
+	dir := filepath.Dir(filepath.Join(ws, filepath.FromSlash(build)))
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range ents {
+		if e.IsDir() {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			continue
+		}
+		for i, l := range strings.Split(string(b), "\n") {
+			t := strings.TrimSpace(l)
+			if strings.HasPrefix(t, "#") || strings.HasPrefix(t, "//") || !strings.Contains(strings.ToLower(t), "tok/s") {
+				continue
+			}
+			out = append(out, fmt.Sprintf("  %s:%d: %s", path.Join(path.Dir(build), e.Name()), i+1, t))
+		}
+	}
+	return out
+}
