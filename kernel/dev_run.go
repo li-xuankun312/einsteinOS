@@ -627,7 +627,14 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 					log.Printf("dev_preverify: %s unit %s: the rejected tree is parked on %s — a run stopped before this attempt ends continues from it", r.repo, unit.ID, wip)
 				}
 			}
-			report := preVerifyReport(o) + regressed + preVerifySince(startedAt, mirrorWritesSince(unit.ID, startedAt)) + compileSymbolFacts(o.Result.Compile, mirror)
+			ported := portedChangedText(portedKernelsChanged(mirror, unit.ID, func(f string) ([]byte, bool) {
+				b, has, _, known := mirrorBranchFile(unit.ID, f)
+				return b, known && has
+			}))
+			if ported != "" {
+				log.Printf("dev_preverify: %s unit %s: %s", r.repo, unit.ID, truncStr(strings.TrimSpace(ported), preVerifyGateTextLogMax))
+			}
+			report := preVerifyReport(o) + regressed + ported + preVerifySince(startedAt, mirrorWritesSince(unit.ID, startedAt)) + compileSymbolFacts(o.Result.Compile, mirror)
 			if o.Result.Compile == "fail" {
 				// build.sh's output once: compile_error is "build.sh exit=N: " and the same output
 				if owners := compileErrorOwners(unit.ID, o.Result.BuildOut); owners != "" {
