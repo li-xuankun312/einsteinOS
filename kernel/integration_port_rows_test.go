@@ -801,3 +801,19 @@ func TestTheReferencesProgramsAreGivenWhetherBuiltAndWhetherTheyPrintGenerated(t
 		t.Fatalf("%s", got)
 	}
 }
+
+// 11/27 the integration unit's e2e.sh ran pytools/e2e_infer.py and named pytools/e2e_sub.py
+// nowhere: each printer of generated: is given the e2e.sh naming it, comments aside
+func TestEachPrinterOfGeneratedIsGivenTheE2EThatNamesIt(t *testing.T) {
+	ws := t.TempDir()
+	putTree(t, ws, map[string]string{
+		"pytools/e2e_infer.py":                   "print(\"generated:\", ids)\n",
+		"src/driver/run.cpp":                     "int main() { std::printf(\"generated: %s\\n\", s); }\n",
+		".einsteinOS/verify/uintegration/e2e.sh": "# e2e_infer.py is not run\n\"$BUILD/run\" --model m\n\"$BUILD/gr_parity\"\n",
+	})
+	got := strings.Join(printersRun(ws, generatedPrinters(ws)), "\n")
+	want := "pytools/e2e_infer.py:1; no e2e.sh of the tree names it\nsrc/driver/run.cpp:1; .einsteinOS/verify/uintegration/e2e.sh names it"
+	if got != want {
+		t.Fatalf("%s", got)
+	}
+}

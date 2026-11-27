@@ -163,7 +163,7 @@ func measurePortInventory(tree string, ms ModelShape) PortInventory {
 	sites := treeFuncSites(tree)
 	inv.Redefined = redefinedFuncs(sites)
 	inv.Undefined = undefinedFuncs(tree, sites)
-	inv.Printers = generatedPrinters(tree)
+	inv.Printers = printersRun(tree, generatedPrinters(tree))
 	sort.Strings(inv.Programs)
 	sort.Strings(inv.Readers)
 	sort.Strings(inv.Unnamed)
@@ -309,4 +309,55 @@ func refProgramPrintsText(tree, src string) string {
 		}
 	}
 	return fmt.Sprintf(refProgramNoPrintFmt, src)
+}
+
+const (
+	// %[1]s the e2e.sh naming the printer
+	printerRunFmt = "; %[1]s names it"
+	printerNotRun = "; no e2e.sh of the tree names it"
+)
+
+// printersRun: each "path:line" of generatedPrinters with the e2e.sh under .einsteinOS/verify
+// that names its file (by path, base name or executable), comments aside, or that none does.
+// 11/27 the tree's printers of generated: were pytools/e2e_infer.py (line 511), which the
+// integration unit's e2e.sh ran at its line 150 with "|| true", and pytools/e2e_sub.py (line
+// 246), which no e2e.sh named, and the inventory gave the planner the two with nothing of either.
+func printersRun(tree string, printers []string) []string {
+	e2es, _ := filepath.Glob(filepath.Join(tree, ".einsteinOS", "verify", "*", "e2e.sh"))
+	sort.Strings(e2es)
+	bodies := map[string]string{}
+	for _, e := range e2es {
+		if b, err := os.ReadFile(e); err == nil {
+			rel, _ := filepath.Rel(tree, e)
+			var code []string
+			for _, l := range strings.Split(string(b), "\n") {
+				if !strings.HasPrefix(strings.TrimSpace(l), "#") {
+					code = append(code, l)
+				}
+			}
+			bodies[filepath.ToSlash(rel)] = strings.Join(code, "\n")
+		}
+	}
+	var out []string
+	for _, p := range printers {
+		file := p
+		if i := strings.LastIndex(p, ":"); i > 0 {
+			file = p[:i]
+		}
+		exe := strings.TrimSuffix(filepath.Base(file), filepath.Ext(file))
+		re := regexp.MustCompile(`(^|[^A-Za-z0-9_.-])(` + regexp.QuoteMeta(filepath.Base(file)) + `|` + regexp.QuoteMeta(exe) + `)([^A-Za-z0-9_.-]|$)`)
+		line := p + printerNotRun
+		var names []string
+		for e, b := range bodies {
+			if strings.Contains(b, file) || re.MatchString(b) {
+				names = append(names, e)
+			}
+		}
+		if len(names) > 0 {
+			sort.Strings(names)
+			line = p + fmt.Sprintf(printerRunFmt, strings.Join(names, ", "))
+		}
+		out = append(out, line)
+	}
+	return out
 }
