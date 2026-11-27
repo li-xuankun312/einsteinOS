@@ -667,3 +667,26 @@ func TestKernelUnportedGivesNoMissingRowWhenNoGroupIsOnThePath(t *testing.T) {
 		t.Fatalf("one group on the path: %v", texts[0])
 	}
 }
+
+// 11/27 09:29:34 seventeen rows like missing:model.language_model.layers.{i}.linear_attn.A_log →
+// src/ilu_gdn_prep.cu beta_sigmoid_kernel were said by port_ref_file_unknown not to be reference
+// files; the reason is their group, which no missing line names and the op lines give to a unit
+func TestAMissingRowOfNoPlannerGroupIsGivenItsGroup(t *testing.T) {
+	g := "model.language_model.layers.{i}.linear_attn.A_log"
+	integrationAnswers["uint"] = IntegrationModelPlan{Ops: []IntegrationOp{
+		{Group: g, Unit: "pA", Kernel: "gdn_ab_kernel"},
+		{Group: "model.visual.pos_embed.weight", What: "vit"},
+	}, GroupsOff: []string{"model.visual.pos_embed.weight"}}
+	t.Cleanup(func() { delete(integrationAnswers, "uint") })
+	ws := t.TempDir()
+	putTree(t, ws, map[string]string{
+		".einsteinOS/port/pA.tsv":      "src/kernels/cuda/fused_gdn.cu\tgdn_ab_kernel\tsrc/kernels/gpu/gdn_fused.cu\tgdn_ab_kernel\n",
+		"src/kernels/gpu/gdn_fused.cu": "__global__ void gdn_ab_kernel(float* x) {}\n",
+		".einsteinOS/port/uint.tsv":    "missing:" + g + "\tgdn\tsrc/ilu_gdn_prep.cu\tbeta_sigmoid_kernel\n",
+	})
+	r := portRefFiles(ws, "uint", []RefSymbol{{File: "src/kernels/gdn_parity.cpp", Name: "main"}})
+	want := "  missing:" + g + " gdn → src/ilu_gdn_prep.cu:beta_sigmoid_kernel: " + g + " is not a group the planner's missing lines name (its 1 missing line(s) name the groups kernel_unported gives) — the planner's op lines give this group to pA gdn_ab_kernel (src/kernels/cuda/fused_gdn.cu gdn_ab_kernel)"
+	if len(r) != 1 || r[0] != want {
+		t.Fatalf("got %q", r)
+	}
+}

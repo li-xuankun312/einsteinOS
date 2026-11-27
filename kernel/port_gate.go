@@ -329,6 +329,13 @@ const portRefFileGroupFmt = " — it is a group of the planner's missing lines, 
 
 const portRefFileFmt = "  %[1]s %[2]s → %[3]s:%[4]s: %[1]s is not one of the unit's reference files"
 
+// %[1]s column 1, %[2]s column 2, %[3]s the file, %[4]s the kernel, %[5]s the group, %[6]d the
+// planner's missing lines
+const portRefMissingGroupFmt = "  %[1]s %[2]s → %[3]s:%[4]s: %[5]s is not a group the planner's missing lines name (its %[6]d missing line(s) name the groups kernel_unported gives)"
+
+// %[1]s the unit, %[2]s its kernel, %[3]s the row of the unit's port map that ports it
+const portRefOpGroupFmt = " — the planner's op lines give this group to %[1]s %[2]s (%[3]s)"
+
 // portRefFiles returns one line per port map line whose reference file is not one of the
 // unit's: that column is the reference, which only the kernel measures. 11/13 16:53 unit
 // u739c93b0c3 wrote include/ref/kernels/{rope,gr,fused_gr,native_gr_norm}.hpp into the
@@ -358,6 +365,15 @@ func portRefFiles(ws, unitID string, syms []RefSymbol) []string {
 		if !refFiles[e.refFile] && !seen[e.refFile] {
 			seen[e.refFile] = true
 			line := fmt.Sprintf(portRefFileFmt, e.refFile, e.refName, e.file, e.name) + portedElsewhere(ported, e.refName) + portedAsName(names, e)
+			// a missing: row whose group the planner's missing lines do not name: 11/27 09:29:34
+			// seventeen rows like missing:model.language_model.layers.{i}.linear_attn.A_log →
+			// src/ilu_gdn_prep.cu beta_sigmoid_kernel were said here not to be reference files,
+			// while kernel_unported refused them for their group — one the op lines give to
+			// pcd027bc02f gdn_ab_kernel
+			if g, ok := strings.CutPrefix(e.refFile, integrationMissingPrefix); ok && len(integrationAnswerOf(unitID).Ops) > 0 {
+				line = fmt.Sprintf(portRefMissingGroupFmt, e.refFile, e.refName, e.file, e.name, g, len(integrationMissingGroups(unitID))) +
+					opGroupPort(unitID, g, ported) + portedElsewhere(ported, e.refName) + portedAsName(names, e)
+			}
 			// the group written without its prefix: 11/26 05:43:17 a command of the moe part wrote
 			// model.language_model.layers.{i}.mlp.gate.weight in column 1 and the row fell here
 			if isPlannerGroup(unitID, e.refFile) {
@@ -367,6 +383,28 @@ func portRefFiles(ws, unitID string, syms []RefSymbol) []string {
 		}
 	}
 	return out
+}
+
+// opGroupPort: the unit and kernel the planner's op lines give a group, with the row of that
+// unit's port map that ports the kernel, when one does.
+func opGroupPort(unitID, group string, ported map[string]string) string {
+	for _, o := range integrationAnswerOf(unitID).Ops {
+		if o.Group != group || o.Unit == "" || o.Kernel == "" {
+			continue
+		}
+		var rows []string
+		for k, v := range ported {
+			if f, n, _ := strings.Cut(k, "\t"); n == o.Kernel && strings.HasPrefix(v, o.Unit+" ") {
+				rows = append(rows, f+" "+n)
+			}
+		}
+		if len(rows) == 0 {
+			continue
+		}
+		sort.Strings(rows)
+		return fmt.Sprintf(portRefOpGroupFmt, o.Unit, o.Kernel, strings.Join(rows, ", "))
+	}
+	return ""
 }
 
 // refPathsWritten: the files of changed that are at the path of one of the unit's reference
