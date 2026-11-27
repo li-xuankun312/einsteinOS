@@ -61,8 +61,9 @@ func TestPortIncompleteSaysWhenItPasses(t *testing.T) {
 // held nothing of which test or why: the failed test.sh's end and the failure's text are logged
 func TestTheFailedTestShAndTheFailureTextAreLogged(t *testing.T) {
 	out := "ok gdn_parity\nFAIL moe_parity: rel_l1 0.31 > 1e-3\n"
-	got := fmt.Sprintf(preVerifySmokeLogFmt, "o/r", "uint", 1, truncStr(tailText(out, preVerifyGateTextLogMax), preVerifyGateTextLogMax))
-	if !strings.Contains(got, "(exit 1, its end): ") || !strings.Contains(got, "FAIL moe_parity") {
+	out = smokeFailLines(out, 60) + strings.Repeat("== x: x\nx PASSED\n", 400)
+	got := fmt.Sprintf(preVerifySmokeLogFmt, "o/r", "uint", 1, truncStr(out, preVerifyGateTextLogMax))
+	if !strings.Contains(got, "(exit 1, its head): ") || !strings.Contains(got, "FAIL moe_parity") {
 		t.Fatal(got)
 	}
 	got = fmt.Sprintf(failureTextLogFmt, "o/r", "uint", "smoke_fail", "test.sh exit=1: FAIL moe_parity")

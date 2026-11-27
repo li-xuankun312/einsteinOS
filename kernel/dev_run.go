@@ -599,7 +599,9 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 			}
 			if o.Result.Smoke == "fail" {
 				// 11/26 19:55:06 test.sh exited 1 and the log held nothing of why
-				log.Printf(preVerifySmokeLogFmt, r.repo, unit.ID, o.Result.TestExit, truncStr(tailText(o.Result.TestOut, preVerifyGateTextLogMax), preVerifyGateTextLogMax))
+				// its head: the lines telling of a failure come first (smokeFailLines); 11/27
+				// 03:24:08 the log kept the output's last 3000 bytes, sections that all passed
+				log.Printf(preVerifySmokeLogFmt, r.repo, unit.ID, o.Result.TestExit, truncStr(o.Result.TestOut, preVerifyGateTextLogMax))
 			}
 			if o.Result.Compile == "fail" {
 				log.Printf(preVerifyCompileLogFmt, r.repo, unit.ID, failedCompileLogText(o.Result.BuildOut))

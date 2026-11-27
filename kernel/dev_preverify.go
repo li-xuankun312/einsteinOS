@@ -440,7 +440,7 @@ const preVerifyOwnersLogFmt = "dev_preverify: %[1]s unit %[2]s: the files the fa
 const failureTextLogFmt = "dev_from_theorems: %[1]s unit %[2]s: the %[3]s failure's text, as the next attempt is given it: %[4]s"
 
 // %[1]s repo, %[2]s unit, %[3]d exit, %[4]s the output's end
-const preVerifySmokeLogFmt = "dev_preverify: %[1]s unit %[2]s: the failed test.sh's output sent back (exit %[3]d, its end): %[4]s"
+const preVerifySmokeLogFmt = "dev_preverify: %[1]s unit %[2]s: the failed test.sh's output sent back (exit %[3]d, its head): %[4]s"
 
 const preVerifyCompileLogFmt = "dev_preverify: %[1]s unit %[2]s: the failed compile's output sent back (its end): %[3]s"
 
