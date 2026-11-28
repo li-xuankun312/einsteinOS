@@ -188,6 +188,12 @@ func directionKey(ws string, br EvalBenchRun, perUnit map[string][]string) strin
 		if a.Built != b.Built {
 			return a.Built
 		}
+		// one that launched ported kernels before one that launched none: 11/28 3255b0f9 wrote
+		// pytools/e2e_loader.py, read()ing all 26 shards so its reads reach 90% of the model, "a new
+		// [port] process to open a fresh direction"
+		if ka, kb := len(a.PortKernels) > 0, len(b.PortKernels) > 0; ka != kb {
+			return ka
+		}
 		if a.TookBytes != b.TookBytes {
 			return a.TookBytes > b.TookBytes
 		}

@@ -277,6 +277,10 @@ func e2eTopLoader(br EvalBenchRun, withKernels bool) (E2ELoader, bool) {
 			if l.Built {
 				best = l
 			}
+		case (len(l.PortKernels) > 0) != (len(best.PortKernels) > 0):
+			if len(l.PortKernels) > 0 {
+				best = l
+			}
 		case l.TookBytes > best.TookBytes:
 			best = l
 		}

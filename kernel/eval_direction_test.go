@@ -218,3 +218,21 @@ func TestAProgramThePortBuiltNamesTheRunBeforeAnInterpreter(t *testing.T) {
 		t.Fatalf("%v %+v", ok, r)
 	}
 }
+
+// 11/28 3255b0f9 wrote pytools/e2e_loader.py to read every shard, "a new [port] process to open a
+// fresh direction": of the processes that took in the model, one that launched no ported kernel
+// does not name the run before one that did, however much more it read
+func TestAReaderThatLaunchedNoKernelDoesNotNameTheRun(t *testing.T) {
+	ws := "/tmp/einsteinos_verify_uint"
+	perUnit := map[string][]string{"u1": {"k"}, "u2": {"j"}}
+	run := EvalBenchRun{ModelBytes: 100, Loaders: []E2ELoader{
+		{Exe: "/usr/local/bin/python3.10", Cmdline: "python3 " + ws + "/pytools/e2e_loader.py /m", Port: true, Weights: 26, TookBytes: 300, Seconds: 90},
+		{Exe: "/usr/local/bin/python3.10", Cmdline: "python3 " + ws + "/pytools/e2e_infer.py /m", Port: true, Weights: 26, TookBytes: 100, PortKernels: []string{"k"}, Seconds: 100},
+	}}
+	if k := directionKey(ws, run, perUnit); k != "python3.10 pytools/e2e_infer.py [port]" {
+		t.Fatalf("%q", k)
+	}
+	if l, _ := e2eTopLoader(run, false); !strings.Contains(l.Cmdline, "e2e_infer.py") {
+		t.Fatalf("%+v", l)
+	}
+}
