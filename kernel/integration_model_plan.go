@@ -248,11 +248,54 @@ func (r *devRun) integrationModelAnswer(unit DevPlanNode, baseRef string) Integr
 		log.Printf(integrationUnclaimedLogFmt, unit.ID, len(u), len(p.Parts), strings.Join(u, " "))
 		p.Inventory += fmt.Sprintf(integrationUnclaimedFmt, len(p.Parts), len(u), strings.Join(u, "\n  "))
 	}
+	for _, d := range closedProgramPartFiles(&p, book) {
+		log.Printf(integrationClosedPartFileFmt, unit.ID, d)
+	}
 	log.Printf(integrationModelLogFmt, r.repo, unit.ID, p.counts(), len(ms.TensorGroups()), len(perUnit))
 	integrationAnswersMu.Lock()
 	integrationAnswers[unit.ID] = p
 	integrationAnswersMu.Unlock()
 	return p
+}
+
+// %[1]s unit, %[2]s the part, its file and the direction
+const integrationClosedPartFileFmt = "dev_from_theorems: integration unit %[1]s: a partfile line not given to its part: %[2]s"
+
+// %[1]s the part, %[2]s its file, %[3]s the direction, %[4]s when it closed
+const closedPartFileFmt = "%[1]s %[2]s — the one program of the direction %[3]s, closed at %[4]s"
+
+// closedProgramPartFiles takes out of p's partfile lines the files that are the one program of a
+// direction the unit's end-to-end runs closed, and says each. 11/28 05:39:14 the planner's answer
+// of an earlier run, the one standing, gave pytools/e2e_infer.py to the part embed, the program
+// of python3.10 pytools/e2e_infer.py [port], closed at 11/22 18:11, and the part worked in it.
+func closedProgramPartFiles(p *IntegrationModelPlan, book *DirectionBook) []string {
+	if book == nil || len(p.PartFiles) == 0 {
+		return nil
+	}
+	closed := map[string][2]string{} // program -> direction, when it closed
+	for key, d := range book.Dirs {
+		if progs := directionProgramPaths(key); d.Closed() && len(progs) == 1 {
+			closed[progs[0]] = [2]string{key, d.ClosedAt.UTC().Format("01/02 15:04")}
+		}
+	}
+	var said []string
+	for part, files := range p.PartFiles {
+		var kept []string
+		for _, f := range files {
+			if c, ok := closed[f]; ok {
+				said = append(said, fmt.Sprintf(closedPartFileFmt, part, f, c[0], c[1]))
+				continue
+			}
+			kept = append(kept, f)
+		}
+		if len(kept) == 0 {
+			delete(p.PartFiles, part)
+		} else {
+			p.PartFiles[part] = kept
+		}
+	}
+	sort.Strings(said)
+	return said
 }
 
 const (

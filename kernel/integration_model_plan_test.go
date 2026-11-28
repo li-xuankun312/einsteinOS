@@ -474,3 +474,25 @@ func TestTheIntegrationPlannerIsAskedAsAConversationThatReadsItsFiles(t *testing
 		t.Fatalf("%q", convKindForRole(role))
 	}
 }
+
+// 11/28 05:39:14 the standing answer gave pytools/e2e_infer.py, the one program of a direction
+// closed at 11/22 18:11, to the part embed: such a file is not given to its part, and said
+func TestAPartfileThatIsAClosedDirectionsProgramIsNotGiven(t *testing.T) {
+	book := &DirectionBook{Dirs: map[string]*DirectionStat{
+		"python3.10 pytools/e2e_infer.py [port]":                                {ClosedAt: time.Date(2026, 11, 22, 18, 11, 0, 0, time.UTC)},
+		"build/e2e_all_check [port] + python3.10 pytools/e2e_weights.py [port]": {ClosedAt: time.Date(2026, 11, 22, 7, 55, 0, 0, time.UTC)},
+		"python3.10 pytools/e2e_port_check.py [port]":                           {},
+	}}
+	p := IntegrationModelPlan{PartFiles: map[string][]string{
+		"embed":  {"pytools/e2e_infer.py", "tests/k39_integration/embed_parity.cu"},
+		"runner": {"pytools/e2e_infer.py"},
+		"loader": {"tests/k39_integration/e2e_all_check.cu", "pytools/e2e_port_check.py"},
+	}}
+	said := closedProgramPartFiles(&p, book)
+	if len(said) != 2 || said[0] != "embed pytools/e2e_infer.py — the one program of the direction python3.10 pytools/e2e_infer.py [port], closed at 11/22 18:11" {
+		t.Fatalf("%q", said)
+	}
+	if strings.Join(p.PartFiles["embed"], " ") != "tests/k39_integration/embed_parity.cu" || p.PartFiles["runner"] != nil || len(p.PartFiles["loader"]) != 2 {
+		t.Fatalf("%v", p.PartFiles)
+	}
+}
