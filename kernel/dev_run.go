@@ -589,7 +589,12 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 				portIncompleteGrew(judged, o, string(mapThen), PortMapPath(unit.ID), r.shown(unit).Symbols)
 			filesNow := deltaFiles(mirror, changed, removed)
 			onMap := gatesPassedOnMap(judged, o, filesNow, string(mapThen), PortMapPath(unit.ID))
-			pre = &preVerifyResult{ok: passed, digest: deltaDigest(mirror, changed, removed), out: o, portMap: string(mapThen), at: startedAt, judged: judged, files: filesNow}
+			runs := gateRunsFrom(judged, o, startedAt)
+			pre = &preVerifyResult{ok: passed, digest: deltaDigest(mirror, changed, removed), out: o, portMap: string(mapThen), at: startedAt, judged: judged, files: filesNow, gateRuns: runs}
+			still := gatesStillFailing(runs)
+			if still != "" {
+				log.Printf("dev_preverify: %s unit %s: %s", r.repo, unit.ID, strings.ReplaceAll(strings.TrimSpace(still), "\n", "; "))
+			}
 			if onMap != "" {
 				log.Printf("dev_preverify: %s unit %s: %s", r.repo, unit.ID, onMap)
 			}
@@ -641,7 +646,7 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 			if ported != "" {
 				log.Printf("dev_preverify: %s unit %s: %s", r.repo, unit.ID, truncStr(strings.TrimSpace(ported), preVerifyGateTextLogMax))
 			}
-			report := preVerifyReport(o) + regressed + ported + preVerifySince(startedAt, mirrorWritesSince(unit.ID, startedAt)) + compileSymbolFacts(o.Result.Compile, mirror)
+			report := preVerifyReport(o) + still + regressed + ported + preVerifySince(startedAt, mirrorWritesSince(unit.ID, startedAt)) + compileSymbolFacts(o.Result.Compile, mirror)
 			if o.Result.Compile == "fail" {
 				// build.sh's output once: compile_error is "build.sh exit=N: " and the same output
 				if owners := compileErrorOwners(unit.ID, o.Result.BuildOut); owners != "" {

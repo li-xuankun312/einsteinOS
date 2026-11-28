@@ -34,9 +34,72 @@ type preVerifyResult struct {
 	at      time.Time
 	// judged: the last verification before this one whose gates were judged
 	judged *preVerifyResult
+	// gateRuns: per gate that failed at this verification, how many judged verifications in a
+	// row it has failed at and when the first of them started (gateRunsFrom)
+	gateRuns map[string]gateRun
 	// files: each file of the unit's delta as the verification ended, with the hash of its
 	// content ("" for a file the delta removes) — deltaFiles
 	files map[string]string
+}
+
+// gateRun: how many judged verifications in a row a gate failed at, from when.
+type gateRun struct {
+	n     int
+	since time.Time
+}
+
+// gateRunsFrom: per gate failing at now, the run of judged verifications it has failed at,
+// counting on from prev's (the last judged verification); nothing for a verification whose
+// gates were not judged.
+func gateRunsFrom(prev *preVerifyResult, now UnitVerifyOutcome, at time.Time) map[string]gateRun {
+	if now.Err != nil || !now.Verified || now.Result.Compile != "pass" {
+		return nil
+	}
+	out := map[string]gateRun{}
+	for _, g := range now.Result.Gates {
+		r := gateRun{n: 1, since: at}
+		if prev != nil {
+			if p, ok := prev.gateRuns[g]; ok {
+				r = gateRun{n: p.n + 1, since: p.since}
+			}
+		}
+		out[g] = r
+	}
+	return out
+}
+
+const (
+	gatesStillFailingHead = "\n[GATES THAT FAILED AT EACH OF THE LAST VERIFICATIONS — measured]\n"
+	// %[1]s the gate, %[2]d verifications, %[3]s when the first started
+	gateStillFailingFmt = "%[1]s: %[2]d verifications in a row, the first started at %[3]s\n"
+)
+
+// gatesStillFailing: the gates that have failed at two or more judged verifications in a row,
+// longest first. 11/28 rate_in_script and kernel_copied failed at the verifications of 05:55,
+// 06:10, 06:18, 06:36 and 06:45, the two lines of e2e.sh and the copies of src/ix_gdn.cu still
+// there, and each report gave them as if for the first time.
+func gatesStillFailing(runs map[string]gateRun) string {
+	var gs []string
+	for g, r := range runs {
+		if r.n >= 2 {
+			gs = append(gs, g)
+		}
+	}
+	if len(gs) == 0 {
+		return ""
+	}
+	sort.Slice(gs, func(i, j int) bool {
+		if runs[gs[i]].n != runs[gs[j]].n {
+			return runs[gs[i]].n > runs[gs[j]].n
+		}
+		return gs[i] < gs[j]
+	})
+	var b strings.Builder
+	b.WriteString(gatesStillFailingHead)
+	for _, g := range gs {
+		fmt.Fprintf(&b, gateStillFailingFmt, g, runs[g].n, runs[g].since.Format("15:04:05"))
+	}
+	return b.String()
 }
 
 // deltaFiles: each file of a delta with the hash of what the mirror holds of it, "" for removed.

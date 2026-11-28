@@ -25,3 +25,30 @@ func TestGatesPassingWithOnlyThePortMapChangedAreSaidToBe(t *testing.T) {
 		t.Fatalf("nothing changed: %q", got)
 	}
 }
+
+// 11/28 rate_in_script and kernel_copied failed at five verifications in a row and each report
+// gave them as new: a gate failing at two or more judged verifications in a row is said with how
+// many and since when
+func TestAGateFailingAtVerificationsInARowIsSaid(t *testing.T) {
+	at := func(h, m int) time.Time { return time.Date(2026, 11, 28, h, m, 0, 0, time.UTC) }
+	out := func(gates ...string) UnitVerifyOutcome {
+		return UnitVerifyOutcome{Verified: true, Result: VerifyResult{Compile: "pass", Gates: gates}}
+	}
+	var prev *preVerifyResult
+	for i, m := range []int{55, 70, 78} {
+		runs := gateRunsFrom(prev, out("kernel_unported", "rate_in_script"), at(5, m))
+		prev = &preVerifyResult{out: out("kernel_unported", "rate_in_script"), gateRuns: runs}
+		if i == 0 && gatesStillFailing(runs) != "" {
+			t.Fatal("said at the first")
+		}
+	}
+	runs := gateRunsFrom(prev, out("rate_in_script", "port_extra"), at(6, 36))
+	got := gatesStillFailing(runs)
+	want := "\n[GATES THAT FAILED AT EACH OF THE LAST VERIFICATIONS — measured]\nrate_in_script: 4 verifications in a row, the first started at 05:55:00\n"
+	if got != want {
+		t.Fatalf("%q", got)
+	}
+	if gateRunsFrom(prev, UnitVerifyOutcome{Verified: true, Result: VerifyResult{Compile: "fail"}}, at(7, 0)) != nil {
+		t.Fatal("a compile failure judged gates")
+	}
+}
