@@ -57,6 +57,10 @@ const (
 	gateE2EReaderNotPortFmt = "integration_e2e_loader_not_port: in %[1]s a process that is not the port's read the model's weights — the weights are read by the port's own programs (an executable of the workspace, a process mapping a library it built, or an interpreter running a file of it); the processes that read weights or launched ported kernels:\n%[2]s"
 	gateE2ENoRunnerFmt      = "integration_e2e_loader_not_port: in %[1]s no process of the port both launched, itself, a ported kernel and took in the weights — the model's files, at least %[4]d%% of their bytes (what /proc/<pid>/io counts it reading, plus the most of its weight-file mappings /proc/<pid>/smaps shows resident, sampled every 50 ms), or a large file written during the run from them; the processes that read weights or launched ported kernels:\n%[2]s%[3]s"
 	e2eLoaderLineFmt        = "  pid %[1]d %[2]s (%[3]s): the port's: %[4]v; model weight files %[5]d; took in %[8]s of the model's %[9]s; large files written during the run %[6]d; kernels it launched itself: %[7]s"
+	// %[1]d the ids of its "generated:" lines. 11/28 03:49:59 and 04:10:54 the gate gave each
+	// process's weight files, what it took in and its kernels, and nothing of the token ids it
+	// printed, which the direction's "0 token(s) agree" was measured from
+	e2eLoaderGeneratedFmt = "; token ids it printed on \"generated:\" lines: %[1]d"
 	// %[1]d groups, %[2]d groups named, %[3]s each with its kernels
 	e2eLoaderMissingGroupsFmt = "\n  of the %[2]d tensor groups the planner's op lines name, %[1]d had none of their kernels launched by the port's process that took in the most of the model: %[3]s"
 	// %[1]s the group, %[2]s its kernels
@@ -104,7 +108,9 @@ func e2eLoaderLines(br EvalBenchRun) string {
 		if ks == "" {
 			ks = "none"
 		}
-		lines = append(lines, fmt.Sprintf(e2eLoaderLineFmt, l.PID, l.Exe, l.Cmdline, l.Port, l.Weights, len(l.Derived), ks, gib(l.TookBytes), gib(br.ModelBytes)))
+		_, gen := e2eTokens(strings.Join(br.TokensBy[l.PID], "\n"))
+		lines = append(lines, fmt.Sprintf(e2eLoaderLineFmt, l.PID, l.Exe, l.Cmdline, l.Port, l.Weights, len(l.Derived), ks, gib(l.TookBytes), gib(br.ModelBytes))+
+			fmt.Sprintf(e2eLoaderGeneratedFmt, len(gen)))
 	}
 	if len(lines) == 0 {
 		return "  (none)"

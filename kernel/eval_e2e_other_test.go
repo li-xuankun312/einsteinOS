@@ -183,3 +183,16 @@ func TestAPortProcessThatTookTheModelIsNamedWhenItIsNotTheRunner(t *testing.T) {
 		t.Fatalf("%s", txt)
 	}
 }
+
+// 11/28 the loader lines gave each process's weights, intake and kernels and nothing of the token
+// ids it printed: each line ends with the ids of its "generated:" lines
+func TestEachLoaderLineGivesTheGeneratedIDsItPrinted(t *testing.T) {
+	br := EvalBenchRun{ModelBytes: 100, TokensBy: map[int][]string{7: {"prompt: 1 2 3", "generated: 220 248046 198"}}, Loaders: []E2ELoader{
+		{PID: 7, Cmdline: "python3.10 e2e_infer.py", Port: true, Weights: 26, TookBytes: 100},
+		{PID: 9, Cmdline: "build/e2e_all_check /m", Port: true, Built: true, Weights: 26, TookBytes: 100, PortKernels: []string{"k"}},
+	}}
+	got := strings.Split(e2eLoaderLines(br), "\n")
+	if len(got) != 2 || !strings.HasSuffix(got[0], "; token ids it printed on \"generated:\" lines: 3") || !strings.HasSuffix(got[1], "lines: 0") {
+		t.Fatalf("%q", got)
+	}
+}
