@@ -196,3 +196,20 @@ func TestEachLoaderLineGivesTheGeneratedIDsItPrinted(t *testing.T) {
 		t.Fatalf("%q", got)
 	}
 }
+
+// 11/28 the groups given as launched by no kernel were those of the python summing the most bytes,
+// past build/e2e_all_check, which took in the same model and launched the units' kernels: the
+// port's built program that took in the model is the one measured, and units and groups both said
+func TestTheGroupsAreMeasuredOnThePortsBuiltProgramThatTookTheModel(t *testing.T) {
+	perUnit := map[string][]string{"u_gdn": {"gdn_step", "gdn_conv"}, "u_x": {"x_kernel"}}
+	gs := map[string][]string{"linear_attn.A_log": {"gdn_step"}, "linear_attn.conv1d.weight": {"gdn_conv"}}
+	br := EvalBenchRun{Bench: EvalBench{File: "e2e.sh"}, ModelBytes: 100, RunnerAllUnits: true, RunnerGroups: gs, Loaders: []E2ELoader{
+		{PID: 7, Cmdline: "python3.10 e2e_infer.py", Port: true, Weights: 26, TookBytes: 180, PortKernels: []string{"gdn_conv"}},
+		{PID: 9, Cmdline: "build/e2e_all_check /m", Port: true, Built: true, Weights: 26, TookBytes: 100, PortKernels: []string{"gdn_step"}},
+	}}
+	_, txt := e2eLoaderGate(br, perUnit)
+	if !strings.Contains(txt, "pid 9 (build/e2e_all_check /m), the port's, took in") || !strings.Contains(txt, "linear_attn.conv1d.weight (one of: gdn_conv)") ||
+		strings.Contains(txt, "linear_attn.A_log (one of") || !strings.Contains(txt, "u_x: x_kernel") {
+		t.Fatalf("%s", txt)
+	}
+}

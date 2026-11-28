@@ -211,12 +211,7 @@ func e2eLoaderGate(br EvalBenchRun, perUnit map[string][]string) (kind, text str
 	if br.RunnerAllUnits && len(br.RunnerGroups) > 0 {
 		// the tensor groups the planner's op lines name of which the port's process taking in
 		// the most of the model launched none of the kernels named for it
-		var top E2ELoader
-		for _, l := range br.Loaders {
-			if l.Port && l.TookBytes >= top.TookBytes {
-				top = l
-			}
-		}
+		top, _ := e2eTopLoader(br, false)
 		if mg := missingGroups(top, br.RunnerGroups); len(mg) > 0 {
 			var each []string
 			for _, g := range mg {
@@ -230,7 +225,7 @@ func e2eLoaderGate(br EvalBenchRun, perUnit map[string][]string) (kind, text str
 		for _, u := range best {
 			ml = append(ml, fmt.Sprintf(e2ePortUnitFmt, u, strings.Join(perUnit[u], " ")))
 		}
-		miss = fmt.Sprintf(e2eLoaderMissingFmt, strings.Join(ml, "\n"))
+		miss = fmt.Sprintf(e2eLoaderMissingFmt, strings.Join(ml, "\n")) + miss
 	}
 	if l, ok := portTookTheModel(br); ok {
 		return "integration_e2e_loader_not_port", fmt.Sprintf(gateE2ERunnerShortFmt, br.Bench.File, l.PID, l.Cmdline, gib(l.TookBytes), gib(br.ModelBytes), e2eLoaderLines(br), miss)
@@ -248,11 +243,42 @@ const gateE2ERunnerShortFmt = "integration_e2e_loader_not_port: in %[1]s pid %[2
 // 66.97 GiB of the model's 66.97 GiB and launched ported kernels of 6 of 6 units itself; what it
 // lacked was among the rest of the text, after both processes' kernels.
 func portTookTheModel(br EvalBenchRun) (E2ELoader, bool) {
+	l, ok := e2eTopLoader(br, true)
+	if !ok || !tookTheModel(l, br.ModelBytes) {
+		return E2ELoader{}, false
+	}
+	return l, true
+}
+
+// e2eTopLoader: the port's process the run is measured by when it has no runner — one that took
+// in the model before one that did not, a program the port built before an interpreter running a
+// file of it, then the one taking in the most; withKernels: only processes that launched ported
+// kernels. 11/28 the tensor groups the gate gave as launched by no kernel were measured from the
+// port's process whose reads and mappings summed highest, a python summing past
+// build/e2e_all_check, which took in the same 66.97 GiB and launched the units' kernels itself.
+func e2eTopLoader(br EvalBenchRun, withKernels bool) (E2ELoader, bool) {
 	var best E2ELoader
 	found := false
 	for _, l := range br.Loaders {
-		if l.Port && len(l.PortKernels) > 0 && tookTheModel(l, br.ModelBytes) && (!found || l.TookBytes > best.TookBytes) {
+		if !l.Port || (withKernels && len(l.PortKernels) == 0) {
+			continue
+		}
+		if !found {
 			best, found = l, true
+			continue
+		}
+		tl, tb := tookTheModel(l, br.ModelBytes), tookTheModel(best, br.ModelBytes)
+		switch {
+		case tl != tb:
+			if tl {
+				best = l
+			}
+		case l.Built != best.Built:
+			if l.Built {
+				best = l
+			}
+		case l.TookBytes > best.TookBytes:
+			best = l
 		}
 	}
 	return best, found
