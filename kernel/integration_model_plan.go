@@ -214,7 +214,8 @@ func (r *devRun) integrationModelAnswer(unit DevPlanNode, baseRef string) Integr
 	closed := closedDirectionsBlock(e2eClosedDirections(tree, unit.ID, book))
 	data := integrationModelDataFiles(ms, perUnit, sources, treeFiles) +
 		measurePortInventory(tree, ms).Block(len(ms.TensorGroups())) + closed +
-		integrationFeedback(r.plan.LastFailure[unit.ID], prev) + prevUnclaimedBlock(ms, prev, perUnit, treeHas)
+		integrationFeedback(r.plan.LastFailure[unit.ID], prev) + prevUnclaimedBlock(ms, prev, perUnit, treeHas) +
+		prevPartFilesBlock(tree, unit.ID, book, parseIntegrationModelIn(prev, ms, perUnit, treeHas))
 	out, fresh := askIntegrationModel(r.pid, r.repo, r.plan, data, string(theory), len(ms.TensorGroups()), len(perUnit), r.whileWaiting, takes)
 	if !takes(out) && prev != "" {
 		// a new answer the kernel reads nothing of leaves the last one standing
@@ -1133,6 +1134,35 @@ const integrationPrevUnclaimedFmt = "[TENSOR GROUPS ON THE MODEL'S TEXT PATH THA
 // prevUnclaimedBlock: for the planner asked again, the text path's groups no part of its last
 // answer that was started names. 11/25 04:08, 06:01 and 07:47 the planner gave the same six
 // parts three times, none naming lm_head.weight.
+const prevPartFilesHead = "## the previous answer's partfile lines, measured from the tree\n"
+
+// prevPartFilesBlock: what the tree measures of the previous answer's partfile lines — the files
+// that are a closed direction's one program, that no part's files are e2e.sh or the sources of the
+// programs it runs on the model, the files of copies — given to the planner beside that answer.
+// 11/28 17:15:05 the planner's answer was the previous one line for line, its 54 partfile lines
+// with pytools/e2e_infer.py and pytools/e2e_weights.py, src/ix_gdn.cu and src/ix_moe_combine.cu,
+// and none of e2e.sh and tests/k39_integration/e2e_all_check.cu; the kernel measured each of
+// these at 13:04:43 and at 17:15:23, after the answer, and told the planner none of them.
+func prevPartFilesBlock(tree, unitID string, book *DirectionBook, prev IntegrationModelPlan) string {
+	if len(prev.PartFiles) == 0 {
+		return ""
+	}
+	cp := prev
+	cp.PartFiles = map[string][]string{}
+	for k, v := range prev.PartFiles {
+		cp.PartFiles[k] = append([]string(nil), v...)
+	}
+	lines := closedProgramPartFiles(&cp, book)
+	if l := runFilesNoPartWrites(tree, unitID, prev.PartFiles); l != "" {
+		lines = append(lines, l)
+	}
+	lines = append(lines, copiedPartFiles(tree, unitID, prev.PartFiles)...)
+	if len(lines) == 0 {
+		return ""
+	}
+	return prevPartFilesHead + "  " + strings.Join(lines, "\n  ") + "\n"
+}
+
 func prevUnclaimedBlock(ms ModelShape, prev string, perUnit map[string][]string, treeHas func(string) bool) string {
 	if prev == "" {
 		return ""

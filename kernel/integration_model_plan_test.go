@@ -560,3 +560,29 @@ func TestACallTheProgramRunOnTheModelNoLongerMakesIsSaid(t *testing.T) {
 		t.Fatalf("%q", got)
 	}
 }
+
+// 11/28 17:15:05 the planner gave the previous answer line for line, the kernel having measured
+// its partfile lines only after: the planner is given them beside the previous answer
+func TestThePreviousAnswersPartFilesAreMeasuredForThePlanner(t *testing.T) {
+	ws := t.TempDir()
+	putTree(t, ws, map[string]string{
+		devE2EScript("uint"):                     "\"$BUILD/e2e_all_check\" \"$MODEL_REAL\"\n",
+		"tests/k39_integration/e2e_all_check.cu": "int main() {}\n",
+		".einsteinOS/port/pcd027bc02f.tsv":       "src/kernels/cuda/gdn.cu\tgdn_step_kernel\tsrc/kernels/gpu/gdn_core.cu\tgdn_step_kernel\n",
+		"src/kernels/gpu/gdn_core.cu":            "__global__ void gdn_step_kernel(float* s, int n) {}\n",
+		"src/ix_gdn.cu":                          "__global__ void gdn_step_kernel(float* state, int cols) {}\n",
+	})
+	book := &DirectionBook{Dirs: map[string]*DirectionStat{"python3.10 pytools/e2e_infer.py [port]": {ClosedAt: time.Date(2026, 11, 22, 18, 11, 0, 0, time.UTC)}}}
+	prev := IntegrationModelPlan{PartFiles: map[string][]string{"embed": {"pytools/e2e_infer.py"}, "gdn": {"src/ix_gdn.cu"}}}
+	got := prevPartFilesBlock(ws, "uint", book, prev)
+	for _, w := range []string{"## the previous answer's partfile lines, measured from the tree\n",
+		"embed pytools/e2e_infer.py — the one program of the direction python3.10 pytools/e2e_infer.py [port], closed at 11/22 18:11",
+		"no part's files are " + devE2EScript("uint"), "gdn src/ix_gdn.cu: every __global__ kernel"} {
+		if !strings.Contains(got, w) {
+			t.Fatalf("%q lacks %q", got, w)
+		}
+	}
+	if len(prev.PartFiles["embed"]) != 1 {
+		t.Fatal("the previous answer was changed")
+	}
+}
