@@ -1195,3 +1195,45 @@ func staticUncalled(text, name string) bool {
 	}
 	return len(regexp.MustCompile(`\b`+q+`\b`).FindAllStringIndex(text, -1)) == 1
 }
+
+var weakDefRe = regexp.MustCompile(`__attribute__\s*\(\(\s*weak\s*\)\)[^;{(]*?\b([A-Za-z_]\w*)\s*\(`)
+var weakPragmaRe = regexp.MustCompile(`(?m)^[ \t]*#[ \t]*pragma[ \t]+weak[ \t]+([A-Za-z_]\w*)`)
+
+// weakDefinitions: each function the delta's C, C++ and CUDA sources and headers define weak —
+// __attribute__((weak)) or #pragma weak — as "<file>:<line> <name>", comments aside. 11/28 the part
+// layer_norm wrote src/kernels/gpu/ilu_gdn_weak_stubs.cu, weak definitions of the six ilu_gdn host
+// functions elementwise_parity called, each returning -1, so that its link, which at 14:07 had
+// found no definition of them, passed (133d966).
+func weakDefinitions(ws string, changed []string) []string {
+	var out []string
+	for _, f := range changed {
+		switch filepath.Ext(f) {
+		case ".c", ".cc", ".cpp", ".cu", ".h", ".hpp", ".cuh", ".inc":
+		default:
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(ws, filepath.FromSlash(f)))
+		if err != nil {
+			continue
+		}
+		// comments aside, their newlines kept so that lines count as in the file
+		text := cBlockComment.ReplaceAllStringFunc(string(b), func(c string) string {
+			return strings.Repeat("\n", strings.Count(c, "\n"))
+		})
+		lines := strings.Split(text, "\n")
+		for i, l := range lines {
+			if j := strings.Index(l, "//"); j >= 0 {
+				lines[i] = l[:j]
+			}
+		}
+		text = strings.Join(lines, "\n")
+		for _, re := range []*regexp.Regexp{weakDefRe, weakPragmaRe} {
+			for _, m := range re.FindAllStringSubmatchIndex(text, -1) {
+				line := strings.Count(text[:m[0]], "\n") + 1
+				out = append(out, fmt.Sprintf("  %s:%d %s", f, line, text[m[2]:m[3]]))
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}

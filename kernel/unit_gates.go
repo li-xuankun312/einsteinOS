@@ -80,6 +80,8 @@ type GateInput struct {
 	// RateLines: the lines of the integration unit's verify scripts writing a rate in tok/s
 	// (scriptRateLines)
 	RateLines []string
+	// Weak: the functions the integration unit's changed files define weak (weakDefinitions)
+	Weak []string
 	// Copied: the integration unit's kernels outside the tests with the name and parameter types
 	// of a kernel another unit's port map ports into another file (integrationCopiedKernels)
 	Copied []string
@@ -162,6 +164,8 @@ const (
 	gateOtherMapsFmt = "port_map_of_other_unit: the integration unit's files change %[1]d port map(s) of other units, which the kernel reads as what those units ported:\n%[2]s"
 	// %[1]d how many, %[2]s each script's line with its number
 	gateRateInScriptFmt = "rate_in_script: %[1]d line(s) of the unit's verify scripts write a rate in tok/s themselves; the kernel's rate is the ids a process prints on lines \"generated: …\" over the time it runs:\n%[2]s"
+	// %[1]d how many, %[2]s each with its file and line
+	gateWeakFmt = "weak_definition: %[1]d function(s) the integration unit's files define weak — the definition the link takes when no other definition of the name is linked:\n%[2]s"
 	// %[1]d how many, %[2]s each kernel with the unit's kernel of its name and their types
 	gateKernelCopiedFmt    = "kernel_copied: %[1]d kernel(s) of the integration unit's files outside the tests have the name and the parameter types of a kernel another unit's port map ports into another file:\n%[2]s"
 	gateKernelShadowedFmt  = "kernel_shadowed_in_test: %[1]s define a __global__ kernel of the same name as a counterpart in the unit's port map %[2]s. The launch probe reads a launch by name, so a test that launches its own copy proves nothing about the ported kernel: remove these definitions and call the ported kernel (or its launcher) from the test instead"
@@ -435,6 +439,9 @@ func unitGatesAll(in GateInput) (kinds, texts []string) {
 	}
 	if len(in.RateLines) > 0 {
 		fail("rate_in_script", fmt.Sprintf(gateRateInScriptFmt, len(in.RateLines), strings.Join(in.RateLines, "\n")))
+	}
+	if len(in.Weak) > 0 {
+		fail("weak_definition", fmt.Sprintf(gateWeakFmt, len(in.Weak), strings.Join(in.Weak, "\n")))
 	}
 	if len(in.Copied) > 0 {
 		fail("kernel_copied", fmt.Sprintf(gateKernelCopiedFmt, len(in.Copied), strings.Join(in.Copied, "\n")))

@@ -868,3 +868,22 @@ func TestAStaticCounterpartNoCodeCallsIsNoPort(t *testing.T) {
 		t.Fatal("a non-static was judged on its file alone")
 	}
 }
+
+// 11/28 layer_norm wrote weak definitions of six ilu_gdn host functions, each returning -1, so
+// that a link which had found none of them passed: each weak definition is a gate
+func TestAWeakDefinitionTheIntegrationWritesIsAGate(t *testing.T) {
+	ws := t.TempDir()
+	putTree(t, ws, map[string]string{
+		"src/kernels/gpu/ilu_gdn_weak_stubs.cu": "// weak stubs\n/* the link\n   needs them */\nnamespace baloon {\n__attribute__((weak))\nint beta_sigmoid(const float*, float*, int, void*) { return -1; }\n// __attribute__((weak)) int not_this(int);\n#pragma weak row_norm\n}\n",
+		"src/ok.cu":                             "int beta_sigmoid(const float* x, float* y, int n, void* s) { return 0; }\n",
+	})
+	got := weakDefinitions(ws, []string{"src/kernels/gpu/ilu_gdn_weak_stubs.cu", "src/ok.cu", "README.md"})
+	want := "  src/kernels/gpu/ilu_gdn_weak_stubs.cu:5 beta_sigmoid\n  src/kernels/gpu/ilu_gdn_weak_stubs.cu:8 row_norm"
+	if strings.Join(got, "\n") != want {
+		t.Fatalf("%q", got)
+	}
+	kinds, texts := unitGatesAll(GateInput{UnitID: "uint", Weak: got})
+	if len(kinds) != 1 || kinds[0] != "weak_definition" || !strings.HasPrefix(texts[0], "weak_definition: 2 function(s) the integration unit's files define weak") {
+		t.Fatalf("%v %q", kinds, texts)
+	}
+}
