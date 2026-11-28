@@ -496,3 +496,26 @@ func TestAPartfileThatIsAClosedDirectionsProgramIsNotGiven(t *testing.T) {
 		t.Fatalf("%v", p.PartFiles)
 	}
 }
+
+// 11/28 13:04:43 none of the planner's 54 partfile lines was e2e.sh or tests/k39_integration/
+// e2e_all_check.cu, the source of the program e2e.sh runs on the model: that is said, and a part
+// given one of them leaves nothing to say
+func TestNoPartWritingTheRunsFilesIsSaid(t *testing.T) {
+	ws := t.TempDir()
+	e2e := devE2EScript("uint")
+	putTree(t, ws, map[string]string{
+		e2e:                                      "# \"$BUILD/old_runner\" \"$MODEL_REAL\"\n\"$BUILD/gr_parity\"\n\"$BUILD/e2e_all_check\" \"$MODEL_REAL\" || true\n",
+		"tests/k39_integration/e2e_all_check.cu": "int main() {}\n",
+		"tests/k39_integration/gr_parity.cu":     "int main() {}\n",
+		"tests/k39_integration/old_runner.cu":    "int main() {}\n",
+	})
+	files := map[string][]string{"gdn": {"src/ix_gdn.cu"}, "moe": {"tests/k39_integration/gr_parity.cu"}}
+	want := "no part's files are " + e2e + " or the sources of the programs it runs on the model (tests/k39_integration/e2e_all_check.cu)"
+	if got := runFilesNoPartWrites(ws, "uint", files); got != want {
+		t.Fatalf("%q", got)
+	}
+	files["runner"] = []string{"tests/k39_integration/e2e_all_check.cu"}
+	if got := runFilesNoPartWrites(ws, "uint", files); got != "" {
+		t.Fatalf("%q", got)
+	}
+}

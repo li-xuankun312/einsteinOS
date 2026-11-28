@@ -22,6 +22,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -251,6 +252,10 @@ func (r *devRun) integrationModelAnswer(unit DevPlanNode, baseRef string) Integr
 	for _, d := range closedProgramPartFiles(&p, book) {
 		log.Printf(integrationClosedPartFileFmt, unit.ID, d)
 	}
+	if line := runFilesNoPartWrites(tree, unit.ID, p.PartFiles); line != "" && len(p.PartFiles) > 0 {
+		p.Facts = append(p.Facts, line)
+		log.Printf(integrationPlanFactLogFmt, unit.ID, line)
+	}
 	log.Printf(integrationModelLogFmt, r.repo, unit.ID, p.counts(), len(ms.TensorGroups()), len(perUnit))
 	integrationAnswersMu.Lock()
 	integrationAnswers[unit.ID] = p
@@ -331,6 +336,8 @@ type IntegrationModelPlan struct {
 	GroupsOff []string
 	// Dropped: lines of the answer's kinds that named something the data does not have
 	Dropped int
+	// Facts: what the tree measures of the parts' files (runFilesNoPartWrites)
+	Facts []string
 }
 
 // parseIntegrationModel reads the planner's lines; a line naming a group, unit or kernel the
@@ -499,7 +506,91 @@ func (p IntegrationModelPlan) Block() string {
 			b.WriteString("  " + s + "\n")
 		}
 	}
+	if len(p.Facts) > 0 {
+		b.WriteString(integrationPlanFactsHead)
+		for _, f := range p.Facts {
+			b.WriteString("  " + f + "\n")
+		}
+	}
 	return b.String()
+}
+
+const (
+	integrationPlanFactsHead = "### the parts' files, measured from the tree\n"
+	// %[1]s unit, %[2]s the fact
+	integrationPlanFactLogFmt = "dev_from_theorems: integration unit %[1]s: %[2]s"
+	// %[1]s e2e.sh, %[2]s the sources of the programs it runs
+	runFilesNoPartFmt = "no part's files are %[1]s or the sources of the programs it runs on the model (%[2]s)"
+)
+
+// e2eProgramRe: a program e2e.sh runs from the build directory — build/<name>, $BUILD/<name>, ${OUT}/<name>
+var e2eProgramRe = regexp.MustCompile(`(?:build|BUILD|OUT|BIN)\}?"?/([A-Za-z0-9_]+)`)
+
+// e2eProgramSources: the tree's .cu, .cpp and .cc files whose name, extension aside, is that of a
+// program the unit's e2e.sh runs from its build directory on a line naming the model's directory
+// (a variable named MODEL…), comments aside — 11/28 "$BUILD/e2e_all_check" "$MODEL_REAL".
+func e2eProgramSources(tree, unitID string) []string {
+	b, err := os.ReadFile(filepath.Join(tree, filepath.FromSlash(devE2EScript(unitID))))
+	if err != nil {
+		return nil
+	}
+	progs := map[string]bool{}
+	for _, l := range strings.Split(string(b), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(l), "#") {
+			continue
+		}
+		// a program run on the model: the line hands it the model's directory
+		if !strings.Contains(l, "MODEL") {
+			continue
+		}
+		for _, m := range e2eProgramRe.FindAllStringSubmatch(l, -1) {
+			progs[m[1]] = true
+		}
+	}
+	var out []string
+	filepath.WalkDir(tree, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if n := d.Name(); n == ".git" || n == "build" || n == "node_modules" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		ext := filepath.Ext(p)
+		if (ext == ".cu" || ext == ".cpp" || ext == ".cc") && progs[strings.TrimSuffix(d.Name(), ext)] {
+			rel, _ := filepath.Rel(tree, p)
+			out = append(out, filepath.ToSlash(rel))
+		}
+		return nil
+	})
+	sort.Strings(out)
+	return out
+}
+
+// runFilesNoPartWrites: when no part's files are the unit's e2e.sh or a source of the programs it
+// runs, that fact; "" when a part has one, or e2e.sh runs no program of the tree. 11/28 13:04:43 the
+// planner's 54 partfile lines gave its parts the kernels' files and parity tests, and none was
+// .einsteinOS/verify/uintegration01529aaa82b9/e2e.sh or tests/k39_integration/e2e_all_check.cu,
+// the source of build/e2e_all_check, the port's program that had taken in the whole model.
+func runFilesNoPartWrites(tree, unitID string, files map[string][]string) string {
+	srcs := e2eProgramSources(tree, unitID)
+	if len(srcs) == 0 {
+		return ""
+	}
+	run := map[string]bool{devE2EScript(unitID): true}
+	for _, s := range srcs {
+		run[s] = true
+	}
+	for _, list := range files {
+		for _, f := range list {
+			if run[f] {
+				return ""
+			}
+		}
+	}
+	return fmt.Sprintf(runFilesNoPartFmt, devE2EScript(unitID), strings.Join(srcs, " "))
 }
 
 // %[1]s repo, %[2]s unit, %[3]s the answer's counts, %[4]d tensor groups, %[5]d units with kernels
