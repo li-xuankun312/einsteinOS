@@ -38,6 +38,9 @@ type E2ELoader struct {
 	WeightFiles []string `json:"weight_files,omitempty"`
 	Derived     []string `json:"derived,omitempty"` // large files it opened that were written during the run
 	PortKernels []string `json:"port_kernels,omitempty"`
+	// Built: its executable is a file of the workspace — a program the port built, not an
+	// interpreter running a file of it
+	Built bool `json:"built,omitempty"`
 	// Seconds: how long the watcher saw it running (eval_e2e_rate.go)
 	Seconds float64 `json:"seconds"`
 	// TookBytes: what it took in — the bytes it read plus the most of its weight mappings
@@ -75,6 +78,7 @@ func e2eLoaders(ws string, procs []ProcSeen, launchedBy map[int][]string, since 
 			Seconds: p.Last.Sub(p.First).Seconds(), TookBytes: p.ReadBytes + p.MappedWeightBytes}
 		l.Port = (root != "" && strings.HasPrefix(p.Exe, root+"/")) || len(p.WorkspaceLibs) > 0 || len(p.WorkspaceArgs) > 0
 		l.Scripts = p.WorkspaceArgs
+		l.Built = root != "" && strings.HasPrefix(p.Exe, root+"/")
 		for _, f := range p.Large {
 			if st, err := os.Stat(f); err == nil && st.ModTime().After(since.Add(-machineClockSlack)) {
 				l.Derived = append(l.Derived, f)
@@ -167,7 +171,8 @@ func e2eRunner(br EvalBenchRun, perUnit map[string][]string) (E2ELoader, bool) {
 			// group of the model's tensors its op lines name — one of the kernels named for it
 			covers = len(missingUnits(l, units, perUnit)) == 0 && len(missingGroups(l, br.RunnerGroups)) == 0
 		}
-		if l.Port && (tookTheModel(l, br.ModelBytes) || len(l.Derived) > 0) && covers && (!found || l.Seconds > best.Seconds) {
+		// a program the port built before an interpreter running a file of it, then the longest seen
+		if l.Port && (tookTheModel(l, br.ModelBytes) || len(l.Derived) > 0) && covers && (!found || (l.Built && !best.Built) || (l.Built == best.Built && l.Seconds > best.Seconds)) {
 			best, found = l, true
 		}
 	}

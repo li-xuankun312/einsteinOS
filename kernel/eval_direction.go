@@ -155,7 +155,8 @@ func directionProgram(ws string, l E2ELoader) string {
 
 // directionKey: the run's direction — the program of the process that runs the model: the
 // runner (e2eRunner), else the process that took in the most of the model (a port's first, then
-// the one that launched the most ported kernels, then the longest seen), named by
+// a program the port built, then the one that launched the most ported kernels, then the longest
+// seen), named by
 // directionProgram. 11/22 18:42 one more script that opened the weight files
 // (pytools/e2e_port_check.py, 2.7 s) beside pytools/e2e_infer.py, whose direction had closed at
 // 18:11, was a new direction with a new budget: the processes that read the model were the key.
@@ -168,11 +169,27 @@ func directionKey(ws string, br EvalBenchRun, perUnit map[string][]string) strin
 	var best E2ELoader
 	found := false
 	better := func(a, b E2ELoader) bool {
-		if a.TookBytes != b.TookBytes {
+		// two processes that each took in the model are equal in it: 11/28 python's reads and
+		// mappings of the same files summed past build/e2e_all_check's
+		ta, tb := tookTheModel(a, br.ModelBytes), tookTheModel(b, br.ModelBytes)
+		if ta != tb {
+			return ta
+		}
+		if !ta && a.TookBytes != b.TookBytes {
 			return a.TookBytes > b.TookBytes
 		}
 		if a.Port != b.Port {
 			return a.Port
+		}
+		// a program the port built before an interpreter running a file of it: 11/28 04:41:02
+		// build/e2e_all_check took in 66.97 GiB of the model's 66.97 GiB and launched ported kernels
+		// itself, and the run was named python3.10 pytools/e2e_infer.py, closed since 11/22 18:11,
+		// and not evaluated
+		if a.Built != b.Built {
+			return a.Built
+		}
+		if a.TookBytes != b.TookBytes {
+			return a.TookBytes > b.TookBytes
 		}
 		if len(a.PortKernels) != len(b.PortKernels) {
 			return len(a.PortKernels) > len(b.PortKernels)

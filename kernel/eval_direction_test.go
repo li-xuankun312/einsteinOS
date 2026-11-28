@@ -192,3 +192,29 @@ python3.10 "$ROOT/pytools/e2e_infer.py"
 		t.Fatal("no book, a direction")
 	}
 }
+
+// 11/28 04:41:02 build/e2e_all_check, a program the port built, took in the whole model and
+// launched ported kernels itself, and the run was named after python3.10 pytools/e2e_infer.py,
+// whose reads and mappings of the same files summed higher: of the processes that took in the
+// model, the port's built program names the run, as it is the runner when both cover the units
+func TestAProgramThePortBuiltNamesTheRunBeforeAnInterpreter(t *testing.T) {
+	ws := "/tmp/einsteinos_verify_uint"
+	perUnit := map[string][]string{"u1": {"k"}, "u2": {"j"}}
+	run := EvalBenchRun{ModelBytes: 100, Loaders: []E2ELoader{
+		{Exe: "/usr/local/bin/python3.10", Cmdline: "python3 " + ws + "/pytools/e2e_infer.py /m", Port: true, Weights: 26, TookBytes: 180, PortKernels: []string{"k"}, Seconds: 118},
+		{Exe: ws + "/build/e2e_all_check", Cmdline: ws + "/build/e2e_all_check /m", Port: true, Built: true, Weights: 26, TookBytes: 100, PortKernels: []string{"j"}, Seconds: 13},
+	}}
+	if k := directionKey(ws, run, perUnit); k != "build/e2e_all_check [port]" {
+		t.Fatalf("%q", k)
+	}
+	run.Loaders[1].TookBytes = 50
+	if k := directionKey(ws, run, perUnit); k != "python3.10 pytools/e2e_infer.py [port]" {
+		t.Fatalf("one that did not take in the model named the run: %q", k)
+	}
+	run.Loaders[1].TookBytes = 100
+	run.Loaders[0].PortKernels = []string{"j", "k"}
+	run.Loaders[1].PortKernels = []string{"j", "k"}
+	if r, ok := e2eRunner(run, perUnit); !ok || !r.Built {
+		t.Fatalf("%v %+v", ok, r)
+	}
+}
