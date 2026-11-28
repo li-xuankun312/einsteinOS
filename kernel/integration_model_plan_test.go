@@ -3,6 +3,7 @@ package kernel
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -584,5 +585,38 @@ func TestThePreviousAnswersPartFilesAreMeasuredForThePlanner(t *testing.T) {
 	}
 	if len(prev.PartFiles["embed"]) != 1 {
 		t.Fatal("the previous answer was changed")
+	}
+}
+
+// 11/28 17:35:47 the call of rms_norm_bf16w_inplace had left e2e_all_check.cu in an earlier
+// attempt, so the tree this one started from lacked it too: the names are measured against the
+// last tree of the branch whose run reached the evaluation on the model
+func TestACallGoneSinceTheLastEvaluatedTreeIsSaid(t *testing.T) {
+	clone, mirror := t.TempDir(), t.TempDir()
+	src := "tests/k39_integration/e2e_all_check.cu"
+	git := func(args ...string) {
+		if out, err := exec.Command("git", append([]string{"-C", clone, "-c", "user.email=t@t", "-c", "user.name=t"}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("%v %s", err, out)
+		}
+	}
+	putTree(t, clone, map[string]string{src: "int main() { rms_norm_bf16w_inplace(x, w, 1, 2, 1e-6f); }\n"})
+	git("init", "-q")
+	git("add", "-A")
+	git("commit", "-qm", "unit u: rejected at a done line, parked [compile=pass smoke=pass gate=integration_direction_closed]")
+	putTree(t, clone, map[string]string{src: "int main() { }\n"})
+	git("commit", "-qam", "unit u: rejected at a done line, parked [compile=pass smoke=pass gate=kernel_unported]")
+	git("update-ref", "refs/remotes/origin/wip", "HEAD")
+	putTree(t, mirror, map[string]string{
+		src:                                "int main() { }\n",
+		devE2EScript("uint"):               "\"$BUILD/e2e_all_check\" \"$MODEL_REAL\"\n",
+		".einsteinOS/port/pcd027bc02f.tsv": "src/kernels/cuda/elementwise.cu\trms_norm_bf16w_inplace_kernel\tsrc/kernels/gpu/ew_ops.cu\trms_norm_bf16w_inplace_kernel\n",
+	})
+	if got := runCallsRemoved(clone, mirror, "uint"); got != "" {
+		t.Fatalf("against the tree started from: %q", got)
+	}
+	got := runCallsRemovedSince(clone, mirror, "uint", "wip")
+	if !strings.Contains(got, "measured against the last tree of the branch the unit started from whose run reached the evaluation on the model, ") ||
+		!strings.Contains(got, "gate=integration_direction_closed)]\n"+src+" no longer names rms_norm_bf16w_inplace; pcd027bc02f ports rms_norm_bf16w_inplace_kernel\n") {
+		t.Fatalf("%q", got)
 	}
 }

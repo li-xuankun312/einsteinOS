@@ -650,7 +650,7 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 			if leanConst != "" {
 				log.Printf("dev_preverify: %s unit %s: %s", r.repo, unit.ID, strings.ReplaceAll(strings.TrimSpace(leanConst), "\n", "; "))
 			}
-			callsGone := runCallsRemoved(cloneDir, mirror, unit.ID)
+			callsGone := runCallsRemovedSince(cloneDir, mirror, unit.ID, baseRef)
 			if callsGone != "" {
 				log.Printf("dev_preverify: %s unit %s: %s", r.repo, unit.ID, strings.ReplaceAll(strings.TrimSpace(callsGone), "\n", "; "))
 			}

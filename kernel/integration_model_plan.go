@@ -1176,7 +1176,11 @@ func prevUnclaimedBlock(ms ModelShape, prev string, perUnit map[string][]string,
 }
 
 const (
-	runCallsRemovedHead = "\n[NAMES THE PROGRAMS E2E.SH RUNS ON THE MODEL NO LONGER CALL — measured against the tree the unit started from]\n"
+	// %[1]s what the names are measured against
+	runCallsRemovedHeadFmt = "\n[NAMES THE PROGRAMS E2E.SH RUNS ON THE MODEL NO LONGER CALL — measured against %[1]s]\n"
+	runCallsAgainstTip     = "the tree the unit started from"
+	// %[1]s the commit, %[2]s its date, %[3]s its gate
+	runCallsAgainstEvalFmt = "the last tree of the branch the unit started from whose run reached the evaluation on the model, %[1]s (%[2]s, gate=%[3]s)"
 	// %[1]s the source, %[2]s the name, %[3]s the unit, %[4]s its kernel
 	runCallRemovedFmt = "%[1]s no longer names %[2]s; %[3]s ports %[4]s\n"
 )
@@ -1189,6 +1193,48 @@ const (
 // to clear kernel_unported (b756e5f6): each layer's input_layernorm, from the program that had
 // taken in the whole model.
 func runCallsRemoved(tip, mirror, unitID string) string {
+	return runCallsRemovedSince(tip, mirror, unitID, "")
+}
+
+var evalGateSubjectRe = regexp.MustCompile(`gate=(integration_[a-z_]+)`)
+
+// lastEvaluatedCommit: the latest commit of origin/<baseRef> in the clone whose subject records a
+// gate of the evaluation on the model (gate=integration_…) — a tree whose unit gates all passed and
+// whose e2e.sh ran on the model — with its date and that gate; "" when none.
+func lastEvaluatedCommit(clone, baseRef string) (sha, date, gate string) {
+	if baseRef == "" {
+		return "", "", ""
+	}
+	out, err := gitIn(clone, "log", "--format=%H %cI %s", "-200", "origin/"+baseRef)
+	if err != nil {
+		return "", "", ""
+	}
+	for _, l := range strings.Split(out, "\n") {
+		f := strings.SplitN(l, " ", 3)
+		if len(f) == 3 {
+			if m := evalGateSubjectRe.FindStringSubmatch(f[2]); m != nil {
+				return f[0], f[1], m[1]
+			}
+		}
+	}
+	return "", "", ""
+}
+
+// runCallsRemovedSince: runCallsRemoved measured against the last tree of origin/<baseRef> whose
+// run reached the evaluation on the model, else against the tree the unit started from. 11/28
+// 17:35:47 the attempt continued from the tree parked at 14:07, from which the call of
+// rms_norm_bf16w_inplace had been gone since 13:36, and nothing was said; d6a1a01, parked at 05:29
+// with gate=integration_direction_closed — e2e.sh run on the model — still called it twice.
+func runCallsRemovedSince(tip, mirror, unitID, baseRef string) string {
+	against := runCallsAgainstTip
+	read := func(f string) ([]byte, error) { return os.ReadFile(filepath.Join(tip, filepath.FromSlash(f))) }
+	if sha, date, gate := lastEvaluatedCommit(tip, baseRef); sha != "" {
+		against = fmt.Sprintf(runCallsAgainstEvalFmt, sha[:8], date, gate)
+		read = func(f string) ([]byte, error) {
+			out, err := gitIn(tip, "show", sha+":"+f)
+			return []byte(out), err
+		}
+	}
 	ported := map[string]string{} // kernel -> unit
 	maps, _ := filepath.Glob(filepath.Join(mirror, ".einsteinOS", "port", "*.tsv"))
 	for _, m := range maps {
@@ -1211,7 +1257,7 @@ func runCallsRemoved(tip, mirror, unitID string) string {
 	}
 	var lines []string
 	for _, f := range e2eProgramSources(mirror, unitID) {
-		then, err := os.ReadFile(filepath.Join(tip, filepath.FromSlash(f)))
+		then, err := read(f)
 		if err != nil {
 			continue
 		}
@@ -1234,5 +1280,5 @@ func runCallsRemoved(tip, mirror, unitID string) string {
 		return ""
 	}
 	sort.Strings(lines)
-	return runCallsRemovedHead + strings.Join(lines, "")
+	return fmt.Sprintf(runCallsRemovedHeadFmt, against) + strings.Join(lines, "")
 }
