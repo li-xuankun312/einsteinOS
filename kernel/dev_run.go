@@ -1045,7 +1045,7 @@ func (r *devRun) unitPrompt(unit DevPlanNode, idx, total, attempt int, fail DevF
 		what += fmt.Sprintf(devWhatFailFmt, fail.Kind)
 	}
 	commits := devCommitsEstimate(devUnitMirrorDir(r.devRepo, unit.ID), unit.ID, r.shown(unit).Symbols, len(unit.Modules))
-	return maskShownPrompt(r.repo, Bagu(fmt.Sprintf(devWhereFmt, baseRef), what, c.String(), fmt.Sprint(commits), r.devRepo))
+	return maskShownPrompt(r.repo, Bagu(fmt.Sprintf(devWhereFmt, baseRef), what, c.String(), fmt.Sprint(commits), devCommitsTo))
 }
 
 // how many review conversations a unit is given to reach a verdict, and what is said when

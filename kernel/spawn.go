@@ -242,12 +242,14 @@ func theoryTo() string {
 }
 
 // spawnTo: where a spawned conversation's work goes
-func spawnTo() string {
-	if d := GetDevRepos(); len(d) > 0 {
-		return d[0]
-	}
-	return "the tree"
-}
+func spawnTo() string { return devCommitsTo }
+
+// devCommitsTo: where a conversation that writes code is told its commits go — this machine,
+// from which the kernel pushes them; never the repository, which the machine's credentials, not
+// the conversation's, push to. 11/28 3255b0f9 was told "推到zeng-bin3123/baloon", committed four
+// times and asked the person for a GitHub token to push with, the [THIS MACHINE] facts saying
+// the kernel pushes its work itself.
+const devCommitsTo = "这台机器"
 
 var judgeLineRe = regexp.MustCompile(`^\s*(\d+)\s*[:.)]\s*([A-Za-z_]+)\s*(?:[:\-–]\s*(.*))?$`)
 

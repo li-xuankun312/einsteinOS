@@ -107,3 +107,16 @@ func TestTheShellsFirstSentenceNamesTheWork(t *testing.T) {
 		}
 	}
 }
+
+// 11/28 3255b0f9 was told to push to zeng-bin3123/baloon and asked the person for a token: a
+// conversation that writes code is told its commits go to this machine
+func TestACodeConversationsCommitsGoToThisMachine(t *testing.T) {
+	dev_repos_mu.Lock()
+	dev_repos["zeng-bin3123/baloon"] = "main"
+	dev_repos_mu.Unlock()
+	defer func() { dev_repos_mu.Lock(); delete(dev_repos, "zeng-bin3123/baloon"); dev_repos_mu.Unlock() }()
+	p := Bagu("w", "x", "c", "1", spawnTo())
+	if !strings.Contains(p, "推到这台机器") || strings.Contains(p, "zeng-bin3123/baloon") {
+		t.Fatalf("%s", p)
+	}
+}
