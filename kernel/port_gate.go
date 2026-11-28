@@ -1106,3 +1106,56 @@ func scriptRateLines(ws, unitID string) []string {
 	}
 	return out
 }
+
+// %[1]s the map, %[2]d lines put in, %[3]d taken out, %[4]s the first lines put in
+const otherMapLineFmt = "  %[1]s: %[2]d line(s) in, %[3]d out%[4]s"
+
+// otherMapsChanged: each port map under .einsteinOS/port of a unit other than unitID that the
+// delta changes or removes, with the lines it puts in and takes out against the branch the unit
+// started from (tip) and the first three it puts in. 11/28 06:45:54 kernel_unported held 2 files of
+// uintegration01529aaa82b9 where at 05:29 it had held 8: the unit had written 24 rows into
+// .einsteinOS/port/pcd027bc02f.tsv, last verified 11/19, naming its own kernels — src/ilu_gdn_prep.cu
+// row_norm_kernel, src/ix_shared_expert.cu swiglu_kernel, native_rope.cu apply →
+// qsa_bf16_layer.cu qsa_mrope_step_kernel — as that unit's ports.
+func otherMapsChanged(tip, mirror, unitID string, changed, removed []string) []string {
+	own := PortMapPath(unitID)
+	isMap := func(f string) bool {
+		return strings.HasPrefix(f, ".einsteinOS/port/") && strings.HasSuffix(f, ".tsv") && f != own
+	}
+	var out []string
+	add := func(f, now string) {
+		then, _ := os.ReadFile(filepath.Join(tip, filepath.FromSlash(f)))
+		in, gone := lineDelta(string(then), now)
+		if in == 0 && gone == 0 {
+			return
+		}
+		old := map[string]bool{}
+		for _, l := range strings.Split(string(then), "\n") {
+			old[l] = true
+		}
+		var first []string
+		for _, l := range strings.Split(now, "\n") {
+			if strings.TrimSpace(l) != "" && !old[l] && len(first) < 3 {
+				first = append(first, strings.ReplaceAll(l, "\t", " "))
+			}
+		}
+		more := ""
+		if len(first) > 0 {
+			more = ": " + strings.Join(first, "; ")
+		}
+		out = append(out, fmt.Sprintf(otherMapLineFmt, f, in, gone, more))
+	}
+	for _, f := range changed {
+		if isMap(f) {
+			b, _ := os.ReadFile(filepath.Join(mirror, filepath.FromSlash(f)))
+			add(f, string(b))
+		}
+	}
+	for _, f := range removed {
+		if isMap(f) {
+			add(f, "")
+		}
+	}
+	sort.Strings(out)
+	return out
+}

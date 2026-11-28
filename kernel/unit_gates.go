@@ -74,6 +74,9 @@ type GateInput struct {
 	OpKernels []string
 	// Shadowed: kernels the port map names that a test file defines too (shadowedKernels)
 	Shadowed []string
+	// OtherMaps: the port maps of other units the integration unit's delta changes
+	// (otherMapsChanged)
+	OtherMaps []string
 	// RateLines: the lines of the integration unit's verify scripts writing a rate in tok/s
 	// (scriptRateLines)
 	RateLines []string
@@ -155,6 +158,8 @@ const (
 	gateKernelNotLaunchedFmt   = "gpu_kernel_not_launched: test.sh exited 0 but launched none of the unit's kernels (%[1]s); kernels its processes launched: %[2]s; executables the launch probe was in: %[3]s — a test that opens the device and checks on the CPU proves nothing about the kernels"
 	gateLaunchUnmeasuredFmt    = "gpu_launch_unmeasured: whether the unit's kernels ran on the device could not be measured: %[1]s"
 	gateIntegrationNoKernelFmt = "integration_kernel_not_launched: the reference builds CUDA and its %[1]d registered tests passed here, but none of them launched a kernel of this repository (it defines %[2]d: %[3]s); kernels launched: %[4]s"
+	// %[1]d how many, %[2]s each map with its lines put in and taken out
+	gateOtherMapsFmt = "port_map_of_other_unit: the integration unit's files change %[1]d port map(s) of other units, which the kernel reads as what those units ported:\n%[2]s"
 	// %[1]d how many, %[2]s each script's line with its number
 	gateRateInScriptFmt = "rate_in_script: %[1]d line(s) of the unit's verify scripts write a rate in tok/s themselves; the kernel's rate is the ids a process prints on lines \"generated: …\" over the time it runs:\n%[2]s"
 	// %[1]d how many, %[2]s each kernel with the unit's kernel of its name and their types
@@ -424,6 +429,9 @@ func unitGatesAll(in GateInput) (kinds, texts []string) {
 	}
 	if len(in.Shadowed) > 0 {
 		fail("kernel_shadowed_in_test", fmt.Sprintf(gateKernelShadowedFmt, strings.Join(in.Shadowed, ", "), PortMapPath(in.UnitID)))
+	}
+	if len(in.OtherMaps) > 0 {
+		fail("port_map_of_other_unit", fmt.Sprintf(gateOtherMapsFmt, len(in.OtherMaps), strings.Join(in.OtherMaps, "\n")))
 	}
 	if len(in.RateLines) > 0 {
 		fail("rate_in_script", fmt.Sprintf(gateRateInScriptFmt, len(in.RateLines), strings.Join(in.RateLines, "\n")))

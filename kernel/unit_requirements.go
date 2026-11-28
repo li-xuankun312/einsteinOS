@@ -157,6 +157,9 @@ func splitTheoryModules(theory string) map[string]string {
 
 // UnitRequirements is what the reference says a unit is made of.
 type UnitRequirements struct {
+	// OtherMaps: for the integration unit, each port map of another unit its delta changes, with
+	// the lines it puts in and takes out (otherMapsChanged) — set for one verification
+	OtherMaps  []string
 	Sources    []string            // reference files the unit's modules come from
 	GPUSources []string            // the .cu/.cuh among them
 	ISAFlags   []string            // compile options the reference's build gives them (-m…)

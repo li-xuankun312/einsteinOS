@@ -753,7 +753,7 @@ func unitGateInput(ws, unitID string, req UnitRequirements, changed []string, bu
 	return GateInput{Req: req, Changed: changed, Build: build, Test: test, Compilers: presentGPUCompilers(),
 		PortMissing: portMissingLines, PortMissingText: portMissingText, PortExtra: portExtra(ws, unitID, req.Symbols), PortRefFiles: portRefFiles(ws, unitID, req.Symbols), RefPathsWritten: refPathsWritten(withRefPathsPresent(ws, changed, req), req),
 		PortForeign: portForeignNames(ws, unitID, req.FileNames), PortScripts: unitPortScripts(ws, unitID, req), MutatesMissingScript: mutScript, MutatesMissing: mutMissing, Kernels: unitKernels(ws, changed), KernelsMeasured: true,
-		Shadowed: shadowedKernels(unitKernels(ws, changed), portKernels(ws, unitID)), Copied: copied, RateLines: rateLines,
+		Shadowed: shadowedKernels(unitKernels(ws, changed), portKernels(ws, unitID)), Copied: copied, RateLines: rateLines, OtherMaps: req.OtherMaps,
 		EntryStubs: entryStubs(ws, unitBuildScript(unitID)),
 		ISAFuncs:   isaPortFuncs(pm, req.FlagFiles), PortKernels: portKernels(ws, unitID), UnitID: unitID,
 		PortFiles: pf, PortFilesRefused: pfRefused, MissingGroups: missingGroups, MissingOff: missingOff, OpKernels: opKernels, RowKernels: rowKernels, PortedInto: portedInto, OtherPorted: otherPorted,
@@ -891,6 +891,9 @@ func devVerifyOnly(cloneDir, mirror, branch, baseRef, unitID, gpuUsable string, 
 		return out
 	}
 	out.Changed, out.Removed = changed, removed
+	if len(req.Tests) > 0 {
+		req.OtherMaps = otherMapsChanged(cloneDir, mirror, unitID, changed, removed)
+	}
 	if len(changed) == 0 && len(removed) == 0 {
 		if prior := devUnitPriorFiles(cloneDir, baseRef, unitID); len(prior) > 0 {
 			return devVerifyExisting(cloneDir, mirror, branch, baseRef, unitID, gpuUsable, req, prior)
