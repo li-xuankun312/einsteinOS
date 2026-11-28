@@ -891,9 +891,6 @@ func devVerifyOnly(cloneDir, mirror, branch, baseRef, unitID, gpuUsable string, 
 		return out
 	}
 	out.Changed, out.Removed = changed, removed
-	if len(req.Tests) > 0 {
-		req.OtherMaps = otherMapsChanged(cloneDir, mirror, unitID, changed, removed)
-	}
 	if len(changed) == 0 && len(removed) == 0 {
 		if prior := devUnitPriorFiles(cloneDir, baseRef, unitID); len(prior) > 0 {
 			return devVerifyExisting(cloneDir, mirror, branch, baseRef, unitID, gpuUsable, req, prior)
@@ -908,6 +905,9 @@ func devVerifyOnly(cloneDir, mirror, branch, baseRef, unitID, gpuUsable string, 
 	if err := gitUseBranchFromRemote(cloneDir, baseRef, branch); err != nil {
 		out.Err = fmt.Errorf("checkout base %s: %w", baseRef, err)
 		return out
+	}
+	if len(req.Tests) > 0 {
+		req.OtherMaps = otherMapsChanged(cloneDir, mirror, branch, unitID)
 	}
 	// a file of the delta another unit changed on the branch since this unit's mirror was primed
 	// is not written over (units side by side, dev_schedule.go): the unit runs again, alone

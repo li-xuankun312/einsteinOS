@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"fmt"
+	"os/exec"
 	"path"
 	"strings"
 	"testing"
@@ -819,28 +820,36 @@ func TestEachPrinterOfGeneratedIsGivenTheE2EThatNamesIt(t *testing.T) {
 }
 
 // 11/28 06:45:54 the integration unit had written 24 rows into pcd027bc02f's port map naming its
-// own kernels as that unit's ports: each other unit's map its delta changes is a gate, with the
-// lines put in and taken out against the branch it started from
+// own kernels as that unit's ports, and 13:42:06, continuing from its parked tree, the rows were in
+// the tree it started from: each other unit's map is measured against the dev branch
 func TestAnotherUnitsPortMapTheIntegrationChangesIsAGate(t *testing.T) {
-	tip, mirror := t.TempDir(), t.TempDir()
-	putTree(t, tip, map[string]string{
-		".einsteinOS/port/pcd027bc02f.tsv": "src/kernels/cuda/gdn.cu\tgdn_step_kernel\tsrc/kernels/gpu/gdn_core.cu\tgdn_step_kernel\n",
-		".einsteinOS/port/uint.tsv":        "",
-	})
-	putTree(t, mirror, map[string]string{
-		".einsteinOS/port/pcd027bc02f.tsv": "src/kernels/cuda/gdn.cu\tgdn_step_kernel\tsrc/kernels/gpu/gdn_core.cu\tgdn_step_kernel\n" +
-			"src/kernels/cuda/native_gdn_preprocess.cu\trow_norm_kernel\tsrc/ilu_gdn_prep.cu\trow_norm_kernel\n",
-		".einsteinOS/port/uint.tsv": "a\tb\tc\td\n",
-	})
-	got := otherMapsChanged(tip, mirror, "uint", []string{".einsteinOS/port/pcd027bc02f.tsv", ".einsteinOS/port/uint.tsv", "src/x.cu"}, []string{".einsteinOS/port/u9.tsv"})
-	want := []string{
-		"  .einsteinOS/port/pcd027bc02f.tsv: 1 line(s) in, 0 out: src/kernels/cuda/native_gdn_preprocess.cu row_norm_kernel src/ilu_gdn_prep.cu row_norm_kernel",
+	clone, mirror := t.TempDir(), t.TempDir()
+	verified := "src/kernels/cuda/gdn.cu\tgdn_step_kernel\tsrc/kernels/gpu/gdn_core.cu\tgdn_step_kernel\n"
+	written := verified + "src/kernels/cuda/native_gdn_preprocess.cu\trow_norm_kernel\tsrc/ilu_gdn_prep.cu\trow_norm_kernel\n"
+	// the dev branch holds the map as verified; the clone's files, the parked tree, the rows written
+	putTree(t, clone, map[string]string{".einsteinOS/port/pcd027bc02f.tsv": verified, ".einsteinOS/port/u9.tsv": "a\tb\tc\td\n"})
+	for _, args := range [][]string{{"init", "-q"}, {"add", "-A"}, {"-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "dev"}, {"update-ref", "refs/remotes/origin/einsteinOS/dev", "HEAD"}} {
+		if out, err := exec.Command("git", append([]string{"-C", clone}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("%v %s", err, out)
+		}
 	}
-	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+	putTree(t, clone, map[string]string{".einsteinOS/port/pcd027bc02f.tsv": written})
+	putTree(t, mirror, map[string]string{
+		".einsteinOS/port/pcd027bc02f.tsv": written,
+		".einsteinOS/port/uint.tsv":        "a\tb\tc\td\n",
+	})
+	want := "  .einsteinOS/port/pcd027bc02f.tsv: 1 line(s) in, 0 out: src/kernels/cuda/native_gdn_preprocess.cu row_norm_kernel src/ilu_gdn_prep.cu row_norm_kernel\n" +
+		"  .einsteinOS/port/u9.tsv: 0 line(s) in, 1 out"
+	got := otherMapsChanged(clone, mirror, "einsteinOS/dev", "uint")
+	if strings.Join(got, "\n") != want {
+		t.Fatalf("%q", got)
+	}
+	// without the branch, against the clone's files: the parked tree's rows are not seen
+	if got := otherMapsChanged(clone, mirror, "", "uint"); len(got) != 0 {
 		t.Fatalf("%q", got)
 	}
 	kinds, texts := unitGatesAll(GateInput{UnitID: "uint", OtherMaps: got})
-	if len(kinds) != 1 || kinds[0] != "port_map_of_other_unit" || !strings.HasPrefix(texts[0], "port_map_of_other_unit: the integration unit's files change 1 port map(s) of other units") {
+	if len(kinds) != 1 || kinds[0] != "port_map_of_other_unit" || !strings.HasPrefix(texts[0], "port_map_of_other_unit: the integration unit's files change 2 port map(s) of other units") {
 		t.Fatalf("%v %q", kinds, texts)
 	}
 }
