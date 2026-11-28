@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -99,4 +100,48 @@ func leanGate(ws string, changed []string) (kind, text string) {
 		return GateLeanUnchecked, strings.Join(unchecked, "\n")
 	}
 	return "", ""
+}
+
+var (
+	leanTheoremRe = regexp.MustCompile(`(?m)^\s*(?:theorem|lemma|example)\s+([^\s:({\[]*)\s*([^:]*?)\s*:\s*([^\n]*?)\s*:=`)
+	// a statement of numerals and arithmetic alone
+	leanConstantRe = regexp.MustCompile(`^[0-9\s+\-*/%^()=<>≤≥≠]+$`)
+)
+
+const (
+	leanConstantHead = "\n[LEAN THEOREMS THIS ATTEMPT ADDED THAT STATE NUMERALS ALONE — measured from the mirror; no definition of the port is named in them]\n"
+	// %[1]s the file, %[2]s the theorem, %[3]s its statement
+	leanConstantLineFmt = "%[1]s %[2]s : %[3]s\n"
+)
+
+// leanConstantTheorems: the theorems of the delta's .lean files, not in the branch the unit
+// started from (tip), whose statement — with no binders — is numerals and arithmetic alone.
+// 11/28 the part embed (7a052aa6) added theorem gatherPerRow2048 : 2048 / 8 = 256 := by decide to
+// lean/Baloon/PrefillKernels.lean for the sentence of embed_parity.cu on the model's geometry.
+func leanConstantTheorems(tip, mirror string, changed []string) string {
+	var lines []string
+	for _, f := range changed {
+		if !strings.HasSuffix(f, ".lean") {
+			continue
+		}
+		now, err := os.ReadFile(filepath.Join(mirror, filepath.FromSlash(f)))
+		if err != nil {
+			continue
+		}
+		then, _ := os.ReadFile(filepath.Join(tip, filepath.FromSlash(f)))
+		had := map[string]bool{}
+		for _, m := range leanTheoremRe.FindAllStringSubmatch(string(then), -1) {
+			had[m[1]+"\x00"+m[3]] = true
+		}
+		for _, m := range leanTheoremRe.FindAllStringSubmatch(string(now), -1) {
+			if strings.TrimSpace(m[2]) == "" && leanConstantRe.MatchString(m[3]) && !had[m[1]+"\x00"+m[3]] {
+				lines = append(lines, fmt.Sprintf(leanConstantLineFmt, f, m[1], m[3]))
+			}
+		}
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	sort.Strings(lines)
+	return leanConstantHead + strings.Join(lines, "")
 }

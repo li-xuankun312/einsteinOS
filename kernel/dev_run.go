@@ -646,7 +646,11 @@ func (r *devRun) runUnit(unit DevPlanNode, idx, total int) (stdout string, passe
 			if ported != "" {
 				log.Printf("dev_preverify: %s unit %s: %s", r.repo, unit.ID, truncStr(strings.TrimSpace(ported), preVerifyGateTextLogMax))
 			}
-			report := preVerifyReport(o) + still + regressed + ported + preVerifySince(startedAt, mirrorWritesSince(unit.ID, startedAt)) + compileSymbolFacts(o.Result.Compile, mirror)
+			leanConst := leanConstantTheorems(cloneDir, mirror, changed)
+			if leanConst != "" {
+				log.Printf("dev_preverify: %s unit %s: %s", r.repo, unit.ID, strings.ReplaceAll(strings.TrimSpace(leanConst), "\n", "; "))
+			}
+			report := preVerifyReport(o) + still + leanConst + regressed + ported + preVerifySince(startedAt, mirrorWritesSince(unit.ID, startedAt)) + compileSymbolFacts(o.Result.Compile, mirror)
 			if o.Result.Compile == "fail" {
 				// build.sh's output once: compile_error is "build.sh exit=N: " and the same output
 				if owners := compileErrorOwners(unit.ID, o.Result.BuildOut); owners != "" {
