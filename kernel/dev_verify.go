@@ -1004,6 +1004,9 @@ func devVerifyExisting(cloneDir, mirror, branch, baseRef, unitID, gpuUsable stri
 		out.Err = fmt.Errorf("checkout base %s: %w", baseRef, err)
 		return out
 	}
+	if len(req.Tests) > 0 {
+		req.OtherMaps = otherMapsChanged(cloneDir, mirror, branch, unitID)
+	}
 	ws, err := assembleWorkspace(cloneDir, mirror, nil, nil)
 	if err != nil {
 		out.Verified = false
