@@ -519,3 +519,23 @@ func TestNoPartWritingTheRunsFilesIsSaid(t *testing.T) {
 		t.Fatalf("%q", got)
 	}
 }
+
+// 11/28 13:04:43 the planner gave src/ix_gdn.cu to gdn, every kernel of it a copy of
+// pcd027bc02f's: such a file is said with its copies, one with a kernel of its own is not
+func TestAPartFileOfCopiesIsSaid(t *testing.T) {
+	ws := t.TempDir()
+	putTree(t, ws, map[string]string{
+		".einsteinOS/port/pcd027bc02f.tsv": "src/kernels/cuda/gdn.cu\tgdn_step_kernel\tsrc/kernels/gpu/gdn_core.cu\tgdn_step_kernel\n",
+		"src/kernels/gpu/gdn_core.cu":      "__global__ void gdn_step_kernel(float* s, int n) {}\n",
+		"src/ix_gdn.cu":                    "__global__ void gdn_step_kernel(float* state, int cols) {}\n",
+		"src/ix_mixed.cu":                  "__global__ void gdn_step_kernel(float* state, int cols) {}\n__global__ void own_kernel(int x) {}\n",
+	})
+	got := copiedPartFiles(ws, "uint", map[string][]string{"gdn": {"src/ix_gdn.cu", "src/ix_mixed.cu"}})
+	if len(got) != 1 || got[0] != "gdn src/ix_gdn.cu: every __global__ kernel it defines has the name and the parameter types of a kernel another unit's port map ports into another file — src/ix_gdn.cu gdn_step_kernel — pcd027bc02f ports it into src/kernels/gpu/gdn_core.cu, both taking (float*, int)" {
+		t.Fatalf("%q", got)
+	}
+	p := IntegrationModelPlan{Parts: []string{"gdn: x"}, Facts: got}
+	if b := p.Block(); !strings.Contains(b, "### the parts' files, measured from the tree\n  gdn src/ix_gdn.cu") {
+		t.Fatalf("%s", b)
+	}
+}

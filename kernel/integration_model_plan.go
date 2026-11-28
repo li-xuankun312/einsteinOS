@@ -256,6 +256,10 @@ func (r *devRun) integrationModelAnswer(unit DevPlanNode, baseRef string) Integr
 		p.Facts = append(p.Facts, line)
 		log.Printf(integrationPlanFactLogFmt, unit.ID, line)
 	}
+	for _, line := range copiedPartFiles(tree, unit.ID, p.PartFiles) {
+		p.Facts = append(p.Facts, line)
+		log.Printf(integrationPlanFactLogFmt, unit.ID, line)
+	}
 	log.Printf(integrationModelLogFmt, r.repo, unit.ID, p.counts(), len(ms.TensorGroups()), len(perUnit))
 	integrationAnswersMu.Lock()
 	integrationAnswers[unit.ID] = p
@@ -336,7 +340,7 @@ type IntegrationModelPlan struct {
 	GroupsOff []string
 	// Dropped: lines of the answer's kinds that named something the data does not have
 	Dropped int
-	// Facts: what the tree measures of the parts' files (runFilesNoPartWrites)
+	// Facts: what the tree measures of the parts' files (runFilesNoPartWrites, copiedPartFiles)
 	Facts []string
 }
 
@@ -521,6 +525,8 @@ const (
 	integrationPlanFactLogFmt = "dev_from_theorems: integration unit %[1]s: %[2]s"
 	// %[1]s e2e.sh, %[2]s the sources of the programs it runs
 	runFilesNoPartFmt = "no part's files are %[1]s or the sources of the programs it runs on the model (%[2]s)"
+	// %[1]s the part, %[2]s its file, %[3]s the kernels with each unit's file
+	copiedPartFileFmt = "%[1]s %[2]s: every __global__ kernel it defines has the name and the parameter types of a kernel another unit's port map ports into another file — %[3]s"
 )
 
 // e2eProgramRe: a program e2e.sh runs from the build directory — build/<name>, $BUILD/<name>, ${OUT}/<name>
@@ -591,6 +597,36 @@ func runFilesNoPartWrites(tree, unitID string, files map[string][]string) string
 		}
 	}
 	return fmt.Sprintf(runFilesNoPartFmt, devE2EScript(unitID), strings.Join(srcs, " "))
+}
+
+// copiedPartFiles: each part's file all of whose __global__ kernels integrationCopiedKernels finds
+// copies of another unit's. 11/28 13:04:43 the planner gave src/ix_gdn.cu to gdn, src/ix_moe_combine.cu
+// to moe and src/ilu_qsa_step.cu to qsa, and kernel_copied had held their kernels at every
+// verification since 05:55.
+func copiedPartFiles(tree, unitID string, files map[string][]string) []string {
+	var out []string
+	for part, list := range files {
+		for _, f := range list {
+			if isTestPath(f) || !strings.HasSuffix(f, ".cu") {
+				continue
+			}
+			ks := unitKernels(tree, []string{f})[f]
+			if len(ks) == 0 {
+				continue
+			}
+			copies := integrationCopiedKernels(tree, unitID, map[string][]string{f: ks})
+			if len(copies) < len(ks) {
+				continue
+			}
+			var said []string
+			for _, c := range copies {
+				said = append(said, strings.TrimSpace(c))
+			}
+			out = append(out, fmt.Sprintf(copiedPartFileFmt, part, f, strings.Join(said, "; ")))
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // %[1]s repo, %[2]s unit, %[3]s the answer's counts, %[4]d tensor groups, %[5]d units with kernels
