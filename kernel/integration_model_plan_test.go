@@ -539,3 +539,24 @@ func TestAPartFileOfCopiesIsSaid(t *testing.T) {
 		t.Fatalf("%s", b)
 	}
 }
+
+// 11/28 13:36:45 the unit's conversation took the call of rms_norm_bf16w_inplace, the launcher of
+// pcd027bc02f's rms_norm_bf16w_inplace_kernel, out of e2e_all_check.cu: a name of a unit's kernel
+// or launcher the program run on the model no longer has is said; other names are not
+func TestACallTheProgramRunOnTheModelNoLongerMakesIsSaid(t *testing.T) {
+	tip, mirror := t.TempDir(), t.TempDir()
+	src := "tests/k39_integration/e2e_all_check.cu"
+	e2e := devE2EScript("uint")
+	putTree(t, tip, map[string]string{src: "int main() {\n  rms_norm_bf16w_inplace(x, w, 1, 2048, 1e-6f);\n  gdn_step_kernel<<<1,1>>>(s);\n  helper_thing();\n}\n"})
+	putTree(t, mirror, map[string]string{
+		src:                                "int main() {\n  // rms_norm_bf16w_inplace dropped\n  gdn_step_kernel<<<1,1>>>(s);\n}\n",
+		e2e:                                "\"$BUILD/e2e_all_check\" \"$MODEL_REAL\"\n",
+		".einsteinOS/port/pcd027bc02f.tsv": "src/kernels/cuda/elementwise.cu\trms_norm_bf16w_inplace_kernel\tsrc/kernels/gpu/ew_ops.cu\trms_norm_bf16w_inplace_kernel\nsrc/kernels/cuda/gdn.cu\tgdn_step_kernel\tsrc/kernels/gpu/gdn_core.cu\tgdn_step_kernel\n",
+	})
+	got := runCallsRemoved(tip, mirror, "uint")
+	want := "\n[NAMES THE PROGRAMS E2E.SH RUNS ON THE MODEL NO LONGER CALL — measured against the tree the unit started from]\n" +
+		src + " no longer names rms_norm_bf16w_inplace; pcd027bc02f ports rms_norm_bf16w_inplace_kernel\n"
+	if got != want {
+		t.Fatalf("%q", got)
+	}
+}

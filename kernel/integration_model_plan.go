@@ -1144,3 +1144,65 @@ func prevUnclaimedBlock(ms ModelShape, prev string, perUnit map[string][]string,
 	}
 	return fmt.Sprintf(integrationPrevUnclaimedFmt, len(parts), len(u), strings.Join(u, "\n  "))
 }
+
+const (
+	runCallsRemovedHead = "\n[NAMES THE PROGRAMS E2E.SH RUNS ON THE MODEL NO LONGER CALL — measured against the tree the unit started from]\n"
+	// %[1]s the source, %[2]s the name, %[3]s the unit, %[4]s its kernel
+	runCallRemovedFmt = "%[1]s no longer names %[2]s; %[3]s ports %[4]s\n"
+)
+
+// runCallsRemoved: the names the sources of the programs e2e.sh runs on the model held in the tree
+// the unit started from (tip) and hold no longer in the mirror, comments aside, each a kernel some
+// other unit's port map ports, or that kernel's launcher (the name with _kernel after it).
+// 11/28 13:36:45 the unit's conversation took out of tests/k39_integration/e2e_all_check.cu its
+// call of rms_norm_bf16w_inplace, the launcher of pcd027bc02f's rms_norm_bf16w_inplace_kernel,
+// to clear kernel_unported (b756e5f6): each layer's input_layernorm, from the program that had
+// taken in the whole model.
+func runCallsRemoved(tip, mirror, unitID string) string {
+	ported := map[string]string{} // kernel -> unit
+	maps, _ := filepath.Glob(filepath.Join(mirror, ".einsteinOS", "port", "*.tsv"))
+	for _, m := range maps {
+		u := strings.TrimSuffix(filepath.Base(m), ".tsv")
+		if u == unitID {
+			continue
+		}
+		for _, e := range readPortMap(mirror, u) {
+			if n := symbolBase(e.name); strings.HasSuffix(n, "_kernel") {
+				ported[n] = u
+			}
+		}
+	}
+	idents := func(text string) map[string]bool {
+		out := map[string]bool{}
+		for _, w := range cIdentRe.FindAllString(stripCComments(text), -1) {
+			out[w] = true
+		}
+		return out
+	}
+	var lines []string
+	for _, f := range e2eProgramSources(mirror, unitID) {
+		then, err := os.ReadFile(filepath.Join(tip, filepath.FromSlash(f)))
+		if err != nil {
+			continue
+		}
+		nowB, _ := os.ReadFile(filepath.Join(mirror, filepath.FromSlash(f)))
+		now := idents(string(nowB))
+		for w := range idents(string(then)) {
+			if now[w] {
+				continue
+			}
+			k := w
+			if !strings.HasSuffix(k, "_kernel") {
+				k += "_kernel"
+			}
+			if u, ok := ported[k]; ok {
+				lines = append(lines, fmt.Sprintf(runCallRemovedFmt, f, w, u, k))
+			}
+		}
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	sort.Strings(lines)
+	return runCallsRemovedHead + strings.Join(lines, "")
+}
