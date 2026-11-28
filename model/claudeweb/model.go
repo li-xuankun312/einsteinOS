@@ -1269,9 +1269,16 @@ rounds:
 			if preRan {
 				devEnds = preOK
 			}
+			// a conversation reading the files it was given: its tools ran in its sandbox, none
+			// here, and a round after its done marker learns nothing. 11/28 13:04:06 the
+			// integration planner 322ba03f ended round 1 (7 sandbox tools) with its answer and
+			// EINSTEINOS_DONE and was sent "no tool call this round" twice more.
+			readsDone := kernel.RoleReadsItsFiles(childRole)
 			if len(collectedTools) > 0 && stopReason == "end_turn" && kernel.HasDoneMarker(textBuf.String()) &&
-				(devEnds || reviewDone) && settledNow(convID) {
-				if reviewDone {
+				(devEnds || reviewDone || readsDone) && settledNow(convID) {
+				if readsDone {
+					log.Printf("claudeweb: done marker in round %d of %s, whose tools ran in its sandbox only — ending without an extra round", st.rounds, childRole)
+				} else if reviewDone {
 					log.Printf("claudeweb: review verdict and done marker in tool round %d, which only read files — ending without an extra round", st.rounds)
 				} else {
 					log.Printf("claudeweb: done marker in tool round %d; build.sh and test.sh ran here and every local result exited 0 — ending without an extra round", st.rounds)
