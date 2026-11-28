@@ -162,3 +162,24 @@ func TestABuildsProcessesAreSummedByExecutableAndCapped(t *testing.T) {
 		t.Fatalf("not capped: %q", got)
 	}
 }
+
+// 11/28 04:10:54 the gate said no process of the port both launched a ported kernel and took in
+// the weights while build/e2e_all_check had done both: such a process is named, with what it took
+// in, ahead of what it did not launch
+func TestAPortProcessThatTookTheModelIsNamedWhenItIsNotTheRunner(t *testing.T) {
+	perUnit := map[string][]string{"u_gdn": {"gdn_step", "gdn_conv"}}
+	gs := map[string][]string{"linear_attn.A_log": {"gdn_step"}, "linear_attn.conv1d.weight": {"gdn_conv"}}
+	br := EvalBenchRun{Bench: EvalBench{File: "e2e.sh"}, ModelBytes: 100 << 30, RunnerAllUnits: true, RunnerGroups: gs, Loaders: []E2ELoader{
+		{PID: 9, Cmdline: "build/e2e_all_check /m", Port: true, Weights: 26, TookBytes: 100 << 30, PortKernels: []string{"gdn_conv"}},
+		{PID: 7, Cmdline: "python3.10 e2e_weights.py", Port: true, Weights: 5, TookBytes: 1 << 20, PortKernels: []string{"gdn_step"}},
+	}}
+	k, txt := e2eLoaderGate(br, perUnit)
+	if k != "integration_e2e_loader_not_port" || !strings.HasPrefix(txt, "integration_e2e_loader_not_port: in e2e.sh pid 9 (build/e2e_all_check /m), the port's, took in 100.00 GiB of the model's 100.00 GiB and launched ported kernels itself") ||
+		strings.Contains(txt, "no process of the port both launched") || !strings.Contains(txt, "linear_attn.A_log (one of: gdn_step)") {
+		t.Fatalf("%s", txt)
+	}
+	br.Loaders[0].TookBytes = 1 << 30
+	if _, txt := e2eLoaderGate(br, perUnit); !strings.Contains(txt, "no process of the port both launched") {
+		t.Fatalf("%s", txt)
+	}
+}

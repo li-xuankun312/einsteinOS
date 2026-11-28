@@ -221,7 +221,30 @@ func e2eLoaderGate(br EvalBenchRun, perUnit map[string][]string) (kind, text str
 		}
 		miss = fmt.Sprintf(e2eLoaderMissingFmt, strings.Join(ml, "\n"))
 	}
+	if l, ok := portTookTheModel(br); ok {
+		return "integration_e2e_loader_not_port", fmt.Sprintf(gateE2ERunnerShortFmt, br.Bench.File, l.PID, l.Cmdline, gib(l.TookBytes), gib(br.ModelBytes), e2eLoaderLines(br), miss)
+	}
 	return "integration_e2e_loader_not_port", fmt.Sprintf(gateE2ENoRunnerFmt, br.Bench.File, e2eLoaderLines(br), miss, modelTakenPercent)
+}
+
+// %[1]s e2e.sh, %[2]d the process, %[3]s its command, %[4]s what it took in, %[5]s the model's
+// size, %[6]s the processes, %[7]s what it did not launch
+const gateE2ERunnerShortFmt = "integration_e2e_loader_not_port: in %[1]s pid %[2]d (%[3]s), the port's, took in %[4]s of the model's %[5]s and launched ported kernels itself, and is not the run's runner for what it did not launch, given below; the processes that read weights or launched ported kernels:\n%[6]s%[7]s"
+
+// portTookTheModel: the port's process that took in the model and launched ported kernels itself,
+// the one taking in the most. 11/28 03:49:59 and 04:10:54 the gate said no process of the port both
+// launched a ported kernel and took in the weights, while build/e2e_all_check, the port's, took in
+// 66.97 GiB of the model's 66.97 GiB and launched ported kernels of 6 of 6 units itself; what it
+// lacked was among the rest of the text, after both processes' kernels.
+func portTookTheModel(br EvalBenchRun) (E2ELoader, bool) {
+	var best E2ELoader
+	found := false
+	for _, l := range br.Loaders {
+		if l.Port && len(l.PortKernels) > 0 && tookTheModel(l, br.ModelBytes) && (!found || l.TookBytes > best.TookBytes) {
+			best, found = l, true
+		}
+	}
+	return best, found
 }
 
 // modelTakenPercent: how much of the model's bytes a process takes in to have loaded it. 11/21
