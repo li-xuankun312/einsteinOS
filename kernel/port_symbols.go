@@ -1,0 +1,294 @@
+package kernel
+
+// port_symbols.go — the functions the port's C/C++/CUDA sources define, measured.
+//
+// 11/23 13:32 and 16:11 the integration's tree did not compile: kg_kernels.hpp declared the GDN
+// functions three times and gdn_layer.cu and gdn_qwen.cu each defined them, the parts having
+// each written their own; three conversations then each deleted one of the two definitions,
+// and by 16:11 no source of the tree defined them at all. Which function a tree defines twice is
+// read from its files, not asked of a conversation.
+
+import (
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strconv"
+	"strings"
+)
+
+// symbolSourceExts: the sources a definition counted twice comes from (a header's definitions
+// are inline by the language's rules and are not counted).
+var symbolSourceExts = map[string]bool{".c": true, ".cc": true, ".cpp": true, ".cu": true}
+
+var (
+	nsOpenRe = regexp.MustCompile(`^\s*(?:inline\s+)?namespace\s+([A-Za-z_][\w:]*)\s*\{`)
+	// a function's head at namespace scope: return type and name, its parameters open
+	funcHeadRe = regexp.MustCompile(`^((?:[A-Za-z_][\w:<>,\*&]*\s+|[\*&]+\s*)+)((?:[A-Za-z_]\w*::)*[A-Za-z_]\w*)\s*\(`)
+	// what a head's leading words must not be (a statement, a type's definition, a macro)
+	notFuncHead = map[string]bool{"return": true, "if": true, "for": true, "while": true, "switch": true, "else": true,
+		"typedef": true, "using": true, "class": true, "struct": true, "enum": true, "union": true, "template": true,
+		"case": true, "do": true, "goto": true, "sizeof": true, "new": true, "delete": true, "throw": true, "#define": true}
+)
+
+// funcSite: a function the source defines or declares at namespace scope.
+type funcSite struct {
+	Name   string // qualified by the namespaces it is in ("kg::gdn_bf16_conv_step")
+	File   string
+	Def    bool // a body follows its parameters
+	Static bool // static or inline: one per translation unit
+}
+
+// scanFuncSites reads the functions defined or declared at namespace scope of one source.
+func scanFuncSites(rel, src string) []funcSite {
+	var out []funcSite
+	type ns struct {
+		name  string
+		depth int
+	}
+	var stack []ns
+	depth := 0
+	ls := strings.Split(src, "\n")
+	for i := 0; i < len(ls); i++ {
+		line := stripLineComment(ls[i])
+		trim := strings.TrimSpace(line)
+		if m := nsOpenRe.FindStringSubmatch(line); m != nil {
+			stack = append(stack, ns{m[1], depth + 1})
+		} else if depth == len(stack) && !strings.HasPrefix(trim, "#") {
+			if m := funcHeadRe.FindStringSubmatch(trim); m != nil {
+				words := strings.Fields(m[1])
+				if len(words) > 0 && !notFuncHead[words[0]] && !strings.Contains(m[1], "=") {
+					// the parameters may run over lines: read to their close, then a body or a ';'
+					head := trim
+					j := i
+					for strings.Count(head, "(") > strings.Count(head, ")") && j+1 < len(ls) && j-i < 12 {
+						j++
+						head += " " + strings.TrimSpace(stripLineComment(ls[j]))
+					}
+					rest := afterParams(head, len(m[0])-1)
+					k := j
+					for strings.TrimSpace(rest) == "" && k+1 < len(ls) && k-j < 2 {
+						k++
+						rest = strings.TrimSpace(stripLineComment(ls[k]))
+					}
+					rest = strings.TrimSpace(rest)
+					isDef := strings.HasPrefix(rest, "{") || strings.HasPrefix(rest, "const {") || strings.HasPrefix(rest, "noexcept {")
+					isDecl := strings.HasPrefix(rest, ";") || strings.HasPrefix(rest, "const;") || strings.HasPrefix(rest, "noexcept;")
+					if isDef || isDecl {
+						q := m[2]
+						for n := len(stack) - 1; n >= 0; n-- {
+							q = stack[n].name + "::" + q
+						}
+						static := false
+						for _, w := range words {
+							if w == "static" || w == "inline" || w == "__forceinline__" || strings.HasPrefix(w, "template") {
+								static = true
+							}
+						}
+						out = append(out, funcSite{Name: q, File: rel, Def: isDef, Static: static})
+					}
+				}
+			}
+		}
+		depth += strings.Count(line, "{") - strings.Count(line, "}")
+		for len(stack) > 0 && depth < stack[len(stack)-1].depth {
+			stack = stack[:len(stack)-1]
+		}
+	}
+	return out
+}
+
+// afterParams: the text after the parameter list whose '(' is at open — 11/24 a one-line body
+// ("BlockResult block_layer(...) { return block_layer_post(c, h, ...); }") was read from its
+// last ')' and taken for a declaration, and block_layer was measured as defined nowhere.
+func afterParams(head string, open int) string {
+	depth := 0
+	for i := open; i < len(head); i++ {
+		switch head[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return head[i+1:]
+			}
+		}
+	}
+	return ""
+}
+
+// stripLineComment drops a // comment and the text of string literals that could hold braces.
+func stripLineComment(l string) string {
+	if i := strings.Index(l, "//"); i >= 0 {
+		l = l[:i]
+	}
+	return stringLitRe.ReplaceAllString(l, `""`)
+}
+
+var stringLitRe = regexp.MustCompile(`"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)'`)
+
+// treeFuncSites: every function site of the tree's C/C++/CUDA sources (.git, .einsteinOS and
+// build directories left out).
+func treeFuncSites(tree string) []funcSite {
+	var all []funcSite
+	filepath.WalkDir(tree, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		rel, _ := filepath.Rel(tree, p)
+		rel = filepath.ToSlash(rel)
+		if d.IsDir() {
+			switch d.Name() {
+			case ".git", ".einsteinOS", "build", "_build":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !portSourceExts[strings.ToLower(filepath.Ext(p))] {
+			return nil
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return nil
+		}
+		all = append(all, scanFuncSites(rel, string(b))...)
+		return nil
+	})
+	return all
+}
+
+// redefinedFuncs: the functions defined, not static or inline, in more than one source file —
+// "name: a.cu, b.cu" — which no build of the tree links.
+func redefinedFuncs(sites []funcSite) []string {
+	// a program's sources and the tests are linked each on its own: 11/24 the measure named main
+	// in 30 programs and run_test in each tests/unitN/test_main.cpp
+	programs := map[string]bool{}
+	for _, s := range sites {
+		if s.Def && lastName(s.Name) == "main" {
+			programs[s.File] = true
+		}
+	}
+	files := map[string][]string{}
+	for _, s := range sites {
+		if !s.Def || s.Static || !symbolSourceExts[strings.ToLower(filepath.Ext(s.File))] || programs[s.File] || isTestPath(s.File) {
+			continue
+		}
+		if !hasString(files[s.Name], s.File) {
+			files[s.Name] = append(files[s.Name], s.File)
+		}
+	}
+	var out []string
+	for n, fs := range files {
+		if len(fs) > 1 {
+			sort.Strings(fs)
+			out = append(out, n+": "+strings.Join(fs, ", "))
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// headerExts: the sources a declaration is read from.
+var headerExts = map[string]bool{".h": true, ".hpp": true, ".cuh": true}
+
+// undefinedFuncs: the functions a header declares, not static or inline, that some source
+// calls and no source of the tree defines — "name: the header (called in N place(s))" — which
+// no build of the tree links. 11/23 16:11 the GDN functions were declared in kg_kernels.hpp and
+// called in gdn_layer_parity.cu and e2e_all_check.cu, their two definitions both deleted.
+func undefinedFuncs(tree string, sites []funcSite) []string {
+	defined := map[string]bool{}
+	for _, s := range sites {
+		if s.Def {
+			defined[s.Name] = true
+			defined[lastName(s.Name)] = true
+		}
+	}
+	declared := map[string]string{} // name -> the first header declaring it
+	declCount := map[string]int{}
+	for _, s := range sites {
+		if s.Def || s.Static || !headerExts[strings.ToLower(filepath.Ext(s.File))] {
+			continue
+		}
+		if defined[s.Name] || defined[lastName(s.Name)] {
+			continue
+		}
+		if _, ok := declared[s.Name]; !ok {
+			declared[s.Name] = s.File
+		}
+		declCount[lastName(s.Name)]++
+	}
+	if len(declared) == 0 {
+		return nil
+	}
+	uses := map[string]int{}
+	filepath.WalkDir(tree, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case ".git", ".einsteinOS", "build", "_build":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !portSourceExts[strings.ToLower(filepath.Ext(p))] {
+			return nil
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return nil
+		}
+		for _, m := range callRe.FindAllStringSubmatch(string(b), -1) {
+			uses[m[1]]++
+		}
+		return nil
+	})
+	var out []string
+	for q, h := range declared {
+		n := lastName(q)
+		if calls := uses[n] - declCount[n]; calls > 0 {
+			out = append(out, q+": declared in "+h+", called "+strconv.Itoa(calls)+" time(s), defined in no source")
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+var callRe = regexp.MustCompile(`\b([A-Za-z_]\w*)\s*(?:<<<[^>]*>>>)?\s*\(`)
+
+func lastName(q string) string {
+	if i := strings.LastIndex(q, "::"); i >= 0 {
+		return q[i+2:]
+	}
+	return q
+}
+
+const (
+	// %[1]d functions, %[2]s them
+	compileRedefinedFmt = "[THE TREE'S FUNCTIONS — measured from the files the verification compiled]\n%[1]d function(s) defined in more than one source (not static or inline):\n%[2]s"
+	// %[1]d functions, %[2]s them
+	compileUndefinedFmt = "%[1]d function(s) a header declares and a source calls that no source defines:\n%[2]s"
+)
+
+// compileSymbolFacts: with a verification whose compile failed, the functions the mirror defines
+// twice and those it declares and calls but defines nowhere, as the conversation is sent them
+// beside the compiler's output. 11/23 16:14:40 the verification of the tree in which both GDN
+// definitions had been deleted went back to the conversation as compile=fail with the
+// compiler's tail, and three conversations went on deciding from their own sandboxes which
+// file to delete.
+func compileSymbolFacts(compile, mirror string) string {
+	if compile != "fail" || mirror == "" {
+		return ""
+	}
+	sites := treeFuncSites(mirror)
+	re, un := redefinedFuncs(sites), undefinedFuncs(mirror, sites)
+	if len(re) == 0 && len(un) == 0 {
+		return ""
+	}
+	s := fmt.Sprintf(compileRedefinedFmt, len(re), lines(re))
+	s += fmt.Sprintf(compileUndefinedFmt, len(un), lines(un))
+	return s
+}

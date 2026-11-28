@@ -1,0 +1,72 @@
+package kernel
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// 11/22 16:58:43 a done line's verification failed on integration_reference_impl_missing (the
+// machine), the conversation ended, and the same tree was verified again from 16:59:06: the
+// verification that let it end is the one used
+func TestTheVerificationThatLetTheConversationEndIsUsed(t *testing.T) {
+	machine := &preVerifyResult{ok: false, digest: "d1", out: UnitVerifyOutcome{Verified: true, Result: VerifyResult{Gate: GateReferenceImplMissing}}}
+	if !machine.endedOn("d1") {
+		t.Fatal("a machine gate's verification of the same tree is not used")
+	}
+	if machine.endedOn("d2") {
+		t.Fatal("another tree used the verification")
+	}
+	unitFail := &preVerifyResult{ok: false, digest: "d1", out: UnitVerifyOutcome{Verified: true, Result: VerifyResult{Gate: "integration_e2e_unmeasured"}}}
+	if unitFail.endedOn("d1") {
+		t.Fatal("a gate the conversation can change did not end it, and is not used")
+	}
+	passed := &preVerifyResult{ok: true, digest: "d1", out: UnitVerifyOutcome{Verified: true}}
+	if !passed.endedOn("d1") {
+		t.Fatal("a pass of the same tree is not used")
+	}
+	var none *preVerifyResult
+	if none.endedOn("d1") {
+		t.Fatal("no verification used")
+	}
+}
+
+// 11/22 23:29 the integration's dev_fix_7 was given the judge's environment failure
+// (integration_reference_impl_missing) as its last failure and set out to change this machine's
+// transformers: a gate outside the unit is not given to the unit's next conversation
+func TestAGateOutsideTheUnitIsNotTheNextConversationsFailure(t *testing.T) {
+	r := &devRun{pid: 1, repo: "o/r", devRepo: "o/d", branch: "b", task: "t", gpuAll: "0,1"}
+	plan := newDevPlan("o/r", "s", []DevModule{{Name: "A.lean", Hash: "h", Bytes: 10}}, [][]string{{"A.lean"}}, "p")
+	r.plan = plan
+	unit := plan.Leaves()[0]
+	machine := DevFailure{Kind: GateReferenceImplMissing, Text: "integration_reference_impl_missing: Qwen3_5MoeForCausalLM … requires the PyTorch library", BaseRef: "b"}
+	p := r.unitPrompt(unit, 0, 1, 2, machine, "b")
+	if strings.Contains(p, "requires the PyTorch library") || strings.Contains(p, GateReferenceImplMissing) {
+		t.Fatalf("the machine's gate reached the conversation:\n%s", p)
+	}
+	own := DevFailure{Kind: "integration_e2e_unmeasured", Text: "integration_e2e_unmeasured: the runner printed no ids", BaseRef: "b"}
+	if p := r.unitPrompt(unit, 0, 1, 2, own, "b"); !strings.Contains(p, "the runner printed no ids") {
+		t.Fatal("the unit's own failure was not given")
+	}
+}
+
+// 11/23 03:33:34 the integration conversation ended on 502s having written nothing itself and
+// primeMirror wiped what its part conversations had written: a mirror that differs from the
+// tree the attempt started on holds work
+func TestAMirrorThatDiffersFromItsStartHoldsWork(t *testing.T) {
+	mirror := t.TempDir()
+	os.MkdirAll(filepath.Join(mirror, "src"), 0o755)
+	os.WriteFile(filepath.Join(mirror, "src", "a.cpp"), []byte("a"), 0o644)
+	base, err := snapshotTree(mirror)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mirrorHoldsWork(mirror, base) {
+		t.Fatal("an untouched mirror holds work")
+	}
+	os.WriteFile(filepath.Join(mirror, "src", "embed_head.cpp"), []byte("NativeEmbedBf16"), 0o644)
+	if !mirrorHoldsWork(mirror, base) {
+		t.Fatal("a file a part conversation wrote is not work")
+	}
+}

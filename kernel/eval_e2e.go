@@ -1,0 +1,426 @@
+package kernel
+
+// eval_e2e.go — the integration unit's port runs the model on this machine end to end.
+//
+// The kernel runs the unit's .einsteinOS/verify/<unit>/e2e.sh in the integration workspace,
+// after its build, with MODEL_DIR set to the model directory (evalModel()), and reads the
+// prefill and decode rates it prints (the reference's generate prints them as
+// "<what> N tokens in T ms -> R tok/s"). No script, a failed run, or no prefill or no decode
+// rate in tok/s: the integration does not pass.
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"log"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+)
+
+const (
+	gateE2EMissingFmt = "integration_e2e_missing: %[1]s does not exist, so the port was never run on the model at %[2]s"
+	gateE2EFailedFmt  = "integration_e2e_failed: %[1]s exited %[2]d running the model at %[3]s; output: %[4]s"
+	// the run must be the port: the kernels the other units ported are what it launches
+	gateE2ENotPortFmt        = "integration_e2e_not_port: %[1]s launched %[2]d kernel(s) (%[3]s) and none of the kernels these units ported:\n%[4]s"
+	gateE2EPortUnmeasuredFmt = "integration_e2e_port_unmeasured: the launch probe was not in %[1]s's processes (%[2]s), so whether it ran the kernels the units ported is not known"
+	e2ePortUnitFmt           = "  %[1]s: %[2]s"
+	// the run must change when the reference did
+	gateE2EUnchangedFmt = "integration_e2e_unchanged: %[1]s ran the same program(s) as at the integration of %[2]s (%[3]s, byte for byte) while the reference changed %[4]d file(s) the port maps cover since then: %[5]s"
+)
+
+// devE2EScript: the end-to-end script of a unit.
+func devE2EScript(unitID string) string { return ".einsteinOS/verify/" + unitID + "/e2e.sh" }
+
+// evalRunE2E runs the unit's e2e.sh in ws on the model.
+func evalRunE2E(ws, unitID string) EvalBenchRun {
+	script := devE2EScript(unitID)
+	br := EvalBenchRun{Bench: EvalBench{File: script, Kind: "e2e", Name: "e2e.sh"}, Exit: -1}
+	if _, err := os.Stat(filepath.Join(ws, script)); err != nil {
+		br.Tail = "missing"
+		return br
+	}
+	// the run is watched by the launch probe, as a GPU unit's test.sh is: which kernels it
+	// launched is how the kernel knows whether it ran the port (e2ePortGate)
+	probeEnv, logPath := "", ""
+	if lib, err := e2eProbeLibFn(); err != nil {
+		br.ProbeErr = err.Error()
+	} else if f, err := os.CreateTemp("", "einsteinos-e2e-launch-*.log"); err != nil {
+		br.ProbeErr = err.Error()
+	} else {
+		logPath = f.Name()
+		f.Close()
+		defer os.Remove(logPath)
+		probeEnv = launchProbeEnv(lib, logPath)
+	}
+	cmd := probeEnv + fmt.Sprintf("MODEL_DIR=%q bash %q 2>&1", evalModel(), script)
+	started := time.Now()
+	br.Started = started
+	code, out, tr, err := runWatched(cmd, ws, evalBuildTimeout)
+	br.MachineChanged = machineChangedSince(started)
+	br.Exit, br.Metrics, br.Tail, br.Devices = code, metricsIn(out), tailText(out, 1500), tr.Devices
+	if err != nil {
+		br.Tail = err.Error()
+	}
+	br.Programs = workspacePrograms(ws, tr.Exes)
+	br.PromptIDs, br.GeneratedIDs = e2eTokens(out)
+	br.Weights = tr.Weights
+	var byPID map[int][]string
+	if logPath != "" {
+		names, launchedBy, loaded := e2eLaunchesFn(logPath)
+		br.Kernels, byPID = names, launchedBy
+		if !loaded && br.ProbeErr == "" {
+			br.ProbeErr = "no process of the run loaded it"
+		}
+		br.TokensBy = e2eOutFn(logPath)
+	}
+	log.Printf(e2eProcTimesFmt, script, time.Since(started).Round(time.Second), e2eProcTimes(tr.Processes, e2eProcTimesMin))
+	br.ModelBytes = modelBytes(evalModel())
+	br.Loaders = e2eLoaders(ws, tr.Processes, byPID, started)
+	if logPath != "" {
+		// whose implementation of the model each process ran: the code it read
+		br.Loaders = e2eWithOtherCode(ws, br.Loaders, tr.Processes, e2eCodeFn(logPath), e2eModelNames())
+	}
+	perUnit := e2eUsedPortKernels(ws, unitID)
+	if a := integrationAnswerOf(unitID); len(a.Ops) > 0 {
+		br.RunnerAllUnits = true
+		br.RunnerGroups = a.opGroups(perUnit)
+	}
+	// the token ids are the runner's: what another process printed is not the port's output
+	br.PromptIDs, br.GeneratedIDs = e2eRunnerTokens(br, perUnit)
+	// the rate is the kernel's: what the script printed is kept, not judged
+	br.Printed, br.Metrics = br.Metrics, nil
+	if m, why := e2eMeasureRate(br, perUnit); why == "" {
+		br.Metrics = []Metric{m}
+	} else {
+		br.RateWhy = why
+	}
+	return br
+}
+
+var (
+	// e2eProbeLibFn builds (once) the launch probe; e2eLaunchesFn reads the kernels a probe
+	// log records and whether any process loaded the probe (variables for tests)
+	e2eProbeLibFn = launchProbeLib
+	e2eLaunchesFn = func(logPath string) ([]string, map[int][]string, bool) {
+		pl := readProbeLog(logPath)
+		ls := resolveLaunches(pl)
+		var names []string
+		for n := range launchedNames(ls) {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		byPID := map[int][]string{}
+		for _, l := range ls {
+			if l.Name != "" {
+				byPID[l.PID] = append(byPID[l.PID], l.Name)
+			}
+		}
+		return names, byPID, len(probeLoadedExes(pl)) > 0
+	}
+	// e2eOutFn reads, per process, the token lines a probe log records (a variable for tests)
+	e2eOutFn = func(logPath string) map[int][]string { return readProbeLog(logPath).Out }
+	// e2eCodeFn reads, per process, the code files a probe log records (a variable for tests)
+	e2eCodeFn = func(logPath string) map[int][]string { return readProbeLog(logPath).Code }
+)
+
+// e2ePortKernels: per unit other than the integration unit, the kernels its port map gives as
+// counterparts and its files define with a body — the GPU code the units ported, read from
+// the port maps in the integration workspace ws.
+func e2ePortKernels(ws, integrationUnit string) map[string][]string {
+	out := map[string][]string{}
+	maps, _ := filepath.Glob(filepath.Join(ws, filepath.FromSlash(PortMapPath("*"))))
+	texts := map[string]string{}
+	read := func(f string) string {
+		t, ok := texts[f]
+		if !ok {
+			b, _ := os.ReadFile(filepath.Join(ws, filepath.FromSlash(f)))
+			t = string(b)
+			texts[f] = t
+		}
+		return t
+	}
+	for _, m := range maps {
+		unit := strings.TrimSuffix(filepath.Base(m), ".tsv")
+		if unit == integrationUnit {
+			continue
+		}
+		b, err := os.ReadFile(m)
+		if err != nil {
+			continue
+		}
+		seen := map[string]bool{}
+		for _, line := range strings.Split(string(b), "\n") {
+			fs := strings.Split(strings.TrimRight(line, "\r"), "\t")
+			if len(fs) < 4 || seen[fs[3]] {
+				continue
+			}
+			file, sym := fs[2], fs[3]
+			if ext := filepath.Ext(file); ext != ".cu" && ext != ".cuh" {
+				continue
+			}
+			src := read(file)
+			for _, k := range kernelNamesIn(src) {
+				if k == sym && definesWithBody(src, k) {
+					seen[sym] = true
+					out[unit] = append(out[unit], sym)
+				}
+			}
+		}
+		sort.Strings(out[unit])
+	}
+	return out
+}
+
+// e2ePortGate: the end-to-end run is the port only when, for every unit that ported kernels,
+// it launched one of them. 11/09 and 11/10 e2e.sh ran build/generate_model, built from
+// src/model/generate_model.cu: 657 lines the integration unit wrote with its own 13 kernels,
+// including nothing any unit had ported. The integration's tests launched 196 kernels; the
+// program whose prefill and decode rates were judged launched none of the units' kernels.
+func e2ePortGate(br EvalBenchRun, perUnit map[string][]string) (kind, text string) {
+	if len(perUnit) == 0 {
+		return "", ""
+	}
+	if br.ProbeErr != "" {
+		return "integration_e2e_port_unmeasured", fmt.Sprintf(gateE2EPortUnmeasuredFmt, br.Bench.File, br.ProbeErr)
+	}
+	launched := map[string]bool{}
+	for _, k := range br.Kernels {
+		launched[k] = true
+	}
+	var units []string
+	for u := range perUnit {
+		units = append(units, u)
+	}
+	sort.Strings(units)
+	var unused []string
+	for _, u := range units {
+		used := false
+		for _, k := range perUnit[u] {
+			if launched[k] {
+				used = true
+				break
+			}
+		}
+		if !used {
+			unused = append(unused, fmt.Sprintf(e2ePortUnitFmt, u, strings.Join(perUnit[u], " ")))
+		}
+	}
+	if len(unused) == 0 {
+		return "", ""
+	}
+	return "integration_e2e_not_port", fmt.Sprintf(gateE2ENotPortFmt, br.Bench.File, len(br.Kernels), strings.Join(br.Kernels, " "), strings.Join(unused, "\n"))
+}
+
+const gateE2EModifiesMachineFmt = "integration_e2e_modifies_machine: %[1]s changed %[2]d file(s) or director(ies) of this machine's Python packages, outside the workspace: %[3]s — the port runs on the machine as it is"
+
+// e2eMachineGate: the run changed nothing of this machine's Python packages (machine_changes.go).
+func e2eMachineGate(br EvalBenchRun) (kind, text string) {
+	if len(br.MachineChanged) == 0 {
+		return "", ""
+	}
+	return "integration_e2e_modifies_machine", fmt.Sprintf(gateE2EModifiesMachineFmt, br.Bench.File, len(br.MachineChanged), shownPaths(br.MachineChanged, 12))
+}
+
+// e2eGate: the first gate the end-to-end run fails, if any.
+func e2eGate(br EvalBenchRun) (kind, text string) {
+	switch {
+	case br.Tail == "missing":
+		return "integration_e2e_missing", fmt.Sprintf(gateE2EMissingFmt, br.Bench.File, evalModel())
+	case br.Exit != 0:
+		return "integration_e2e_failed", fmt.Sprintf(gateE2EFailedFmt, br.Bench.File, br.Exit, evalModel(), br.Tail)
+	}
+	return "", ""
+}
+
+// workspacePrograms: the executables in exes that are files of the workspace ws, by their
+// path in it, each with the sha256 of its content.
+func workspacePrograms(ws string, exes []string) map[string]string {
+	root, err := filepath.EvalSymlinks(ws)
+	if err != nil {
+		root = ws
+	}
+	out := map[string]string{}
+	for _, exe := range exes {
+		rel, err := filepath.Rel(root, exe)
+		if err != nil || strings.HasPrefix(rel, "..") {
+			continue
+		}
+		b, err := os.ReadFile(exe)
+		if err != nil {
+			continue
+		}
+		sum := sha256.Sum256(b)
+		out[filepath.ToSlash(rel)] = hex.EncodeToString(sum[:])
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// portMapRefFiles: the reference files the port maps of the workspace ws cover (their first
+// column), every unit's.
+func portMapRefFiles(ws string) map[string]bool {
+	out := map[string]bool{}
+	maps, _ := filepath.Glob(filepath.Join(ws, filepath.FromSlash(PortMapPath("*"))))
+	for _, m := range maps {
+		b, err := os.ReadFile(m)
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(b), "\n") {
+			if fs := strings.Split(line, "\t"); len(fs) >= 3 && fs[0] != "" {
+				out[fs[0]] = true
+			}
+		}
+	}
+	return out
+}
+
+// e2eUnchangedGate: the run at this commit must not be the very program the previous
+// integration ran when the reference changed, in between, files the port maps cover.
+// changed: the reference's files that differ between the two commits. 11/10 commit
+// e5509707's end-to-end run printed the same 64 generated tokens as 6801c77f's on 11/09 — its
+// src/model/generate_model.cu had not changed since — so "compared with the integration
+// before" set the program against itself.
+func e2eUnchangedGate(cur, prev EvalBenchRun, prevSHA string, changed []string, covered map[string]bool) (kind, text string) {
+	if len(cur.Programs) == 0 || len(cur.Programs) != len(prev.Programs) {
+		return "", ""
+	}
+	var progs []string
+	for p, h := range cur.Programs {
+		if prev.Programs[p] != h {
+			return "", ""
+		}
+		progs = append(progs, p)
+	}
+	sort.Strings(progs)
+	var hit []string
+	for _, f := range changed {
+		if covered[f] {
+			hit = append(hit, f)
+		}
+	}
+	if len(hit) == 0 {
+		return "", ""
+	}
+	sort.Strings(hit)
+	return "integration_e2e_unchanged", fmt.Sprintf(gateE2EUnchangedFmt, cur.Bench.File, shortSHA(prevSHA), strings.Join(progs, " "), len(hit), strings.Join(hit, " "))
+}
+
+const gateE2EOtherModelFmt = "integration_e2e_other_model: %[1]s was given MODEL_DIR=%[2]s and its processes %[3]s"
+
+// e2eModelGate: the run loaded its weights from the model the kernel gave it, and only from
+// there. 11/10 /tmp/model did not exist and e2e.sh chose a model itself ("e2e: /tmp/model has
+// no weights; using /root/public-storage/models/Qwen/Qwen3.6-35B-A3B/"): which model the
+// rates and the tokens belonged to was decided by the unit's script, not measured.
+func e2eModelGate(br EvalBenchRun, modelDir string) (kind, text string) {
+	root, err := filepath.EvalSymlinks(modelDir)
+	if err != nil {
+		root = modelDir
+	}
+	var inside, outside []string
+	for _, w := range br.Weights {
+		real, err := filepath.EvalSymlinks(w)
+		if err != nil {
+			real = w
+		}
+		if rel, err := filepath.Rel(root, real); err == nil && !strings.HasPrefix(rel, "..") {
+			inside = append(inside, w)
+		} else if st, err := os.Stat(real); err == nil && !br.Started.IsZero() && st.ModTime().After(br.Started.Add(-machineClockSlack)) {
+			// written during the run: the port's conversion of the model, as the reference's
+			// pytools write a GGUF of it (tools/gguf_writer.py) — not another model
+		} else {
+			outside = append(outside, w)
+		}
+	}
+	switch {
+	case len(outside) > 0:
+		return "integration_e2e_other_model", fmt.Sprintf(gateE2EOtherModelFmt, br.Bench.File, modelDir, "loaded weights from elsewhere: "+strings.Join(outside, " "))
+	case len(inside) == 0:
+		return "integration_e2e_other_model", fmt.Sprintf(gateE2EOtherModelFmt, br.Bench.File, modelDir, "opened none of its weight files")
+	}
+	return "", ""
+}
+
+const (
+	// %[1]s the script, %[2]s how long it ran, %[3]s its processes
+	e2eProcTimesFmt = "eval: %[1]s ran %[2]s; its processes seen running at least 1s, longest first: %[3]s"
+	// %[1]d pid, %[2]s executable, %[3]s command line, %[4]s how long the watcher saw it
+	e2eProcTimeFmt  = "pid %[1]d %[2]s (%[3]s) %[4]s"
+	e2eProcTimesMin = time.Second
+)
+
+// e2eProcTimes: the processes of the run the watcher saw running at least min, longest first —
+// 11/22 14:40 and 15:02 e2e.sh ran about 4 minutes where it had run 28 s, and which process
+// took them was not in the log.
+func e2eProcTimes(procs []ProcSeen, min time.Duration) string {
+	var ps []ProcSeen
+	for _, p := range procs {
+		if p.Last.Sub(p.First) >= min {
+			ps = append(ps, p)
+		}
+	}
+	sort.Slice(ps, func(i, j int) bool { return ps[i].Last.Sub(ps[i].First) > ps[j].Last.Sub(ps[j].First) })
+	var out []string
+	more := 0
+	if len(ps) > procTimesMax {
+		more = len(ps) - procTimesMax
+		ps = ps[:procTimesMax]
+	}
+	for _, p := range ps {
+		cmd := p.Cmdline
+		if len(cmd) > 160 {
+			cmd = cmd[:160] + "…"
+		}
+		out = append(out, fmt.Sprintf(e2eProcTimeFmt, p.PID, p.Exe, cmd, p.Last.Sub(p.First).Round(100*time.Millisecond)))
+	}
+	if len(out) == 0 {
+		return "none"
+	}
+	if more > 0 {
+		out = append(out, fmt.Sprintf("and %d more", more))
+	}
+	return strings.Join(out, "; ")
+}
+
+// procTimesMax: the processes e2eProcTimes names one by one.
+const procTimesMax = 12
+
+// procTimesByExe: per executable, how many of the processes ran it and their summed time,
+// most time first.
+func procTimesByExe(procs []ProcSeen) string {
+	type agg struct {
+		n int
+		d time.Duration
+	}
+	by := map[string]*agg{}
+	for _, p := range procs {
+		a := by[p.Exe]
+		if a == nil {
+			a = &agg{}
+			by[p.Exe] = a
+		}
+		a.n++
+		a.d += p.Last.Sub(p.First)
+	}
+	var exes []string
+	for e := range by {
+		exes = append(exes, e)
+	}
+	sort.Slice(exes, func(i, j int) bool { return by[exes[i]].d > by[exes[j]].d })
+	var out []string
+	for i, e := range exes {
+		if i == procTimesMax {
+			break
+		}
+		out = append(out, fmt.Sprintf("%s ×%d %s", e, by[e].n, by[e].d.Round(100*time.Millisecond)))
+	}
+	if len(out) == 0 {
+		return "none"
+	}
+	return strings.Join(out, "; ")
+}

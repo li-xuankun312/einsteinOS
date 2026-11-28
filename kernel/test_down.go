@@ -1,0 +1,502 @@
+package kernel
+
+// test_down.go — a test.sh the machine went down in, read from the crash notes.
+//
+// 11/24 17:40:14.827 the integration unit's test.sh started (einsteinos-stages.log); no end of
+// it was noted, and at 17:48 the node's uptime was 6 minutes. The launch log on the crash
+// directory ended with router_top10_parity (pid 32031) launching its 12th distinct kernel, at
+// 0x1e5b0 of the executable, unresolved ("-"): the executable was in /tmp and went with the
+// machine. A run started again continues from the same parked tree, builds it and runs the same
+// test.sh. 12:14:51 the same build had passed on another machine, which went down the same way.
+
+import (
+	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io/fs"
+	"log"
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// testDown is a test.sh noted as started in the crash notes and never noted as ended, on a
+// machine booted after it started.
+type testDown struct {
+	Unit, Test string
+	LaunchLog  string // the launch log its test.sh wrote, on the crash directory
+	At         time.Time
+	Boot       time.Time
+	// the process whose launch was noted last, and that launch; Kernels: the distinct kernels
+	// that process had launched (the probe notes each once per process, before it runs)
+	Exe     string
+	PID     int
+	Launch  probeLaunch
+	Kernels int
+	Noted   bool // the launch log held a launch
+}
+
+// testDownRecord is what the kernel measured of a testDown after the unit's build had made the
+// executable again, kept beside the launch log on the crash directory (einsteinos-down-*.json).
+type testDownRecord struct {
+	// the test the machine went down in: the unit, what it ran (its test.sh, or the program run
+	// alone before it) and when it started
+	Unit   string `json:"unit,omitempty"`
+	Test   string `json:"test,omitempty"`
+	At     string `json:"at,omitempty"`
+	Symbol string `json:"symbol,omitempty"`
+	Kernel string `json:"kernel,omitempty"`
+	Why    string `json:"why,omitempty"` // why no kernel name could be given
+	// Sources: the workspace files defining the kernel, and their contents' sha256
+	Sources map[string]string `json:"sources,omitempty"`
+	ExeSHA  string            `json:"exe_sha256,omitempty"`
+}
+
+const crashStagesTimeLayout = "2006/01/02 15:04:05.000"
+
+var (
+	crashTestStartRe = regexp.MustCompile(`^unit (\S+): (\S+) starts; its kernel launches go to (.*)$`)
+	crashTestEndRe   = regexp.MustCompile(`^unit (\S+): (\S+) ended \(exit -?\d+\)$`)
+)
+
+// machineBootTimeFn is a variable for tests (machineBootTime: dev_lease.go). A container reads
+// its node's: 11/24 12:24 and 17:48 the uptime a shell in the pod read was the node's.
+var machineBootTimeFn = machineBootTime
+
+// lastTestDown reads dir's einsteinos-stages.log: unit's last test.sh start, when no end of it
+// follows and this machine booted after it, with what its launch log noted last; nil otherwise.
+func lastTestDown(dir, unit string) *testDown {
+	f, err := os.Open(filepath.Join(dir, "einsteinos-stages.log"))
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	var d *testDown
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 64*1024), 1024*1024)
+	for sc.Scan() {
+		l := sc.Text()
+		if len(l) <= len(crashStagesTimeLayout)+1 {
+			continue
+		}
+		at, err := time.ParseInLocation(crashStagesTimeLayout, l[:len(crashStagesTimeLayout)], time.Local)
+		if err != nil {
+			continue
+		}
+		rest := l[len(crashStagesTimeLayout)+1:]
+		if m := crashTestStartRe.FindStringSubmatch(rest); m != nil && m[1] == unit {
+			d = &testDown{Unit: unit, Test: m[2], LaunchLog: strings.TrimSpace(m[3]), At: at}
+		} else if m := crashTestEndRe.FindStringSubmatch(rest); m != nil && m[1] == unit && d != nil && m[2] == d.Test {
+			d = nil
+		}
+	}
+	if d == nil {
+		return nil
+	}
+	boot := machineBootTimeFn()
+	if boot.IsZero() || !boot.After(d.At) {
+		return nil // still running, or this machine has not been down since
+	}
+	d.Boot = boot
+	if d.LaunchLog != "" {
+		pl := readProbeLog(d.LaunchLog)
+		if n := len(pl.Launches); n > 0 {
+			d.Launch, d.PID, d.Noted = pl.Launches[n-1], pl.Launches[n-1].PID, true
+			d.Exe = pl.Loaded[d.PID]
+			for _, l := range pl.Launches {
+				if l.PID == d.PID {
+					d.Kernels++
+				}
+			}
+		}
+	}
+	return d
+}
+
+// testDownRecordPath: the record of d, beside its launch log (or the stages log).
+func testDownRecordPath(dir string, d *testDown) string {
+	key := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(d.LaunchLog), "einsteinos-launch-"), ".log")
+	if d.LaunchLog == "" {
+		key = d.Unit + "-" + d.At.Format("20060102-150405.000")
+	}
+	return filepath.Join(dir, "einsteinos-down-"+key+".json")
+}
+
+func loadTestDownRecord(path string) (*testDownRecord, bool) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, false
+	}
+	var r testDownRecord
+	if json.Unmarshal(b, &r) != nil {
+		return nil, false
+	}
+	return &r, true
+}
+
+func saveTestDownRecord(path string, r *testDownRecord) {
+	b, _ := json.MarshalIndent(r, "", "  ")
+	tmp := path + ".tmp"
+	if os.WriteFile(tmp, b, 0o644) == nil {
+		_ = os.Rename(tmp, path)
+	}
+}
+
+// measureTestDown resolves d's last launch in the executable the build has just made again at
+// the same path, and finds the workspace files defining that kernel.
+func measureTestDown(ws string, d *testDown) *testDownRecord {
+	r := &testDownRecord{Unit: d.Unit, Test: d.Test, At: d.At.Format(crashStagesTimeLayout)}
+	switch {
+	case !d.Noted:
+		r.Why = "its launch log noted no kernel launch"
+		return r
+	case d.Exe == "":
+		r.Why = fmt.Sprintf("its launch log has no load line for pid %d", d.PID)
+		return r
+	}
+	if h, ok := fileSHA256(d.Exe); ok {
+		r.ExeSHA = h
+	}
+	ks := resolveLaunches(probeLog{Loaded: map[int]string{d.PID: d.Exe}, Launches: []probeLaunch{d.Launch}})
+	if len(ks) == 1 {
+		r.Symbol, r.Kernel, r.Why = ks[0].Symbol, ks[0].Name, ks[0].Why
+	}
+	if r.Kernel != "" {
+		r.Sources = map[string]string{}
+		for _, p := range kernelDefiningFiles(ws, r.Kernel) {
+			if h, ok := fileSHA256(filepath.Join(ws, p)); ok {
+				r.Sources[p] = h
+			}
+		}
+	}
+	return r
+}
+
+func fileSHA256(path string) (string, bool) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", false
+	}
+	s := sha256.Sum256(b)
+	return hex.EncodeToString(s[:]), true
+}
+
+var kernelSourceExts = map[string]bool{".cu": true, ".cuh": true, ".cpp": true, ".cc": true, ".cxx": true, ".c": true, ".h": true, ".hpp": true, ".hh": true, ".inc": true, ".inl": true}
+
+// kernelDefiningFiles: the workspace's source files (relative, sorted) with a __global__
+// definition of the kernel named name — its name followed by '(' and, before the next ';', a '{',
+// with __global__ since the last ';' or '}' before it.
+func kernelDefiningFiles(ws, name string) []string {
+	re, err := regexp.Compile(`\b` + regexp.QuoteMeta(name) + `\s*\(`)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	_ = filepath.WalkDir(ws, func(p string, e fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if e.IsDir() {
+			if e.Name() == ".git" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !kernelSourceExts[strings.ToLower(filepath.Ext(p))] {
+			return nil
+		}
+		if st, err := e.Info(); err != nil || st.Size() > 4<<20 {
+			return nil
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return nil
+		}
+		s := string(b)
+		for _, m := range re.FindAllStringIndex(s, -1) {
+			before := s[:m[0]]
+			if i := strings.LastIndexAny(before, ";}"); i >= 0 {
+				before = before[i+1:]
+			}
+			after := s[m[1]:]
+			brace, semi := strings.Index(after, "{"), strings.Index(after, ";")
+			if strings.Contains(before, "__global__") && brace >= 0 && (semi < 0 || brace < semi) {
+				rel, _ := filepath.Rel(ws, p)
+				out = append(out, filepath.ToSlash(rel))
+				break
+			}
+		}
+		return nil
+	})
+	sort.Strings(out)
+	return out
+}
+
+// testDownFact: what was measured of d and r, in one line.
+const testDownFactFmt = "%[1]s started %[2]s at %[3]s, no end of it was noted, and this machine booted again at %[4]s; the last kernel launch its probe noted was the %[5]s of %[6]s (pid %[7]d): %[8]s"
+
+func testDownFact(d *testDown, r *testDownRecord) string {
+	if !d.Noted {
+		return fmt.Sprintf("%s started %s at %s, no end of it was noted, and this machine booted again at %s; its launch log (%s) noted no kernel launch",
+			d.Unit, d.Test, d.At.Format("01/02 15:04:05"), d.Boot.Format("01/02 15:04:05"), d.LaunchLog)
+	}
+	what := ""
+	switch {
+	case r.Kernel != "" && len(r.Sources) > 0:
+		what = fmt.Sprintf("%s, defined in %s", r.Kernel, strings.Join(sourcePaths(r.Sources), ", "))
+	case r.Kernel != "":
+		what = r.Kernel + ", defined in no source file of the workspace"
+	default:
+		what = fmt.Sprintf("the stub at %#x of the executable, unresolved (%s)", d.Launch.Addr-d.Launch.Base, r.Why)
+	}
+	return fmt.Sprintf(testDownFactFmt, d.Unit, d.Test, d.At.Format("01/02 15:04:05"), d.Boot.Format("01/02 15:04:05"),
+		ordinal(d.Kernels)+" distinct kernel", d.Exe, d.PID, what)
+}
+
+func sourcePaths(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func ordinal(n int) string {
+	suf := "th"
+	if n%100 < 11 || n%100 > 13 {
+		switch n % 10 {
+		case 1:
+			suf = "st"
+		case 2:
+			suf = "nd"
+		case 3:
+			suf = "rd"
+		}
+	}
+	return strconv.Itoa(n) + suf
+}
+
+// noteTestDown, before a unit's test.sh: when the crash notes say the machine went down in its
+// last one, the executable its last noted launch ran from is measured (once — the build has made
+// it again), kept on the crash directory and logged. It returns what is known, or nil.
+func noteTestDown(ws, unitID string) (*testDown, *testDownRecord, bool) {
+	dir := crashDir()
+	if dir == "" {
+		return nil, nil, false
+	}
+	d := lastTestDown(dir, unitID)
+	if d == nil {
+		return nil, nil, false
+	}
+	path := testDownRecordPath(dir, d)
+	if r, ok := loadTestDownRecord(path); ok {
+		return d, r, false
+	}
+	r := measureTestDown(ws, d)
+	saveTestDownRecord(path, r)
+	log.Printf("dev_verify: unit %s: the machine went down in its test.sh — %s", unitID, testDownFact(d, r))
+	return d, r, true
+}
+
+// gateMachineDownFmt: the verification's gate when test.sh is not run because the machine went
+// down in the last one and what it went down with is as it was.
+const gateMachineDownFmt = "machine_down_during_test: %[1]s — test.sh is not run again %[2]s%[3]s"
+
+// testDownHistoryFmt: each time the crash notes hold of the machine going down at the kernel —
+// when, in what, the sha256 of the files defining it then — and those files now.
+const (
+	testDownHistoryFmt = "; the machine went down at %[1]s %[2]d time(s) on the crash notes: %[3]s; those files now: %[4]s"
+	testDownOnceFmt    = "%[1]s in %[2]s (%[3]s)"
+)
+
+// testDownHistory: testDownHistoryFmt for r's kernel, "" when no time is kept for it.
+func testDownHistory(ws string, r *testDownRecord) string {
+	if r == nil || r.Kernel == "" {
+		return ""
+	}
+	downs := testDownsOfKernel(crashDir(), r.Kernel)
+	if len(downs) == 0 {
+		return ""
+	}
+	var times []string
+	for _, x := range downs {
+		times = append(times, fmt.Sprintf(testDownOnceFmt, x.At, x.Test, shaList(x.Sources)))
+	}
+	now := map[string]string{}
+	for _, p := range sourcePaths(r.Sources) {
+		h, ok := fileSHA256(filepath.Join(ws, p))
+		if !ok {
+			h = "absent"
+		}
+		now[p] = h
+	}
+	return fmt.Sprintf(testDownHistoryFmt, r.Kernel, len(downs), strings.Join(times, "; "), shaList(now))
+}
+
+// shaList: "path sha256[:12], …" (a value shorter than 12 is given whole).
+func shaList(m map[string]string) string {
+	var out []string
+	for _, p := range sourcePaths(m) {
+		h := m[p]
+		if len(h) > 12 {
+			h = h[:12]
+		}
+		out = append(out, p+" "+h)
+	}
+	return strings.Join(out, ", ")
+}
+
+// testDownSame: whether what the machine went down with is as it was — the files defining the
+// kernel its probe noted last, else that executable as the build makes it — and what was compared.
+// With neither known, only the verification that first read the crash notes is held.
+func testDownSame(ws string, d *testDown, r *testDownRecord, first bool) (bool, string) {
+	switch {
+	case len(r.Sources) > 0:
+		var changed []string
+		for _, p := range sourcePaths(r.Sources) {
+			if h, ok := fileSHA256(filepath.Join(ws, p)); !ok || h != r.Sources[p] {
+				changed = append(changed, p)
+			}
+		}
+		if len(changed) > 0 {
+			// a kernel the machine went down with more than once is not let run by a change of its
+			// files: 11/25 01:49 src/ix_router_top10_wave.cu had changed and the machine went down
+			// at the same kernel, at the same offset
+			if len(testDownsOfKernel(crashDir(), r.Kernel)) >= testDownRepeatHold && !testDownReleased(r.Kernel) {
+				return true, fmt.Sprintf(testDownRepeatFmt, strings.Join(changed, ", "), r.Kernel, testDownReleaseEnv)
+			}
+			return false, fmt.Sprintf("%s changed since the machine went down", strings.Join(changed, ", "))
+		}
+		return true, fmt.Sprintf("while %s, defining %s, are as they were", strings.Join(sourcePaths(r.Sources), ", "), r.Kernel)
+	case r.ExeSHA != "":
+		if h, ok := fileSHA256(d.Exe); !ok || h != r.ExeSHA {
+			return false, d.Exe + " differs from the one built after the machine went down"
+		}
+		return true, fmt.Sprintf("while %s builds the same (sha256 %s)", d.Exe, r.ExeSHA[:12])
+	default:
+		return first, "in this verification: the program it went down with is not known, and only this verification is held"
+	}
+}
+
+// testDownRepeatHold: how many times the machine may go down at one kernel, on the crash
+// directory, before a change of the files defining it no longer lets test.sh run.
+const testDownRepeatHold = 2
+
+// testDownReleaseEnv names, comma-separated, kernels whose test.sh runs again after a change of
+// their files however many times the machine went down at them — set by whoever runs the kernel.
+const testDownReleaseEnv = "EINSTEINOS_TEST_DOWN_RELEASE"
+
+// %[1]s the files changed, %[2]s the kernel, %[3]s the variable (the times are the history's); it follows "test.sh
+// is not run again" — 11/25 05:05:57 it followed "while", and the times were said twice
+const testDownRepeatFmt = "after a change of the files defining %[2]s (%[1]s changed), the machine having gone down at it more than once, until %[3]s names %[2]s"
+
+func testDownReleased(kernel string) bool {
+	for _, k := range strings.Split(os.Getenv(testDownReleaseEnv), ",") {
+		if strings.TrimSpace(k) == kernel && kernel != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// testDownsOfKernel: the records on dir (einsteinos-down-*.json) of the times the machine went
+// down at the kernel named kernel, oldest first.
+func testDownsOfKernel(dir, kernel string) []*testDownRecord {
+	if dir == "" || kernel == "" {
+		return nil
+	}
+	paths, _ := filepath.Glob(filepath.Join(dir, "einsteinos-down-*.json"))
+	var out []*testDownRecord
+	for _, p := range paths {
+		if r, ok := loadTestDownRecord(p); ok && r.Kernel == kernel {
+			if r.At == "" || r.Test == "" {
+				// a record kept before it held when and what ran: read from the stages log, by the
+				// launch log the record is named after
+				key := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(p), "einsteinos-down-"), ".json")
+				if at, test, unit, ok := crashStartOfLaunchLog(dir, "einsteinos-launch-"+key+".log"); ok {
+					r.At, r.Test, r.Unit = at, test, unit
+				}
+			}
+			out = append(out, r)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].At < out[j].At })
+	return out
+}
+
+// runTestDownAlone, before a test.sh the machine went down in runs again: the program whose
+// kernel launch was noted last, as the build has made it again, runs by itself on the first
+// usable GPU, under the probe, with its start and end on the crash notes — when the machine goes
+// down in it, what went down is that program alone; when it stays up, test.sh runs. 11/25 01:49
+// test.sh ran in full after 7 minutes of build and the machine went down 2 minutes into it, in
+// router_top10_parity, the 12th kernel of its 4-GPU run.
+func runTestDownAlone(ws, unitID, gpuUsable, env string, d *testDown, timeout time.Duration) {
+	if d == nil || d.Exe == "" {
+		return
+	}
+	if _, err := os.Stat(d.Exe); err != nil {
+		log.Printf(testDownAloneNotFmt, unitID, d.Exe, "the build did not make it again")
+		return
+	}
+	gpu := strings.TrimSpace(strings.Split(gpuUsable, ",")[0])
+	cmd := env
+	if gpu != "" {
+		cmd += fmt.Sprintf("export EINSTEINOS_GPUS=%q CUDA_VISIBLE_DEVICES=%q; ", gpu, gpu)
+	}
+	logPath := ""
+	if lib, err := launchProbeLib(); err != nil {
+		log.Printf(testDownAloneNotFmt, unitID, d.Exe, "no launch probe: "+err.Error())
+		return
+	} else if f, err := os.CreateTemp(crashDir(), "einsteinos-launch-*.log"); err != nil {
+		log.Printf(testDownAloneNotFmt, unitID, d.Exe, err.Error())
+		return
+	} else {
+		logPath = f.Name()
+		f.Close()
+		defer os.Remove(logPath)
+		cmd += launchProbeEnv(lib, logPath) + "export EINSTEINOS_LAUNCH_SYNC=1; "
+	}
+	noteCrashStage(unitID, d.Exe, logPath)
+	start := time.Now()
+	code, out, _, err := runWatched(cmd+shq(d.Exe)+" 2>&1", ws, timeout)
+	CrashNote(fmt.Sprintf("unit %s: %s ended (exit %d)", unitID, d.Exe, code))
+	n := len(readProbeLog(logPath).Launches)
+	if err != nil {
+		out = err.Error() + "\n" + out
+	}
+	if gpu == "" {
+		gpu = "the GPUs visible here"
+	}
+	log.Printf(testDownAloneFmt, unitID, d.Exe, gpu, time.Since(start).Round(time.Second), code, n, tailText(out, 600))
+}
+
+const (
+	testDownAloneFmt    = "dev_verify: unit %[1]s: %[2]s ran alone on %[3]s before test.sh, %[4]s: exit %[5]d, %[6]d distinct kernel(s) launched, and the machine stayed up — test.sh runs; its output: %[7]s"
+	testDownAloneNotFmt = "dev_verify: unit %[1]s: %[2]s is not run alone before test.sh: %[3]s"
+)
+
+// crashStartOfLaunchLog: the stages log's start line whose launch log is named base — when, what
+// started and the unit.
+func crashStartOfLaunchLog(dir, base string) (at, test, unit string, ok bool) {
+	b, err := os.ReadFile(filepath.Join(dir, "einsteinos-stages.log"))
+	if err != nil {
+		return "", "", "", false
+	}
+	for _, l := range strings.Split(string(b), "\n") {
+		if len(l) <= len(crashStagesTimeLayout)+1 {
+			continue
+		}
+		m := crashTestStartRe.FindStringSubmatch(l[len(crashStagesTimeLayout)+1:])
+		if m != nil && filepath.Base(strings.TrimSpace(m[3])) == base {
+			at, test, unit, ok = l[:len(crashStagesTimeLayout)], m[2], m[1], true
+		}
+	}
+	return at, test, unit, ok
+}
