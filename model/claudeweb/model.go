@@ -83,7 +83,7 @@ const localExecFactsFmt = `[THIS MACHINE] every tool call is mirrored and run on
 // the evaluation's search a07300a2 tried pr_setup and sync_repo, looked for their socket, a
 // fifo and open ports, and went on to treat the machine as one it was to build on.
 func localFactsFor(role string) string {
-	if kernel.RoleAnswersInText(role) || kernel.RoleSearchesOnly(role) {
+	if kernel.RoleAnswersInText(role) || kernel.RoleSearchesOnly(role) || kernel.RoleReadsItsFiles(role) {
 		return ""
 	}
 	return localExecPrefix
@@ -433,7 +433,7 @@ func (m *Model) shadowExecuteRaw(convID, toolName, inputJSON string) string {
 	// command, not a write, not the twin of a clone made with the kernel's credentials:
 	// 11/21 06:37:42 the evaluation's search a07300a2 had zeng-bin3123/baloon cloned into
 	// /tmp/baloon_src here with the kernel's credentials, and ran benchmarks here at 06:44-06:47
-	if r := convRole(convID); kernel.RoleAnswersInText(r) || kernel.RoleSearchesOnly(r) {
+	if r := convRole(convID); kernel.RoleAnswersInText(r) || kernel.RoleSearchesOnly(r) || kernel.RoleReadsItsFiles(r) {
 		log.Printf(searchNotRunHereFmt, r)
 		return ""
 	}

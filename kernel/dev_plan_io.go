@@ -28,8 +28,8 @@ var (
 
 	// devPlannerRunner runs one planner conversation and returns its text. It is a
 	// variable so the planning logic can be tested without a model.
-	devPlannerRunner = func(pid int64, repo, prompt string) string {
-		child, err := ForkWithRole(prompt, ".", "dev_planner")
+	devPlannerRunner = func(pid int64, repo, prompt, role string) string {
+		child, err := ForkWithRole(prompt, ".", role)
 		if err != nil {
 			log.Printf("dev_plan: %s planner fork failed: %v", repo, err)
 			return ""
@@ -37,7 +37,7 @@ var (
 		var convID string
 		if m := getMeta(child); m != nil && m.ConvID != "" {
 			convID = m.ConvID
-			RegisterConv(pid, m.ConvID, repo, "dev_planner", 0)
+			RegisterConv(pid, m.ConvID, repo, role, 0)
 		}
 		Wait(child)
 		if convID != "" {
@@ -298,7 +298,7 @@ func dev_run_planner(pid int64, repo string, mods []DevModule, branch string) []
 	content := fmt.Sprintf(devPlannerContentFmt, len(mods), list.String(), maxBytes, maxModules) + DoneInstruction()
 	prompt := Plain(fmt.Sprintf(devPlannerWhereFmt, branch), fmt.Sprintf(devPlannerWhatFmt, len(mods), devTotalBytes(mods)), content)
 
-	out := devPlannerRunner(pid, repo, prompt)
+	out := devPlannerRunner(pid, repo, prompt, "dev_planner")
 	log.Printf("dev_plan: %s planner returned %d bytes", repo, len(out))
 	groups, unmatched, unclaimed := parseDevPlanOutput(out, mods)
 	if len(unmatched) > 0 {
@@ -385,7 +385,7 @@ func dev_split_node(pid int64, p *DevPlan, nodeID, repo, devRepo, branch, theory
 			list.WriteString(fmt.Sprintf("  %s (%d bytes)\n", m.Name, m.Bytes))
 		}
 		prompt := Plain(fmt.Sprintf(devSplitWhereFmt, node.ID, branch), fmt.Sprintf(devSplitWhatFmt, len(mods), reason), fmt.Sprintf(devSplitContentFmt, list.String())+DoneInstruction())
-		out := devPlannerRunner(pid, repo, prompt)
+		out := devPlannerRunner(pid, repo, prompt, "dev_planner")
 		g, _, unclaimed := parseDevPlanOutput(out, mods)
 		if len(unclaimed) > 0 && len(g) > 0 {
 			g = append(g, unclaimed)
@@ -403,7 +403,7 @@ func dev_split_node(pid int64, p *DevPlan, nodeID, repo, devRepo, branch, theory
 			return nil
 		}
 		prompt := Plain(fmt.Sprintf(devItemSplitWhereFmt, name, branch), fmt.Sprintf(devItemSplitWhatFmt, len(body), len(idents), reason), fmt.Sprintf(devItemSplitContentFmt, "  "+strings.Join(idents, "\n  ")+"\n")+DoneInstruction())
-		out := devPlannerRunner(pid, repo, prompt)
+		out := devPlannerRunner(pid, repo, prompt, "dev_planner")
 		gs := parseItemGroups(out, idents)
 		if len(gs) < 2 {
 			gs = bisectIdents(idents)

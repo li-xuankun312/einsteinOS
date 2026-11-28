@@ -21,7 +21,7 @@ func TestPublishedNumbersAreComparedOnlyWhereThePlannerFindsThemCorresponding(t 
 	defer func() { devPlannerRunner = old }()
 	var prompt string
 	var files []ForkFile
-	devPlannerRunner = func(pid int64, repo, p string) string {
+	devPlannerRunner = func(pid int64, repo, p, _ string) string {
 		prompt, files = p, ConsumeForkFiles()
 		return "comparable: 0 decode\n`comparable: 1 prefill`\ncomparable: 2 decode\ncomparable: 7 decode\ncomparable: 1 throughput\n"
 	}
@@ -44,7 +44,7 @@ func TestPublishedNumbersAreComparedOnlyWhereThePlannerFindsThemCorresponding(t 
 	if k, _ := evalExternalGate(cmp[1:]); k != "" {
 		t.Fatal("not worse passes")
 	}
-	devPlannerRunner = func(int64, string, string) string { t.Fatal("no planner without numbers"); return "" }
+	devPlannerRunner = func(int64, string, string, string) string { t.Fatal("no planner without numbers"); return "" }
 	if cmp, _ := evalComparisons(1, "o/r", cond, e2e, nil, nil); cmp != nil {
 		t.Fatal("nothing published, nothing compared")
 	}
@@ -59,7 +59,11 @@ func TestTheSameComparisonIsAskedOnce(t *testing.T) {
 	old := devPlannerRunner
 	defer func() { devPlannerRunner = old }()
 	asks := 0
-	devPlannerRunner = func(int64, string, string) string { asks++; ConsumeForkFiles(); return "comparable: 0 decode\n" }
+	devPlannerRunner = func(int64, string, string, string) string {
+		asks++
+		ConsumeForkFiles()
+		return "comparable: 0 decode\n"
+	}
 	run := func(decode float64) []EvalComparison {
 		e2e := EvalBenchRun{Metrics: []Metric{{"prefill", 500, "tok/s", "higher"}, {"decode", decode, "tok/s", "higher"}}}
 		cmp, _ := evalComparisons(1, "Niko1221/Strata", cond, e2e, clues, nil)

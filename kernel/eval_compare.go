@@ -93,7 +93,7 @@ func evalComparisons(pid int64, repo string, cond EvalConditions, e2e EvalBenchR
 		tr.Asked = true
 		SetForkFiles([]ForkFile{{Name: evalCompareFile, Data: []byte(evalCompareData(cond, e2e, clues, docs))}})
 		prompt := Plain(localUploadsPath(evalCompareFile), fmt.Sprintf(evalCompareWhatFmt, len(clues), len(e2e.Metrics)), fmt.Sprintf(evalCompareContentFmt, localUploadsPath(evalCompareFile))+spawnLeafFact+DoneInstruction())
-		out = devPlannerRunner(pid, repo, prompt)
+		out = devPlannerRunner(pid, repo, prompt, "dev_planner")
 		evalCompareMu.Lock()
 		evalCompareAnswers[key] = out
 		evalCompareMu.Unlock()

@@ -94,6 +94,20 @@ func RoleAnswersInText(role string) bool {
 	return role == "detect_dev"
 }
 
+// RoleIntegrationPlanner: the conversation that answers, from the files it is given, how the
+// port's kernels run the model (integration_model_plan.go).
+const RoleIntegrationPlanner = "integration_planner"
+
+// RoleReadsItsFiles: the conversations whose answer is lines about the files they are given —
+// the integration's planner. Their tools run in their sandbox, on those files, and nothing of
+// them on this machine, and they are told nothing of this machine or its services: 11/28
+// 05:37:46 the planner ceaa4cf7 was told every tool call was mirrored on a local machine, of the
+// registered services and of Axle, said it could verify none of it from its sandbox, wrote no
+// line the kernel reads, and the parts were started from the answer of an earlier run.
+func RoleReadsItsFiles(role string) bool {
+	return role == RoleIntegrationPlanner
+}
+
 // RoleSearchesOnly: the conversations whose answer is owner/name lines they find by searching
 // — the search for references (ref_discover) and its copy for the evaluation (eval_discover).
 // Their tools run in their sandbox and nothing of them on this machine: 11/21 06:26–06:47 the

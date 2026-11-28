@@ -114,7 +114,7 @@ func askIntegrationModel(pid int64, repo string, plan *DevPlan, data, theory str
 		fmt.Sprintf(integrationModelContentFmt, localUploadsPath(integrationModelFile), localUploadsPath(integrationTheory))+spawnLeafFact+DoneInstruction())
 	wait(func() {
 		SetForkFiles(files)
-		out = devPlannerRunner(pid, repo, prompt)
+		out = devPlannerRunner(pid, repo, prompt, RoleIntegrationPlanner)
 	})
 	log.Printf("dev_from_theorems: %s the planner answered how the port's kernels run the model (%d bytes)", repo, len(out))
 	if strings.TrimSpace(out) == "" {

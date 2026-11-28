@@ -22,7 +22,7 @@ func theoryWith(mods map[string]int, order []string) string {
 func withPlanner(t *testing.T, fn func(prompt string) string) *int {
 	calls := 0
 	old := devPlannerRunner
-	devPlannerRunner = func(pid int64, repo, prompt string) string { calls++; return fn(prompt) }
+	devPlannerRunner = func(pid int64, repo, prompt, _ string) string { calls++; return fn(prompt) }
 	t.Cleanup(func() {
 		devPlannerRunner = old
 		devPlanMu.Lock()
@@ -78,7 +78,7 @@ func TestGetPlanPlansOnceAndReuses(t *testing.T) {
 	// re-entry (what happens after every review FAIL) must NOT call the planner again,
 	// even though the planner would now answer differently
 	*calls = 0
-	devPlannerRunner = func(pid int64, repo, prompt string) string { *calls++; return "unit: Mod13\nunit: Mod00\n" }
+	devPlannerRunner = func(pid int64, repo, prompt, _ string) string { *calls++; return "unit: Mod13\nunit: Mod00\n" }
 	p2 := dev_get_plan(1, "o/r", "sha1", theory, "einsteinOS/dev-1")
 	if *calls != 0 {
 		t.Fatalf("planner re-ran on re-entry (%d calls)", *calls)

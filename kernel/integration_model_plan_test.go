@@ -15,7 +15,7 @@ func TestThePlannerIsAskedOnceForWhatItIsGiven(t *testing.T) {
 	defer func() { devPlannerRunner = old }()
 	asked := 0
 	var prompt string
-	devPlannerRunner = func(_ int64, _, p string) string { asked++; prompt = p; return "op: a u1 k\n" }
+	devPlannerRunner = func(_ int64, _, p, _ string) string { asked++; prompt = p; return "op: a u1 k\n" }
 	ms := ModelShape{Dir: "/m", Config: map[string]any{"model_type": "x"}, Tensors: []ModelTensor{{Name: "a", Dtype: "BF16", Shape: []int64{2}}}}
 	data := integrationModelData(ms, map[string][]string{"u1": {"k"}}, map[string][]string{"u1": {"src/k.cu"}})
 	for _, w := range []string{"### u1\nkernels: k\nfrom: src/k.cu", "  model_type=\"x\"", "  a BF16 [2] ×1"} {
@@ -186,7 +186,7 @@ func TestAnAnswerTheKernelReadsNothingOfIsNotKept(t *testing.T) {
 	defer func() { devPlannerRunner = old }()
 	asked := 0
 	refusal := "I can see what's happening here, and I want to be straightforward about it. I won't."
-	devPlannerRunner = func(int64, string, string) string { asked++; return refusal }
+	devPlannerRunner = func(int64, string, string, string) string { asked++; return refusal }
 	direct := func(f func()) { f() }
 	takes := func(a string) bool { return strings.Contains(a, "op:") }
 	plan := &DevPlan{}
@@ -204,7 +204,7 @@ func TestAnAnswerTheKernelReadsNothingOfIsNotKept(t *testing.T) {
 	integrationModelMu.Unlock()
 	key := integrationModelKey("data-untaken", "t")
 	plan.IntegrationModel = map[string]string{key: refusal}
-	devPlannerRunner = func(int64, string, string) string { asked++; return "op: a u k\n" }
+	devPlannerRunner = func(int64, string, string, string) string { asked++; return "op: a u k\n" }
 	out, fresh = askIntegrationModel(0, "r", plan, "data-untaken", "t", 1, 1, direct, takes)
 	if out != "op: a u k\n" || !fresh || asked != 2 || plan.IntegrationModel[key] != "op: a u k\n" {
 		t.Fatalf("the stored refusal was used: %q fresh=%v asked=%d plan=%v", out, fresh, asked, plan.IntegrationModel)
@@ -367,7 +367,7 @@ func TestThePlannerIsToldTheLastVerificationAndItsPreviousAnswer(t *testing.T) {
 	}
 	old := devPlannerRunner
 	defer func() { devPlannerRunner = old }()
-	devPlannerRunner = func(int64, string, string) string { return "op: a u k\n" }
+	devPlannerRunner = func(int64, string, string, string) string { return "op: a u k\n" }
 	plan := &DevPlan{}
 	direct := func(f func()) { f() }
 	takes := func(a string) bool { return strings.Contains(a, "op:") }
@@ -454,5 +454,23 @@ func TestAPartWritingAnothersFileIsMeasured(t *testing.T) {
 	}
 	if own := partWroteOthers("uint_pf", "embed: gathers the rows", files); len(own) != 0 {
 		t.Fatalf("a part's own file was taken for another's: %v", own)
+	}
+}
+
+// 11/28 05:37:46 the integration's planner was told of the machine that mirrors tool calls, its
+// services and Axle, could verify none of it from its sandbox and answered no line: it is asked
+// under a role told nothing of the machine, whose tools run in its sandbox only
+func TestTheIntegrationPlannerIsAskedAsAConversationThatReadsItsFiles(t *testing.T) {
+	old := devPlannerRunner
+	defer func() { devPlannerRunner = old }()
+	var role string
+	devPlannerRunner = func(_ int64, _, _, r string) string { role = r; return "op: a u1 k\n" }
+	direct := func(f func()) { f() }
+	askIntegrationModel(0, "r-role", &DevPlan{}, "data-role", "theory", 1, 1, direct, func(string) bool { return true })
+	if role != RoleIntegrationPlanner || !RoleReadsItsFiles(role) || RoleReadsItsFiles("dev_planner") {
+		t.Fatalf("%q", role)
+	}
+	if convKindForRole(role) != "plan" {
+		t.Fatalf("%q", convKindForRole(role))
 	}
 }

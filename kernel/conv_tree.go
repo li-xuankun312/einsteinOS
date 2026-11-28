@@ -24,7 +24,7 @@ import (
 // plan conversations decide and return; they are leaves of the tree.
 func convKindForRole(role string) string {
 	switch {
-	case role == "dev_planner" || role == "theory_planner" || strings.HasPrefix(role, "spawn_plan"):
+	case role == "dev_planner" || role == RoleIntegrationPlanner || role == "theory_planner" || strings.HasPrefix(role, "spawn_plan"):
 		return "plan"
 	case role == "review_conv" || role == "dir_survey" || role == "file_survey" ||
 		strings.HasPrefix(role, "review_unit") || strings.HasPrefix(role, "spawn_judge"):
