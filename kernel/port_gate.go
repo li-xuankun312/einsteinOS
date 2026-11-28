@@ -17,6 +17,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -36,6 +37,7 @@ const (
 	portNoLineFmt       = "  %[1]s %[2]s %[3]s: no line in %[4]s"
 	portNoFileFmt       = "  %[1]s %[2]s → %[3]s: no such file"
 	portNotDefinedFmt   = "  %[1]s %[2]s → %[3]s:%[4]s: not defined in that file"
+	portUncalledFmt     = "  %[1]s %[2]s → %[3]s:%[4]s: defined static there and named nowhere else in that file — no code calls it"
 	portKernelNoBodyFmt = "  %[1]s kernel %[2]s → %[3]s:%[4]s: only declared there — a kernel's counterpart is a __global__ kernel with a body"
 	portNotKernelFmt    = "  %[1]s kernel %[2]s → %[3]s:%[4]s: defined there, but not as a __global__ kernel of a .cu/.cuh file — a host function about a kernel is not its port"
 	portChecklistHead   = "[PORT — measured from %[1]s at %[2]s] the unit passes only when every definition below has a counterpart, listed in %[3]s as:\n<reference file>\\t<reference name>\\t<file in this repo>\\t<name defined there>\n"
@@ -112,6 +114,8 @@ func portMissing(ws, unitID string, syms []RefSymbol) []string {
 				out = append(out, fmt.Sprintf(portNotDefinedFmt, s.File, s.Name, e.file, e.name))
 			} else if sameName && symbolBase(e.name) != symbolBase(s.Name) {
 				out = append(out, fmt.Sprintf(portRenamedFmt, s.File, s.Name, e.file, e.name))
+			} else if sameName && s.Kind != "kernel" && symbolBase(e.name) != "main" && staticUncalled(stripCComments(texts[e.file]), symbolBase(e.name)) {
+				out = append(out, fmt.Sprintf(portUncalledFmt, s.File, s.Name, e.file, e.name))
 			} else if s.Kind == "kernel" && !kernels[e.file][symbolBase(e.name)] {
 				out = append(out, fmt.Sprintf(portNotKernelFmt, s.File, s.Name, e.file, e.name))
 			} else if s.Kind == "kernel" && !definesWithBody(stripCComments(texts[e.file]), symbolBase(e.name)) {
@@ -1158,4 +1162,18 @@ func otherMapsChanged(tip, mirror, unitID string, changed, removed []string) []s
 	}
 	sort.Strings(out)
 	return out
+}
+
+// staticUncalled: name is defined static in text (comments stripped) and the text names it
+// nowhere else — a file-local function no code calls. 11/28 the part embed (7a052aa6) added
+// static void check(bool cond, const char* file, int line, const char* expr) to
+// tests/k39_integration/sampler_parity.cu, called nowhere, so that src/kernels/sampler_parity.cpp
+// check — the reference's test driver, check(int n_vocab), called three times by its main — had
+// a counterpart of its name for port_incomplete.
+func staticUncalled(text, name string) bool {
+	q := regexp.QuoteMeta(name)
+	if !regexp.MustCompile(`\bstatic\b[^;{}()]*\b` + q + `\s*\(`).MatchString(text) {
+		return false
+	}
+	return len(regexp.MustCompile(`\b`+q+`\b`).FindAllStringIndex(text, -1)) == 1
 }

@@ -844,3 +844,18 @@ func TestAnotherUnitsPortMapTheIntegrationChangesIsAGate(t *testing.T) {
 		t.Fatalf("%v %q", kinds, texts)
 	}
 }
+
+// 11/28 the part embed added a static check() to sampler_parity.cu, called nowhere, so that the
+// reference's check had a counterpart of its name: for the integration unit such a counterpart
+// is no port
+func TestAStaticCounterpartNoCodeCallsIsNoPort(t *testing.T) {
+	if !staticUncalled(stripCComments("// check() is the macro's form\nstatic void check(bool c, const char* f) {\n  if (!c) g_fail++;\n}\nint main() { CHECK(1); }\n"), "check") {
+		t.Fatal("an uncalled static was taken as called")
+	}
+	if staticUncalled("static void check(int n) {}\nint main() { check(32000); }\n", "check") {
+		t.Fatal("a called static was taken as uncalled")
+	}
+	if staticUncalled("void check(int n) {}\n", "check") {
+		t.Fatal("a non-static was judged on its file alone")
+	}
+}
